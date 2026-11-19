@@ -74,7 +74,8 @@ def test_each_page_that_can_show_the_list_loads_the_poll(web, tmp_path, monkeypa
 
 
 def test_a_menu_page_without_the_list_does_not_load_the_poll(web, tmp_path, monkeypatch):
-    page = _box(web, tmp_path, monkeypatch).get("/stacks/daemon/menu/stack-settings-daemon").get_data(as_text=True)
+    # UI-REORG c4: the daemon's Settings page holds Monitor/Live badges now (they poll): a page with no badge instead
+    page = _box(web, tmp_path, monkeypatch).get("/stacks/daemon/menu/stack-install-daemon").get_data(as_text=True)
     assert "hw-badge-" not in page and _DASH not in page
 
 

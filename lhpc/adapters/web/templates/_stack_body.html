@@ -67,8 +67,8 @@
     </div>
   {% endwith %}
 
-  {# ===== Daemon parameters (the partial supplies its own collapsible header) ===== #}
-  {% if g.daemon_params %}
+  {# ===== Daemon parameters (the partial supplies its own collapsible header); the daemon's stand in its Settings ===== #}
+  {% if g.daemon_params and not params_in_settings(g.stack.id) %}
     {% with stack_id = g.stack.id, daemon_params = g.daemon_params %}
       <div class="stackrow-wrap">
       {% include "_daemon_params.html" %}

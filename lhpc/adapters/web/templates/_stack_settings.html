@@ -8,23 +8,11 @@
 {# `?bad=<field>[,<field>]` (a start refused over the saved identity) marks those rows — only
    when this stack's section is the one the link opened. #}
 {% set _bad = (request.args.get('bad') or '').split(',') if request.args.get('cfg') == stack.id else [] %}
-<details class="advcfg settings" id="{{ _sid }}"{% if request.args.get('cfg') == stack.id %} open data-force-open="1"{% endif %}>
+{# #70: the daemon's Daemon radio parameters stand in its Settings; their Save/Apply/Reset (`dp=<stack>`) reopen it #}
+{% set _dp_here = g is defined and g.daemon_params and params_in_settings(stack.id) %}
+<details class="advcfg settings" id="{{ _sid }}"{% if request.args.get('cfg') == stack.id or (_dp_here and request.args.get('dp') == stack.id) %} open data-force-open="1"{% endif %}>
   <summary>Settings</summary>
   <div class="body">
-    {% if view.hw_setups %}
-      <section class="cfgsec">
-        {# DEC-W57: the board setup is the Hardware page's (Add Hardware's HAT row; `lhpc hardware <setup>` stays). #}
-        {% if view.high_power %}
-          {# The +20 dBm permission (daemon 1.2.0 --high-power): an explicit per-radio control, not
-             a generic run-param row — this page renders none of the daemon's run params. Saved
-             intent beside what the RUNNING daemon reports; the two can differ until a restart. #}
-          <div class="stackrow-wrap">
-          {% include "_settings_high_power.html" %}
-          {{ page_actions(stack.id, 'high-power-daemon') }}
-          </div>
-        {% endif %}
-      </section>
-    {% endif %}
     {% if view.radio_choices %}
       {# 7f, DEC-W40: one entry per radio of the stack's bands; a listed instance opens its own settings
          (U4: on a level's own page the switch stays on that page) #}
@@ -47,32 +35,39 @@
       {# W3 (W319/W320): the daemon's live block per radio, in place of the band switch #}
       {% set _ch = [] %}
       {% for rid, _name, band in view.live_radios %}{% set _ = _ch.append({'label': rid ~ ' · ' ~ band, 'selected': view.radios and rid == view.radios[0].rid,
-           'href': url_for('menu_page', owner=menu_owner, mid=menu_id, radio=rid) if menu_id else url_for('stacks_overview', radio=rid, cfg=stack.id) ~ '#stack-settings-' ~ stack.id}) %}{% endfor %}
+           'href': url_for('menu_page', owner=menu_owner, mid=with_radio(menu_id, rid), radio=rid) if menu_id else url_for('stacks_overview', radio=rid, cfg=stack.id) ~ '#stack-settings-' ~ stack.id}) %}{% endfor %}
       {{ radio_switch(_ch) }}
     {% endif %}
 
-    {% if view.radios %}
-      <section class="cfgsec">
-        {% for radio in view.radios %}
-          <h3>{{ radio.rid }} · {{ radio.band }} MHz
-            <span class="badge badge-{{ 'running' if radio.reachable else 'stopped' }}">
-              {{ 'live' if radio.reachable else 'offline' }}</span></h3>
-          {% if not radio.reachable %}
-            <p class="muted">Daemon not serving {{ radio.rid }} — start it to tune live.</p>
-          {% else %}
-            <div class="stackrow-wrap">
-            {% include "_settings_radio_monitor.html" %}
-            {{ page_actions(stack.id, 'stack-settings-' ~ stack.id ~ '--' ~ radio.rid ~ '-monitor') }}
-            </div>
-            <div class="stackrow-wrap">
-            {% include "_settings_radio_live.html" %}
-            {{ page_actions(stack.id, 'stack-settings-' ~ stack.id ~ '--' ~ radio.rid ~ '-live') }}
-            </div>
-          {% endif %}
-        {% endfor %}
-      </section>
-    {% endif %}
-
     {% include "_settings_config.html" %}
+
+    {# UI-REORG s3: the selected radio's levels only (the switch above): High-power, Monitor, Live (always present,
+       daemon up or not), then the Daemon radio parameters (#70); tree order = page order (submenus.stack_menus) #}
+    {% if view.hw_setups and view.high_power %}
+      {# The +20 dBm permission (daemon 1.2.0 --high-power): an explicit per-radio control, not a generic run-param
+         row. Saved intent beside what the RUNNING daemon reports; the two can differ until a restart. #}
+      <div class="stackrow-wrap">
+      {% include "_settings_high_power.html" %}
+      {{ page_actions(stack.id, 'high-power-daemon') }}
+      </div>
+    {% endif %}
+    {% for radio in view.radios %}
+      <div class="stackrow-wrap">
+      {% include "_settings_radio_monitor.html" %}
+      {{ page_actions(stack.id, 'stack-settings-' ~ stack.id ~ '--' ~ radio.rid ~ '-monitor') }}
+      </div>
+      <div class="stackrow-wrap">
+      {% include "_settings_radio_live.html" %}
+      {{ page_actions(stack.id, 'stack-settings-' ~ stack.id ~ '--' ~ radio.rid ~ '-live') }}
+      </div>
+    {% endfor %}
+    {% if _dp_here %}
+      {% with stack_id = stack.id, daemon_params = g.daemon_params, dp_in_settings = True %}
+        <div class="stackrow-wrap">
+        {% include "_daemon_params.html" %}
+        {{ page_actions(stack.id, 'stack-daemon-params-' ~ stack.id) }}
+        </div>
+      {% endwith %}
+    {% endif %}
   </div>
 </details>

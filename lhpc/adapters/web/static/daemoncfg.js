@@ -1,12 +1,15 @@
-// DAEMON-MONITOR-TREE: a radio's live daemon views (_daemon_view.html), each a closed panel under its Monitor, read-only
-// over the /api/daemon endpoints. A view asks only while it is open, driven by the panel's open state (a click, the
-// accordion, a restore or a page that opens it at load; a closed Monitor or Settings around it counts as closed):
-// "Get STATUS"/"Get STATS" one read of /api/daemon/<rid> per
-// open and per Reload; "View Socket" a rolling 22-line window polled from the config socket each second; "RX/TX View"
-// the dashboard's RX/TX feed every 3 s. Closing stops the polling; Reload starts the view afresh. A reply to an earlier
-// run of the view (before a close or a Reload) is dropped, and a view has one request out at a time (a slow reply is
-// never overtaken by a newer one). textContent only, never innerHTML; no setting is changed.
-// Delegated on the document, so a Stacks body that arrives later needs no wiring.
+// DAEMON-MONITOR-TREE: a radio's live daemon views (_daemon_view.html) under its Monitor, read-only over the
+// /api/daemon endpoints. UI-REORG s4: a view has no own show/hide; it asks only while it is SHOWN (every <details>
+// around it open, in the page): "Get STATUS"/"Get STATS" one read of /api/daemon/<rid> per show and per Reload;
+// "View Socket" a rolling 22-line window polled from the config socket each second; "RX/TX View" the dashboard's
+// RX/TX feed every 3 s. Hiding stops the polling; Reload starts the view afresh. A reply to an earlier run of the
+// view (before a hide or a Reload) is dropped; a view has ONE request out at a time, and a show while one is out
+// asks once more when it settles (so a hide/show never leaves STATUS/STATS at "loading…").
+// Daemon down (the block's data-up="0", from the server and then from dash.js's per-radio poll, event
+// lhpc:daemonstate): the views pause (no requests, Reload off, "Daemon not running"); they resume when the daemon is
+// up. The same event greys / re-enables a Live radio settings block and fills its current values.
+// textContent only, never innerHTML; no setting is changed. Delegated on the document, so a Stacks body that arrives
+// later needs no wiring (sync() on lhpc:bodyloaded is the same activation path).
 (function () {
   "use strict";
 
@@ -22,30 +25,43 @@
     return two(d.getHours()) + ":" + two(d.getMinutes()) + ":" + two(d.getSeconds());
   }
 
-  // GET `path` under /api/daemon/<rid>; `done(data or null, failed)` only while this run of the view is the current one.
-  // One request per run at a time: a poll that comes while the last one is out is skipped, so replies never cross.
+  // GET `path` under /api/daemon/<rid>; `done(data or null, failed)` only while this run of the view is the current
+  // one. One request out per view: a show's ask while one is out is remembered (pending) and sent once it settles; a
+  // timer tick while one is out is skipped (the next tick asks).
   function ask(panel, path, done) {
+    if (panel.dvBusy) {
+      if (!panel.dvTimer) panel.dvPending = function () { ask(panel, path, done); };
+      return;
+    }
     var gen = panel.dvGen;
-    if (panel.dvBusy === gen) return;
-    panel.dvBusy = gen;
+    panel.dvBusy = true;
     fetch("/api/daemon/" + encodeURIComponent(panel.getAttribute("data-rid")) + path,
           { headers: { Accept: "application/json" }, cache: "no-store" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) { return { d: d, failed: false }; }, function () { return { d: null, failed: true }; })
       .then(function (res) {
-        if (panel.dvBusy === gen) panel.dvBusy = 0;
+        panel.dvBusy = false;
         if (panel.dvGen === gen && panel.dvRunning) done(res.d, res.failed);
+        var again = panel.dvPending;
+        panel.dvPending = null;
+        if (again && panel.dvRunning) again();
       });
+  }
+
+  function up(panel) {
+    var b = panel.closest("[data-up]");
+    return !b || b.getAttribute("data-up") === "1";
   }
 
   function stop(panel) {
     if (panel.dvTimer) { clearInterval(panel.dvTimer); panel.dvTimer = 0; }
     panel.dvRunning = false;
+    panel.dvPending = null;
     panel.dvGen = (panel.dvGen || 0) + 1;            // every reply still on its way is dropped
   }
 
   function start(panel) {
-    if (panel.dvRunning) return;                     // one run per open
+    if (panel.dvRunning) return;                     // one run per show
     panel.dvRunning = true;
     panel.dvGen = (panel.dvGen || 0) + 1;
     var rid = panel.getAttribute("data-rid"), kind = panel.getAttribute("data-kind");
@@ -86,31 +102,73 @@
     } else {
       return;
     }
-    status.textContent = "live — every " + POLL_MS[kind] / 1000 + " s while open";
-    var tick = function () { if (!shown(panel)) { stop(panel); return; } poll(); };   // closed around, replaced: stop
+    status.textContent = "live — every " + POLL_MS[kind] / 1000 + " s while shown";
+    var tick = function () { if (!shown(panel)) { stop(panel); return; } poll(); };   // hidden around, replaced: stop
     tick();
     panel.dvTimer = setInterval(tick, POLL_MS[kind]);
   }
 
-  // Open and shown: the panel and every <details> around it open, and in the page.
+  // Shown: in the page and every <details> around it open (the view itself is no <details>).
   function shown(panel) {
     if (!panel.isConnected) return false;
-    for (var d = panel; d; d = d.parentElement ? d.parentElement.closest("details") : null) if (!d.open) return false;
+    for (var d = panel.closest("details"); d; d = d.parentElement ? d.parentElement.closest("details") : null) {
+      if (!d.open) return false;
+    }
     return true;
   }
-  function sync(panel) { if (shown(panel)) start(panel); else stop(panel); }
+  // The ONE activation path: start a shown view of a running daemon, else stop it.
+  function sync(panel) { if (shown(panel) && up(panel)) start(panel); else stop(panel); }
+  function syncAll(root) { if (root && root.querySelectorAll) root.querySelectorAll(".daemonview").forEach(sync); }
+
+  // A daemon-state block (Monitor · rX, Live · rX, a view's own page) takes the state `isUp`; `d` = the poll's answer.
+  function apply(block, isUp, d) {
+    if ((block.getAttribute("data-up") === "1") === isUp) return;
+    block.setAttribute("data-up", isUp ? "1" : "0");
+    block.querySelectorAll(".dstate-down").forEach(function (p) { p.hidden = isUp; });
+    block.querySelectorAll(".daemonview-reload").forEach(function (b) { b.disabled = !isUp; });
+    if (block.classList.contains("dlive")) {
+      block.querySelectorAll(".setform").forEach(function (f) {
+        var key = f.querySelector('input[name="key"]'), val = f.querySelector('[name="value"]');
+        var st = (d && d.status) || {}, ch = (d && d.channel) || {};
+        var cur = !key ? undefined : st[key.value] !== undefined ? st[key.value] : ch[key.value];
+        if (isUp && val && cur !== undefined && cur !== null) val.value = cur;   // the current values of that answer
+        f.querySelectorAll("select, input:not([type=hidden]), button").forEach(function (el) { el.disabled = !isUp; });
+      });
+    }
+    block.querySelectorAll(".daemonview").forEach(sync);
+    if (block.classList.contains("daemonview")) sync(block);
+  }
+  // dash.js: one answer per poll of a radio.
+  document.addEventListener("lhpc:daemonstate", function (e) {
+    var s = e.detail || {};
+    if (!s.rid) return;
+    document.querySelectorAll("[data-up][data-rid]").forEach(function (b) {
+      if (b.getAttribute("data-rid") === s.rid) apply(b, !!s.up, s.data);
+    });
+  });
+  // A block that arrives later (a lazy row body): the cached state, only when fresher than one poll (else it keeps its
+  // server-rendered state and takes the next answer).
+  function replay(root) {
+    if (!window.lhpcDaemonState || !root.querySelectorAll) return;
+    root.querySelectorAll("[data-up][data-rid]").forEach(function (b) {
+      var s = window.lhpcDaemonState(b.getAttribute("data-rid"));
+      if (s) apply(b, s.up, s.data);
+    });
+  }
 
   document.addEventListener("toggle", function (e) {
     var el = e.target;
-    if (!el || !el.classList) return;
-    if (el.classList.contains("daemonview")) sync(el);
-    else if (el.querySelectorAll) el.querySelectorAll(".daemonview").forEach(sync);   // a Monitor or Settings around them
+    if (el && el.querySelectorAll) syncAll(el);      // a Monitor, Settings or row around views opened or closed
   }, true);                                          // toggle does not bubble: caught on the way down
   document.addEventListener("click", function (e) {
     var btn = e.target && e.target.closest ? e.target.closest(".daemonview-reload") : null;
     var panel = btn ? btn.closest(".daemonview") : null;
-    if (panel) { stop(panel); sync(panel); }         // afresh (a closed panel stays quiet)
+    if (panel) { stop(panel); sync(panel); }         // afresh (a hidden view stays quiet)
   });
-  // a view's own page opens its panel at load
-  document.querySelectorAll(".daemonview[open]").forEach(sync);
+  document.addEventListener("lhpc:bodyloaded", function (e) {
+    var root = (e.detail && e.detail.root) || document;
+    replay(root);
+    syncAll(root);
+  });
+  syncAll(document);                                 // every shown view at load (a view's own page included)
 })();

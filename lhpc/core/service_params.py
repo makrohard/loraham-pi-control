@@ -680,11 +680,7 @@ class ParamsConfigMixin:
             view["hardware_configured"] = self.hardware_configured()
             view["hw_setups"] = self.hw_setups()
             active = self.radio_bands()
-            # Each radio's +20 dBm permission (daemon 1.2.0 `--high-power`, W311): an explicit small control,
-            # because this page deliberately renders none of the daemon's run params. The grant beside the running
-            # daemon's report.
-            view["high_power"] = [self.high_power_state(band, rid=rid) for rid, _name, band in
-                                  _radio_start.view_radios(self._paths)]
+            view["high_power"] = []
             if active:                                   # only a configured setup has tunable radios
                 live_band = (_radio_start.daemon_radio(self, rid)[1] if rid else "") or (band if band in active else active[0])
                 # The live block's radio, TRANSITIONAL (K6: required): `rid`, else the band's first enabled radio.
@@ -697,9 +693,14 @@ class ParamsConfigMixin:
                 # PASSIVE channel read: this renders a settings form, it is not an operator
                 # asking to measure the channel. A scan here would destroy an arriving frame.
                 actual = {**self.daemon_channel(live_band, rid), **dv.status}
-                cfg = self._daemon_param_applies("daemon", rid) if dv.reachable else {}
-                view["radios"] = [{"band": live_band, "rid": rid, "reachable": dv.reachable,
-                                   "error": dv.error, "status": actual, "config": cfg}]
+                # UI-REORG s3: the configured values always (Live offline shows them, greyed)
+                cfg = self._daemon_param_applies("daemon", rid)
+                view["radios"] = [{"band": live_band, "rid": rid, "reachable": dv.reachable, "ready": dv.ready,
+                                   "radio_state": dv.radio_state, "error": dv.error, "status": actual, "config": cfg}]
+                # The shown radio's +20 dBm permission (daemon 1.2.0 `--high-power`, W311): an explicit small control,
+                # because this page renders none of the daemon's run params. The grant beside the running daemon's
+                # report, from the same passive read (UI-REORG s3: the selected radio only, one daemon read per page).
+                view["high_power"] = [self.high_power_state(live_band, view=dv, rid=rid)] if rid else []
                 # Order the live per-parameter controls the same as the daemon-params panel
                 # below (shared keys in that order; any daemon-only extras after).
                 from . import daemon_params

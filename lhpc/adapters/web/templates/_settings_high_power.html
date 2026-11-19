@@ -1,5 +1,7 @@
+{#- UI-REORG s3: the selected radio's +20 dBm permission (view.high_power holds that one radio). Family = the SAVED one
+    (hardware list): SX1262 needs no permission (control and Save disabled); unknown: selectable, with a warning. -#}
 <details class="advcfg" id="high-power-daemon">
-            <summary>High-power +20 dBm permission (SX127x)</summary>
+            <summary>High-power +20 dBm permission · {{ view.high_power[0].rid }}</summary>
             <p class="muted">Allow <code>POWER=20</code> on a radio. Default off; the radio's daemon
               must be restarted for a change to take effect, and a running daemon keeps
               the permission it was started with. <strong>At +20 dBm the transmit duty cycle must
@@ -10,19 +12,25 @@
               its module documentation does not specify this drive condition. No effect on an
               SX1262.</p>
             {% for hp in view.high_power %}
+              {% set _off = hp.saved_family == 'sx1262' %}
               <form method="post" action="{{ url_for('hardware_high_power') }}" class="act">
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
                 <input type="hidden" name="rid" value="{{ hp.rid }}">
                 <label>{{ hp.rid }} · {{ hp.band }} MHz
-                  <select name="value" aria-label="high-power {{ hp.rid }}">
+                  <select name="value" aria-label="high-power {{ hp.rid }}"{% if _off %} disabled{% endif %}>
                     <option value="off"{% if not hp.saved %} selected{% endif %}>off</option>
                     <option value="on"{% if hp.saved %} selected{% endif %}>on</option>
                   </select>
                 </label>
-                <button type="submit">Save</button>
+                <button type="submit"{% if _off %} disabled{% endif %}>Save</button>
                 <span class="muted" id="hp-live-{{ hp.rid }}">running daemon:
                   {% if not hp.reachable %}not serving{% elif hp.live is none %}HIGHPOWER unknown (older daemon){% elif hp.live %}permission ON{% else %}permission OFF{% endif %}{% if hp.family %} ({{ hp.family }}){% endif %}</span>
               </form>
+              {% if _off %}
+                <p class="muted" id="hp-sx1262-{{ hp.rid }}">Not needed on an SX1262 (up to 20 dBm without permission)</p>
+              {% elif not hp.saved_family %}
+                <p class="depnote depnote-warn" id="hp-unknown-{{ hp.rid }}">chip unknown: only SX127x uses this</p>
+              {% endif %}
               {% if hp.mismatch %}
                 <p class="depnote depnote-warn" id="hp-mismatch-{{ hp.rid }}">{{ hp.rid }} ({{ hp.band }} MHz): {{ hp.mismatch }}</p>
               {% endif %}

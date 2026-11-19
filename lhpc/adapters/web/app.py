@@ -1204,9 +1204,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "command": service.manual_start_command(main, _inst) if interactive else "",   # 7f: the shown instance's
                     # Per-stack Settings section rendered inline on the Apps list (same data the
                     # stack-detail Settings uses): operator, component-scoped params, sources, autostart.
-                    "view": {**service.config_view(stack.id, _view_inst.band if _view_inst else "", rid=_view_rid(stack.id, "")),
+                    "view": (_cv := {**service.config_view(stack.id, _view_inst.band if _view_inst else "", rid=_view_rid(stack.id, "")),
                              **_instances.settings_choice(service, stack.id, "", _view_inst),   # 7f, DEC-W40
-                             "live_radios": _live_radios},   # W3: the daemon's radio links
+                             "live_radios": _live_radios}),   # W3: the daemon's radio links
                     "config_groups": service.config_param_groups(stack.id, inst=_view_inst),
                     # Folded-in detail sections (all read-only / GET-safe):
                     "system_deps": service.system_deps(stack.id),
@@ -1216,7 +1216,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     # a provider to build BEFORE the main, and only one whose start refusal is a source build (N1)
                     "needs_build_deps": [c for c in service.unbuilt_build_deps(stack.id)
                                          if dict(_sr[0]).get(c, "").startswith("not built")],
-                    "daemon_params": service.daemon_params_view(stack.id, rid=_dp_rid(stack.id, _live_radios, _inst)),
+                    # UI-REORG s1/s3: in the daemon's Settings the panel follows the Settings switch: ITS radio
+                    "daemon_params": service.daemon_params_view(stack.id, rid=(
+                        _cv["radios"][0]["rid"] if _submenus.params_in_settings(stack.id) and _cv.get("radios")
+                        else _dp_rid(stack.id, _live_radios, _inst))),
                     # None when HMAC does not apply here (no flag/row); else whether it is ENABLED.
                     "hmac_enabled": service.hmac_status(stack.id),
                     # K5: any instance's marker, with that instance's own button; not twice beside its settings view
@@ -1504,6 +1507,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     app.jinja_env.globals["log_preview_url"] = _log_preview_url
     app.jinja_env.globals["stack_logs"] = _submenus.stack_logs
     app.jinja_env.globals["daemon_views"] = _submenus.daemon_views
+    app.jinja_env.globals["params_in_settings"] = _submenus.params_in_settings
+    app.jinja_env.globals["with_radio"] = _submenus.with_radio
     app.jinja_env.globals["log_panels"] = _submenus.LOG_PANELS
     # U5: a page outside the Stacks page names a stack's row as the Stacks crumbs do (its stack's name)
     app.jinja_env.globals["stack_label"] = lambda sid: s.name if (s := service.stack(sid)) is not None else sid
@@ -1514,6 +1519,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         level's own partial (the same markup as on the Stacks page), opened. Unknown owner, unknown
         id or an id that is not this owner's (e.g. another stack's component) -> 404."""
         rid = _page_radio()[0]                                             # an empty ?radio= is a 400
+        if _submenus.id_radio(mid):         # UI-REORG s3: a per-radio level shows ITS radio (a differing ?radio= too)
+            request.environ["lhpc.page_radio"] = _radio_of(_submenus.id_radio(mid))
         if mid == f"stack-settings-{owner}--repository":       # UI-REORG s2: the old Repositories URL, forwarded
             new = f"stack-install-{owner}--repositories"
             return redirect(url_for("menu_page", owner=owner, mid=new, radio=rid or None) + "#" + new)

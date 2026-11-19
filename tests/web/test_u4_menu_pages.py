@@ -44,12 +44,13 @@ def _html(c, path):
 
 
 def _block(html, mid):
-    """The <details id="mid"> element of `html`, as rendered (its balanced markup)."""
-    m = re.search(r'<details\b[^>]*\bid="' + re.escape(mid) + r'"[^>]*>', html)
+    """The <details id="mid"> element of `html` (UI-REORG c4: or a daemon view's <div class="daemonview" id="mid">), as
+    rendered (its balanced markup)."""
+    m = re.search(r'<(details\b|div class="daemonview")[^>]*\bid="' + re.escape(mid) + r'"[^>]*>', html)
     assert m, f"no <details id={mid!r}>"
-    depth = 0
-    for t in re.finditer(r"<details\b|</details>", html[m.start():]):
-        depth += -1 if t.group(0) == "</details>" else 1
+    tag, depth = m.group(1).split()[0], 0
+    for t in re.finditer(rf"<{tag}\b|</{tag}>", html[m.start():]):
+        depth += -1 if t.group(0) == f"</{tag}>" else 1
         if depth == 0:
             return html[m.start(): m.start() + t.end()]
     raise AssertionError("unbalanced <details>")
@@ -64,6 +65,9 @@ def _comparable(block):
     and a radio switch's link (it stays on the page; that rule is tested on its own)."""
     block = re.sub(r'<input type="hidden" name="return" value="[^"]*">', "", block)
     block = re.sub(r'href="/stacks(?:/[^/"]+/menu/[^"?]+)?\?radio=(r\d+)[^"]*"', r'href="SWITCH \1"', block)
+    # UI-REORG c4: a daemon view's own page adds its daemon state (badge, data-up, the "Daemon not running" line)
+    block = re.sub(r' data-up="[01]"| <span class="badge [^"]* dbadge"[^>]*>[^<]*</span>'
+                   r'|<p class="muted dstate-down"[^>]*>Daemon not running</p>', "", block)
     head, rest = block.split(">", 1)
     return _OPEN.sub("", head, count=1) + ">" + rest
 
@@ -168,16 +172,19 @@ def test_each_level_has_one_link_and_its_page_shows_the_same_block(tmp_path, web
     view shows, so the levels are read from the stack's view on each radio (and with none)."""
     c, svc = _client(web, tmp_path, radios)
     tree = _tree(c)
-    web_level = re.compile(r"stack-webserver-[^@]+@(r\d+)(--settings|--info)?")
+    # the levels of one radio: a stack's Webserver instance pages; the daemon's per-radio Settings levels (UI-REORG c4:
+    # every radio's exist, the page shows the selected radio's)
+    web_level = re.compile(r"stack-webserver-[^@]+@(r\d+)(--settings|--info)?|stack-settings-[a-z0-9-]+?--(r\d+)-[a-z]+")
     for owner in _owners(svc):
         menus = tree[owner]
         # the view with no radio, then (its Webserver levels only) the view of each radio an instance page names
         views = [(_expanded(c, owner), None, "")] + [(_expanded(c, owner, r), web_level, r) for r in
-                                                     sorted({m.group(1) for m in map(web_level.fullmatch, menus) if m})]
+                                                     sorted({m.group(1) or m.group(3) for m in map(web_level.fullmatch, menus) if m})]
         ids, links = set(), set()
         for shown, only, _radio in views:
             assert not re.search(r"<details(?![^>]*\bid=)[^>]*>", shown), f"{owner}: a level without an id"
-            ids |= {i for i in re.findall(r'<details\b[^>]*\bid="([^"]+)"', shown) if not only or only.fullmatch(i)}
+            ids |= {i for i in re.findall(r'<(?:details\b|div class="daemonview")[^>]*\bid="([^"]+)"', shown)
+                    if not only or only.fullmatch(i)}
             hrefs = [a["href"] for a in parse(shown).find("a", class_="pagelink")]
             assert len(hrefs) == len(set(hrefs)), owner                 # one link per shown level
             links |= {h for h in hrefs if not only or only.fullmatch(h.rsplit("/", 1)[1].split("?")[0])}
@@ -190,8 +197,12 @@ def test_each_level_has_one_link_and_its_page_shows_the_same_block(tmp_path, web
                 continue                     # its page is that route (test_a_level_with_an_own_page_has_one_page)
             shown, radio = next((v, r) for v, _only, r in views if f'id="{mid}"' in v)
             page = _block(_html(c, f"/stacks/{owner}/menu/{mid}" + (f"?radio={radio}" if radio else "")), mid)
-            assert _OPEN.search(_tag(page)), (owner, mid)
-            assert _comparable(page) == _comparable(_block(shown, mid)), (owner, mid)
+            assert _OPEN.search(_tag(page)) or 'class="daemonview"' in _tag(page), (owner, mid)   # a view: always open
+            here = _block(shown, mid)
+            if 'class="rswitch"' not in here:     # UI-REORG c4: the daemon's radio parameters follow the Settings switch;
+                page = re.sub(r'<nav class="rswitch".*?</nav>', "", page, flags=re.S)        # its own page has its own
+                page, here = (re.sub(r"\n[ \t]*(?=\n)", "", x) for x in (page, here))     # (blank template lines)
+            assert _comparable(page) == _comparable(here), (owner, mid)
 
 
 def test_a_level_with_an_own_page_has_one_page(tmp_path, web):

@@ -1,7 +1,11 @@
 // Radio dashboard live updater. For each radio card (W285/W286: one per radio, its band a property) it polls
 // the read-only daemon API of that radio and refreshes the RSSI meter, TX-mode, daemon badge and RX/TX feed.
 // The hardware list's daemon badges (`hw-badge-<rid>`, on /hardware and in the daemon's Hardware submenu, also
-// when a Stacks body arrives later) are polled the same way.
+// when a Stacks body arrives later) are polled the same way, and so is the badge of every Monitor · rX / Live · rX
+// block and of a daemon view's own page (UI-REORG s4: class dbadge + data-rid, no id). One poll per radio per page.
+// State contract (this file owns it): per radio the last answer is cached, one lhpc:daemonstate event per answer
+// ({rid, up, data}; daemoncfg.js acts on a change), a failed poll keeps the cache (the next one retries), and a block
+// that arrives later reads the cache through window.lhpcDaemonState(rid) only when it is fresher than one poll.
 // Same-origin only. The polling is read-only and, since 0.7.0, genuinely passive: it asks the
 // daemon for channel data WITHOUT a CAD scan, because a scan destroys a frame in flight. The one
 // action this file takes is the explicit "Scan now" button, which is a POST with a CSRF token.
@@ -27,14 +31,21 @@
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function (d) {
         if (!d) return;
+        cache[key] = { up: !!d.reachable, data: d, at: Date.now() };
+        document.dispatchEvent(new CustomEvent("lhpc:daemonstate", { detail: { rid: key, up: !!d.reachable, data: d } }));
+        var badges = Array.prototype.filter.call(document.querySelectorAll(".dbadge[data-rid]"),
+                                                 function (b) { return b.getAttribute("data-rid") === key; });
         ["rd-badge-", "hw-badge-"].forEach(function (prefix) {
-          var badge = document.getElementById(prefix + key);
-          if (badge) {    // G1-C28 N1: the server's labels, from the radio's readiness, not reachability alone
-            var text = d.ready ? "daemon usable (READY)"
-              : d.reachable ? "daemon occupied (" + (d.radio_state || "not READY") + ")" : "daemon offline";
-            if (badge.textContent !== text) badge.textContent = text;   // aria-live: announce changes only
-            badge.className = "badge badge-" + (d.ready ? "running" : (d.reachable ? "degraded" : "stopped"));
-          }
+          var b = document.getElementById(prefix + key);
+          if (b) badges.push(b);
+        });
+        badges.forEach(function (badge) {
+          // G1-C28 N1: the server's labels, from the radio's readiness, not reachability alone
+          var text = d.ready ? "daemon usable (READY)"
+            : d.reachable ? "daemon occupied (" + (d.radio_state || "not READY") + ")" : "daemon offline";
+          if (badge.textContent !== text) badge.textContent = text;   // aria-live: announce changes only
+          badge.className = "badge badge-" + (d.ready ? "running" : (d.reachable ? "degraded" : "stopped"))
+            + (badge.classList.contains("dbadge") ? " dbadge" : "");
         });
         if (!d.reachable) return;
         var rssi = (d.channel && d.channel.LIVERSSI) || "";
@@ -79,7 +90,11 @@
   // The discipline of taskbanner.js, per radio: no timer while the page is hidden, never a second
   // request while one is still out (a slow daemon answer is not overlapped), and after a failure a
   // fixed slow interval instead of the normal one. Visible again: one immediate refresh.
-  var POLL_MS = 3000, ERROR_MS = 15000, started = {};
+  var POLL_MS = 3000, ERROR_MS = 15000, started = {}, cache = {};
+  window.lhpcDaemonState = function (rid) {
+    var c = cache[rid];
+    return c && Date.now() - c.at < POLL_MS ? c : null;
+  };
   function start(rid) {
     if (!rid || started[rid]) return;           // one poller per radio, however many badges show it
     started[rid] = true;
@@ -116,6 +131,9 @@
   function listBadges(root) {
     Array.prototype.forEach.call(root.querySelectorAll('[id^="hw-badge-"]'), function (el) {
       start(el.id.slice("hw-badge-".length));
+    });
+    Array.prototype.forEach.call(root.querySelectorAll(".dbadge[data-rid]"), function (el) {
+      start(el.getAttribute("data-rid"));
     });
   }
   listBadges(document);

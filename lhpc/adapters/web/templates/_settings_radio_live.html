@@ -1,8 +1,13 @@
-<details class="advcfg" id="stack-settings-{{ stack.id }}--{{ radio.rid }}-live">
-              <summary>Live radio settings</summary>
+{#- UI-REORG s3: a radio's live settings, always present. Daemon not running: the configured values (daemon-param
+    config), inputs + Apply disabled, "Daemon not running"; daemoncfg.js re-enables them and fills the current values
+    from the badge's poll (dash.js) when the daemon is up, and greys them again when it goes down. -#}
+{% from "_macros.html" import daemon_badge -%}
+<details class="advcfg dblock dlive" id="stack-settings-{{ stack.id }}--{{ radio.rid }}-live" data-rid="{{ radio.rid }}" data-up="{{ '1' if radio.reachable else '0' }}">
+              <summary>Live radio settings · {{ radio.rid }} {{ daemon_badge(radio, live=True, rid=radio.rid) }}</summary>
               <p class="muted">Applied immediately to the running daemon via its config socket
                 (non-RF tuning; enabling a TX mode does not itself transmit). Live RSSI / CAD /
                 RX-TX monitoring is on the <a href="{{ url_for('dashboard') }}">dashboard</a>.</p>
+              <p class="muted dstate-down"{% if radio.reachable %} hidden{% endif %}>Daemon not running</p>
             <div class="settingsgrid">
               {% for key, spec in view.live_settings.items() %}
                 <div class="setcell">
@@ -10,23 +15,24 @@
                   <form method="post" action="{{ url_for('radio_set', rid=radio.rid) }}" class="setform">
                     <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
                     <input type="hidden" name="key" value="{{ key }}">
-                    {% set cur = radio.status.get(key) or radio.config.get(key) %}
+                    {% set cur = radio.status[key] if radio.reachable and key in radio.status else radio.config.get(key) %}
+                    {% set _off = ' disabled' if not radio.reachable else '' %}
                     {% if spec.type == 'enum' %}
-                      <select name="value" aria-label="{{ key }}">
+                      <select name="value" aria-label="{{ key }}"{{ _off }}>
                         {% for ch in spec.choices %}
                           <option value="{{ ch }}" {% if cur==ch %}selected{% endif %}>{{ ch }}</option>
                         {% endfor %}
                       </select>
                     {% elif spec.type == 'int' %}
-                      <input type="number" name="value" value="{{ cur or spec.min }}"
-                             min="{{ spec.min }}" max="{{ spec.max }}" required>
+                      <input type="number" name="value" value="{{ cur if cur is not none else spec.min }}"
+                             min="{{ spec.min }}" max="{{ spec.max }}" required{{ _off }}>
                       <span class="muted">{{ spec.min }}..{{ spec.max }}</span>
                     {% else %}
-                      <input type="text" name="value" value="{{ cur or '' }}"
-                             autocomplete="off" required>
+                      <input type="text" name="value" value="{{ cur if cur is not none else '' }}"
+                             autocomplete="off" required{{ _off }}>
                       <span class="muted">{{ spec.hint }}</span>
                     {% endif %}
-                    <button type="submit">Apply</button>
+                    <button type="submit"{{ _off }}>Apply</button>
                   </form>
                 </div>
               {% endfor %}

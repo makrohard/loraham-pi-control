@@ -112,7 +112,9 @@ def test_the_daemons_panel_without_a_page_radio_is_its_first_radios_and_chooses_
     form = _hidden(c, url, "stack-daemon-params-daemon", "/stacks/daemon/daemon-params")
     assert form.get("radio") == "r1" and "band" not in form
     doc = parse(c.get(url).get_data(as_text=True))
-    links = [a["href"] for a in doc.within(doc.by_id("stack-daemon-params-daemon")).find("a")]
+    assert not doc.within(doc.by_id("stack-daemon-params-daemon")).find("nav", class_="rswitch")   # c4: in Settings
+    settings = doc.within(doc.by_id("stack-settings-daemon"))                    # it follows the Settings switch
+    links = [a["href"] for a in settings.within(settings.find("nav", class_="rswitch")[0]).find("a")]
     assert [h.split("?")[1].split("&")[0] for h in links] == ["radio=r1", "radio=r2", "radio=r3"]
     post("/stacks/daemon/daemon-params", **{**form, "dp_SF": "9"})
     assert (_row_dp(tmp_path, "r1"), _row_dp(tmp_path, "r2")) == ({"SF": "9"}, {})

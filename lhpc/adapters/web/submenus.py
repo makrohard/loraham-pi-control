@@ -9,6 +9,7 @@ owner's list. The conditions below mirror the templates' (tests compare both, le
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from lhpc.core import rflog as _rflog
@@ -47,6 +48,33 @@ def daemon_views(sid: str, rid: str) -> list[dict]:
     Monitor template's one list."""
     return [{"id": f"stack-settings-{sid}--{rid}-{kind}", "rid": rid, "kind": kind, "label": f"{name} · {rid}"}
             for kind, name in DAEMON_VIEWS]
+
+
+# UI-REORG s3/s4: a per-radio level id of a daemon's Settings: `stack-settings-<sid>--<rid>-<kind>`, kind = monitor,
+# live or one of DAEMON_VIEWS; the page radio comes from the id, and the radio switch links the same kind's id
+_PER_RID = re.compile(r"^(stack-settings-[a-z0-9-]+?--)(r[0-9]+)-(monitor|live|"
+                      + "|".join(k for k, _n in DAEMON_VIEWS) + r")$")
+
+
+def id_radio(mid: str) -> str:
+    """The radio a per-radio level id names ("" for any other id)."""
+    m = _PER_RID.match(mid or "")
+    return m.group(2) if m else ""
+
+
+def with_radio(mid: str, rid: str) -> str:
+    """The same level of radio `rid` (a per-radio id), else `mid` unchanged."""
+    m = _PER_RID.match(mid or "")
+    return f"{m.group(1)}{rid}-{m.group(3)}" if m else mid
+
+
+# DAEMON-PARAMS-INTO-SETTINGS (#70, his word 11-18): the stacks whose "Daemon radio parameters" level stands under
+# their Settings (after its per-radio levels), following the Settings radio switch; the template reads the same rule
+PARAMS_IN_SETTINGS = ("daemon",)
+
+
+def params_in_settings(sid: str) -> bool:
+    return sid in PARAMS_IN_SETTINGS
 
 
 def rf_entry(sid: str):
@@ -193,20 +221,22 @@ def stack_menus(g: dict) -> list[Submenu]:
     sv = {"stack": g["stack"], "view": view, "config_groups": g["config_groups"], "settings_id": settings}
     add(settings, top, "Settings", "_stack_settings.html", **sv)
     if view.get("hw_setups") and view.get("high_power"):
-        add("high-power-daemon", settings, "High-power +20 dBm permission (SX127x)",
+        add("high-power-daemon", settings, f"High-power +20 dBm permission · {view['high_power'][0]['rid']}",
             "_settings_high_power.html", **sv)
-    for radio in view.get("radios") or ():
-        if radio["reachable"]:
-            rid = radio["rid"]
-            add(f"{settings}--{rid}-monitor", settings, f"Monitor · {rid}", "_settings_radio_monitor.html",
-                radio=radio, **sv)
-            for dv in daemon_views(sid, rid):
-                add(dv["id"], f"{settings}--{rid}-monitor", dv["label"], "_daemon_view.html", dv=dv, radio=radio, **sv)
-            add(f"{settings}--{rid}-live", settings, f"Live radio settings · {rid}", "_settings_radio_live.html",
-                radio=radio, **sv)
+    # UI-REORG s3: the per-radio levels of EVERY radio (always present, daemon up or not); the Settings switch shows
+    # the selected radio's. Only that one carries the read state; the others are rid-only (no daemon read).
+    sel = (view.get("radios") or [None])[0]
+    for rid, _name, band in (view.get("live_radios") or ()) if view.get("live_band") else ():
+        radio = sel if sel and sel["rid"] == rid else {"rid": rid, "band": band}
+        add(f"{settings}--{rid}-monitor", settings, f"Monitor · {rid}", "_settings_radio_monitor.html",
+            radio=radio, **sv)
+        for dv in daemon_views(sid, rid):
+            add(dv["id"], f"{settings}--{rid}-monitor", dv["label"], "_daemon_view.html", dv=dv, radio=radio, **sv)
+        add(f"{settings}--{rid}-live", settings, f"Live radio settings · {rid}", "_settings_radio_live.html",
+            radio=radio, **sv)
     if g["daemon_params"]:
-        add(f"stack-daemon-params-{sid}", top, "Daemon radio parameters", "_daemon_params.html",
-            stack_id=sid, daemon_params=g["daemon_params"])
+        add(f"stack-daemon-params-{sid}", settings if params_in_settings(sid) else top, "Daemon radio parameters",
+            "_daemon_params.html", stack_id=sid, daemon_params=g["daemon_params"])
     if g["main"] and sid == "daemon":
         info()
     creds = g["ui_creds_list"]

@@ -17,10 +17,12 @@
     {% endif %}
       {# W3 (W319/W320), K8d (DEC-W384az): every panel is one radio's (a client stack's: its instance there); its
          Save/Apply/Reset name it (radio=) #}
+      {% if not dp_in_settings %}{# UI-REORG s1: inside the daemon's Settings it follows the Settings switch #}
       {% from "_radio_switch.html" import radio_switch %}{% set _ch = [] %}
       {% for rid, _name, band in daemon_params.radios %}{% set _ = _ch.append({'label': rid ~ ' · ' ~ band, 'selected': rid == daemon_params.rid,
            'href': url_for('menu_page', owner=menu_owner, mid=menu_id, radio=rid) if menu_id else url_for('stacks_overview', radio=rid, open=stack_id, dp=stack_id) ~ '#stack-daemon-params-' ~ stack_id}) %}{% endfor %}
       {{ radio_switch(_ch) }}
+      {% endif %}
     <form method="post" class="dparams-form"
           action="{{ url_for('daemon_params_save', stack_id=stack_id) }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}

@@ -41,9 +41,11 @@ def test_the_settings_switch_selects_and_saves_the_shown_radio(client, rid):
 
 @pytest.mark.parametrize("rid", ["r2", "r4"])
 def test_the_daemon_params_switch_selects_and_saves_the_shown_radio(client, rid):
-    s = _scope(client, f"/stacks?radio={rid}&open=daemon&dp=daemon", "stack-daemon-params-daemon")
+    # UI-REORG c4: the daemon's panel stands in its Settings and follows the Settings switch (no second switch)
+    s = _scope(client, f"/stacks?radio={rid}&open=daemon&dp=daemon", "stack-settings-daemon")
     assert [a.text for a in s.find("a", class_="sel")] == [f"{rid} · 868"]
-    assert _hidden_radio(s) == [rid]
+    dp = _scope(client, f"/stacks?radio={rid}&open=daemon&dp=daemon", "stack-daemon-params-daemon")
+    assert not dp.find("a", class_="sel") and _hidden_radio(dp) == [rid]
 
 
 @pytest.mark.parametrize("rid", ["r1", "r3"])
@@ -69,7 +71,7 @@ def test_the_kill_confirm_kills_the_named_radio(client, rid):
 @pytest.mark.parametrize("url, el_id, sel", [
     ("/stacks?radio=r3&cfg=meshcom", "stack-settings-meshcom", "r3 · 433"),                     # a stack's Settings
     ("/stacks?radio=r2&cfg=daemon", "stack-settings-daemon", "r2 · 868"),                       # the daemon's live switch
-    ("/stacks?radio=r4&open=daemon&dp=daemon", "stack-daemon-params-daemon", "r4 · 868"),        # Daemon radio parameters
+    ("/stacks/daemon/menu/stack-daemon-params-daemon?radio=r4", "stack-daemon-params-daemon", "r4 · 868"),  # its page (c4)
     ("/stacks?radio=r3&open=meshcom", "stack-webservers-meshcom", "r3 · 433"),                  # Web Proxies
 ])
 def test_every_view_switch_is_the_one_shared_switch(client, url, el_id, sel):

@@ -60,10 +60,12 @@ def test_each_views_page_opens_its_one_panel_under_its_monitor(tmp_path, web):
     c, _svc = _client(web, tmp_path)
     for kind, name in _VIEWS:
         doc = parse(_html(c, f"/stacks/daemon/menu/{_mid('r1', kind)}?radio=r1"))
-        panels = doc.find("details", class_="daemonview")
+        panels = doc.find("div", class_="daemonview")       # UI-REORG c4: always open, no own show/hide (was details)
         assert [(p["id"], p["data-rid"], p["data-kind"]) for p in panels] == [(_mid("r1", kind), "r1", kind)], kind
-        assert "open" in panels[0].attrs, kind                                 # its page opens it (the JS asks at load)
-        assert _text(doc.within(panels[0]).find("summary")[0]) == f"{name} · r1"
+        assert panels[0]["data-up"] == "1" and not doc.find("details", class_="daemonview"), kind
+        head = doc.within(panels[0]).find("h4", class_="daemonview-head")[0]
+        assert _text(head).startswith(f"{name} · r1 ")                         # c4: its own page carries the badge
+        assert [b["data-rid"] for b in doc.within(head).find("span", class_="dbadge")] == ["r1"]
         assert doc.within(panels[0]).find("button", class_="daemonview-reload")
         assert doc.within(panels[0]).find("pre", class_="stream22")
         crumbs = _text(doc.find("nav", class_="crumbs")[0])
@@ -74,11 +76,11 @@ def test_the_stacks_body_holds_the_views_closed_and_no_button_row(tmp_path, web)
     c, _svc = _client(web, tmp_path)
     body = _html(c, "/stacks/daemon/body?radio=r1")
     doc = parse(body)
-    panels = doc.find("details", class_="daemonview")
+    panels = doc.find("div", class_="daemonview")       # UI-REORG c4: always open views (was closed details)
     assert sorted((p["data-rid"], p["data-kind"]) for p in panels) == sorted(("r1", k) for k, _n in _VIEWS)   # r1's view
-    assert not [p for p in panels if "open" in p.attrs]                          # closed: nothing asks
     monitor = doc.by_id(_mid("r1", "monitor"))
-    inside = [p["id"] for p in doc.within(monitor).find("details", class_="daemonview")]
+    assert "open" not in monitor.attrs                                           # c4: no hard `open`: nothing asks
+    inside = [p["id"] for p in doc.within(monitor).find("div", class_="daemonview")]
     assert inside == [_mid("r1", k) for k, _n in _VIEWS]                         # under its Monitor, in order
     for gone in ("socketbtn", "txbtn", "liveclose", "socketclose", "txclose"):
         assert f'class="{gone}' not in body and f" {gone}" not in body, gone
@@ -86,9 +88,17 @@ def test_the_stacks_body_holds_the_views_closed_and_no_button_row(tmp_path, web)
     assert 'class="livebtn" data-rid' not in body
 
 
-def test_an_offline_radio_has_no_monitor_and_no_views(tmp_path, web):
+def test_an_offline_radio_has_its_monitor_paused(tmp_path, web):
+    # UI-REORG c4 (his OPEN-M3 = b): the Monitor is always present; daemon not running: "Daemon not running", Reload
+    # off (was: no Monitor, its view pages 404). The other radio's blocks are not rendered (the switch shows one).
     c, _svc = _client(web, tmp_path, live=("r1",))
     body = _html(c, "/stacks/daemon/body?radio=r1")
     assert f'id="{_mid("r1", "status")}"' in body
     assert "--r2-monitor" not in body and not re.search(r'data-rid="r2" data-kind', body)
-    assert c.get(f"/stacks/daemon/menu/{_mid('r2', 'status')}").status_code == 404
+    doc = parse(_html(c, "/stacks/daemon/body?radio=r2"))
+    monitor = doc.by_id(_mid("r2", "monitor"))
+    assert monitor["data-up"] == "0" and "Daemon not running" in _text(monitor)
+    assert all(b.has_attr("disabled") for b in doc.within(monitor).find("button", class_="daemonview-reload"))
+    page = parse(_html(c, f"/stacks/daemon/menu/{_mid('r2', 'status')}"))      # its page: the id's radio, paused
+    [view] = page.find("div", class_="daemonview")
+    assert view["data-up"] == "0" and page.within(view).find("button", class_="daemonview-reload")[0].has_attr("disabled")
