@@ -90,9 +90,9 @@ def _text(page, kind):
     return page.text_content(_sel(kind) + " .daemonview-text")
 
 
-def _wait_text(page, kind, want):
-    page.wait_for_function("([s, w]) => document.querySelector(s + ' .daemonview-text').textContent.includes(w)",
-                           arg=[_sel(kind), want], timeout=15000)
+def _wait_text(page, kind, want, exact=False):
+    page.wait_for_function("([s, w, x]) => { const t = document.querySelector(s + ' .daemonview-text').textContent;"
+                           " return x ? t === w : t.includes(w); }", arg=[_sel(kind), want, exact], timeout=15000)
 
 
 def _loaded(page, settled, seen):
@@ -126,10 +126,12 @@ def test_status_and_stats_ask_once_per_show_and_per_reload_and_never_while_hidde
         assert _text(page, kind).split("\n")[0] == f"{kind.upper()} — {RID} (live)"
     settled()
     assert seen.count("") == 2
-    page.click(_sel("status") + " .daemonview-reload")
-    page.clock.run_for(15000)
-    settled()
-    assert seen.count("") == 3                                               # one per Reload, no timer
+    for kind in ("status", "stats"):
+        before = seen.count("")
+        page.click(_sel(kind) + " .daemonview-reload")
+        page.clock.run_for(15000)
+        settled()
+        assert seen.count("") == before + 1, kind                            # one per Reload, no timer
 
 
 def test_the_socket_view_polls_each_second_only_while_shown(flask_page):
@@ -138,7 +140,10 @@ def test_the_socket_view_polls_each_second_only_while_shown(flask_page):
     _loaded(page, settled, seen)
     _ticks(page, "socket", 3, settled)
     assert seen.count("/socket") == 3                                        # each second
+    assert len(_text(page, "socket").split("\n")) == 4                      # the rolling window grows to 22
     page.click(_sel("socket") + " .daemonview-reload")                       # afresh: the window starts over
+    settled()
+    assert seen.count("/socket") == 4                                        # the Reload's request
     page.wait_for_function("s => document.querySelector(s + ' .daemonview-text').textContent.split('\\n').length === 1",
                            arg=_sel("socket"), timeout=15000)
     _toggle_monitor(page, False)                                             # hidden: the poll stops
@@ -147,6 +152,10 @@ def test_the_socket_view_polls_each_second_only_while_shown(flask_page):
     page.clock.run_for(5000)
     settled()
     assert seen.count("/socket") == n
+    _toggle_monitor(page, True)                                              # shown again: one run, its cadence
+    page.wait_for_function("s => !document.querySelector(s).dvBusy", arg=_sel("socket"), timeout=15000)
+    _ticks(page, "socket", 2, settled)
+    assert seen.count("/socket") == n + 3                                    # at once, then each second
 
 
 def test_a_second_toggle_while_shown_starts_no_second_run(flask_page):
@@ -179,7 +188,7 @@ def test_the_rxtx_view_polls_every_3_s_only_while_shown(flask_page):
     _loaded(page, settled, seen)
     _ticks(page, "rxtx", 2, settled)
     assert seen.count("/feed") == 2
-    _wait_text(page, "rxtx", "RX one\nTX two")
+    _wait_text(page, "rxtx", "RX one\nTX two", exact=True)
     _toggle_monitor(page, False)
     page.clock.run_for(9000)
     settled()
@@ -223,7 +232,7 @@ def test_a_slow_reply_is_never_overtaken_one_request_at_a_time(flask_page):
     settled()
     assert seen.count("/feed") == 1, seen
     held.pop().fulfill(status=200, content_type="application/json", body=json.dumps({"feed": ["OLD"]}))
-    _wait_text(page, "rxtx", "OLD")
+    _wait_text(page, "rxtx", "OLD", exact=True)
     page.clock.run_for(3000)                                                  # the next tick asks again
     settled()
     assert seen.count("/feed") == 2, seen
@@ -410,52 +419,68 @@ def test_a_hidden_tab_stops_the_views_and_visible_again_asks_each_view_once(flas
     assert state["polls"] == polls + 1                                       # the badge poll: one at once
 
 
-def test_a_radios_badge_poll_runs_while_one_of_its_pills_is_shown_and_stops_when_none_is(flask_page):
-    """s13 P3: one radio, two badge hosts, the pills in the summaries of Monitor · r3 and Live · r3. A
-    closed block's pill is still on screen, so it keeps polling and follows the daemon down; Settings closed (no pill
-    shown) -> no request; shown again -> one request at once (also a quick close/reopen); a later body with a shown
-    host -> one request at once. One poll, one cache per radio."""
+def _pill(page, block):
+    return page.evaluate("b => { const p = document.querySelector(b + ' > summary .dbadge');"
+                         " return [p.textContent, p.className]; }", block)
+
+
+def test_a_closed_blocks_pill_is_neutral_and_its_radio_polls_only_while_a_pill_is_shown(flask_page):
+    """s13 P3: one radio, two pills (the summaries of Monitor · r3 and Live · r3). A closed block never polls and its
+    pill reads a neutral "–", never a stale state (the daemon going down meanwhile included); one block shown -> its
+    radio polls, the closed one's pill stays neutral; opened -> one request at once (also a quick close/reopen); a
+    later body with a shown pill -> one request at once. One poll, one cache per radio."""
     page, _posts = flask_page(path=TREE, unix_replies=_READY)
     state = {"up": True}
     seen, settled, _held = _serve(page, state)
+    live, neutral = _sel("live"), ["–", "badge dbadge"]
+    assert _pill(page, live) == neutral                                      # closed at load: neutral from the start
     _loaded(page, settled, seen)
     page.clock.pause_at(page.evaluate("() => Date.now()") + 1)               # no real-time flow: "at once" is at once
-    _toggle_monitor(page, False)                                             # both blocks closed, both pills shown
-    settled()
-    polls = state["polls"]
-    state["up"] = False
-    page.clock.run_for(3000)
-    settled()
-    assert state["polls"] == polls + 1
-    page.wait_for_function("m => document.querySelector(m + ' > summary .dbadge').textContent === 'daemon offline'",
-                           arg=_MON, timeout=15000)                          # the closed block's pill follows
-    settings = "#stack-settings-daemon"
 
     def toggle(want):
-        page.click(settings + " > summary")
-        page.wait_for_function("([s, w]) => document.querySelector(s).open === w", arg=[settings, want], timeout=15000)
+        page.click(live + " > summary")
+        page.wait_for_function("([s, w]) => document.querySelector(s).open === w", arg=[live, want], timeout=15000)
         page.evaluate("() => new Promise(r => { const c = new MessageChannel(); c.port1.onmessage = () => r();"
                       " c.port2.postMessage(0); })")                         # one task later: its toggle was handled
-    toggle(False)                                                            # no pill shown
+    def answered():                                                          # the last answer is in (cached)
+        page.wait_for_function(f"() => window.lhpcDaemonState('{RID}') !== null", timeout=15000)
     settled()
+    answered()
     polls = state["polls"]
+    page.clock.run_for(3000)
+    settled()
+    assert state["polls"] == polls + 1                                       # Monitor shown: its radio polls
+    answered()
+    assert _pill(page, live) == neutral                                      # Live closed: neutral, not READY
+    toggle(True)                                                             # Live opened within the poll: the
+    assert _pill(page, live) == ["daemon READY", "badge badge-running dbadge"]   # fresh answer at once,
+    assert state["polls"] == polls + 1                                       # no second request
+    toggle(False)
+    _toggle_monitor(page, False)                                             # both closed
+    settled()
+    assert _pill(page, _MON) == neutral
+    polls = state["polls"]
+    state["up"] = False                                                      # the daemon goes down
     page.clock.run_for(9000)
     settled()
-    assert state["polls"] == polls
+    assert state["polls"] == polls                                           # no request ...
+    assert _pill(page, _MON) == neutral                                      # ... and never a stale "daemon READY"
     with page.expect_request(_is_badge_poll, timeout=15000):
-        toggle(True)                                                         # shown again: at once
+        toggle(True)                                                         # Live opened: at once
     settled()
     assert state["polls"] == polls + 1
-    page.wait_for_function(f"() => window.lhpcDaemonState('{RID}') !== null", timeout=15000)   # that answer is in
+    page.wait_for_function("l => document.querySelector(l + ' > summary .dbadge').textContent === 'daemon offline'",
+                           arg=live, timeout=15000)                          # its answer
     toggle(False)                                                            # its timer goes ...
+    assert _pill(page, live) == neutral
     with page.expect_request(_is_badge_poll, timeout=15000):
         toggle(True)                                                         # ... so a quick reopen asks at once
     settled()
     assert state["polls"] == polls + 2
-    page.wait_for_function(f"() => window.lhpcDaemonState('{RID}') !== null", timeout=15000)
+    answered()
     toggle(False)
     with page.expect_request(_is_badge_poll, timeout=15000):                 # a body inserted later with a shown
-        page.evaluate("rid => { const p = document.createElement('p');"   # host of the radio: one request at once
+        page.evaluate("rid => { const p = document.createElement('p');"   # pill of the radio: one request at once
                       " p.innerHTML = '<span class=\"badge dbadge\" data-rid=\"' + rid + '\">daemon READY</span>';"
                       " document.querySelector('.menupage').appendChild(p);"
                       " document.dispatchEvent(new CustomEvent('lhpc:bodyloaded', {detail: {root: p}})); }", RID)

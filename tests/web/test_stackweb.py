@@ -2131,8 +2131,10 @@ def test_a_refused_bulk_policy_is_one_banner_at_its_form_one_line_per_page(tmp_p
     assert page.status_code == 200
     doc = parse(page.get_data(as_text=True))
     assert doc.by_id("ws-stackwebs").has_attr("open")                # visible without JS
-    bulk = doc                                   # UI-REORG c9: the banner is in its slot, under the block (was inside)
-    [banner] = [b for b in doc.find("div", class_="panel-result") if doc.index(b) > doc.index(doc.by_id("ws-stackwebs"))]
+    bulk = doc                                   # UI-REORG c9: the banner is in its slot, under the block (was inside):
+    node = doc.by_id("ws-stackwebs")             # directly after the block's own .row-actions
+    [overlay] = [e for e in doc.find("div", class_="row-actions") if e.index == node.end + 1]
+    [banner] = [b for b in doc.find("div", class_="panel-result") if b.index == overlay.end + 1]
     assert "depnote-bad" in banner.classes
     assert "unmet requirement(s):" in bulk.within(banner).find("strong", class_="bnr-title")[0].text
     named = {li.text.strip().lstrip("- ").split(":")[0] for li in bulk.within(banner).find("li")}

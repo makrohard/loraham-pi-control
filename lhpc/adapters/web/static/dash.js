@@ -21,6 +21,15 @@
     }
   }
 
+  // A badge shows the answer `d` (UI-REORG s9: the server's ONE readiness -> label mapping), or, with no `d`, a neutral
+  // "–" and no state class: a block pill that is not shown (its block closed, s13) never keeps a stale state.
+  function paint(badge, d) {
+    var text = d ? d.label : "–";
+    if (badge.textContent !== text) badge.textContent = text;   // aria-live: announce changes only
+    badge.className = "badge" + (d ? " badge-" + (d.ready ? "running" : (d.reachable ? "degraded" : "stopped")) : "")
+      + (badge.classList.contains("dbadge") ? " dbadge" : "");
+  }
+
   // Resolves to whether the poll succeeded: an HTTP or network error, an unreadable body or a throw
   // while rendering is a failure, which the caller answers with the slow interval.
   // A card's element ids end in its radio's id. A card without a radio (a stray band) is not polled: the daemon
@@ -40,10 +49,7 @@
           if (b) badges.push(b);
         });
         badges.forEach(function (badge) {
-          var text = d.label;   // UI-REORG s9: the server's ONE readiness -> label mapping
-          if (badge.textContent !== text) badge.textContent = text;   // aria-live: announce changes only
-          badge.className = "badge badge-" + (d.ready ? "running" : (d.reachable ? "degraded" : "stopped"))
-            + (badge.classList.contains("dbadge") ? " dbadge" : "");
+          paint(badge, !badge.classList.contains("dbadge") || window.lhpcShown(badge) ? d : null);
         });
         if (!d.reachable) return;
         var rssi = (d.channel && d.channel.LIVERSSI) || "";
@@ -130,7 +136,16 @@
     };
     r.tick();
   }
-  function recheck() { Object.keys(radios).forEach(function (rid) { radios[rid].recheck(); }); }
+  function recheck() {
+    if (!document.hidden) {                     // a hidden tab shows nothing: its pills keep their text
+      Array.prototype.forEach.call(document.querySelectorAll(".dbadge[data-rid]"), function (b) {
+        var c = window.lhpcDaemonState(b.getAttribute("data-rid"));
+        if (!window.lhpcShown(b)) paint(b, null);
+        else if (c) paint(b, c.data);           // shown again: a fresh answer, else the request that goes out now
+      });
+    }
+    Object.keys(radios).forEach(function (rid) { radios[rid].recheck(); });
+  }
   cols.forEach(function (col) {
     var rid = col.getAttribute("data-radio-rid") || "";
     cards[rid] = true;
@@ -145,6 +160,7 @@
     });
   }
   listBadges(document);
+  recheck();                                    // the pills of closed blocks: neutral from the start
   // A Stacks body loaded on first expand (stacklazy.js) may hold the hardware list or a Monitor/Live block.
   document.addEventListener("lhpc:bodyloaded", function (e) {
     listBadges((e.detail && e.detail.root) || document);
