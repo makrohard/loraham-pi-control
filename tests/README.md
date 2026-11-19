@@ -217,7 +217,7 @@ in full, the line links to it. The mark after a rule says what enforces it:
   body) carries `@pytest.mark.wallclock("reason")`, a helper line outside a test `# wallclock: <reason>`;
   everything else takes the `fake_clock` fixture ([Markers](#markers)). **CI HARD**
 - **C2** No sleep as synchronisation: a wait ends on an event (a refused `flock`, a marker, a successful
-  connect).
+  connect). It applies to fakes and stand-ins too: kill is not reap, so wait for the child before checking its group.
 - **C3** A server is ready when `connect()` succeeds or it writes its own ready marker; a socket file is not
   readiness.
 - **C4** A test is never re-run because it failed, and no retry wraps an assertion.

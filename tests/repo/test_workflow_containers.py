@@ -132,11 +132,15 @@ def _docker(tmp_path: Path, mode: str) -> Path:
     never ends by itself. `rm -f NAME...` ends each container that exists, says "No such container" for the others
     (rc 1); tmp/rm-fails: it fails with that file's words; tmp/hang-rm: it hangs and ignores TERM (the worst case:
     a hung client that inherited an ignored TERM, which the runner's `timeout` leaves ignored; only its -k KILL ends
-    it, rc 137); tmp/slow-rm: it takes 1 s, then works. `ps -aq --filter name=RE` lists
-    the containers whose "/name" matches RE (tmp/ps-fails, tmp/hang-ps as for rm)."""
+    it, rc 137); tmp/slow-rm: it takes 1 s, then works. The client's polls (its container there, then gone) use
+    builtins only (`read -t` on tmp/tick, a fifo nobody writes), no `sleep` or `cat` child: its process group is the
+    client alone, so once a step's `wait` has reaped it, the group is empty (a child killed with it could still be
+    unreaped: kill is not reap).
+    `ps -aq --filter name=RE` lists the containers whose "/name" matches RE (tmp/ps-fails, tmp/hang-ps as for rm)."""
     t, b = tmp_path, tmp_path / "bin"
     b.mkdir()
     (t / "mode").write_text(mode)
+    os.mkfifo(t / "tick")
     (b / "docker").write_text(
         "#!/bin/bash\n"
         f'echo "$*" >> {t}/calls\n'
@@ -147,9 +151,9 @@ def _docker(tmp_path: Path, mode: str) -> Path:
         f'       if [ "$mode" = pending ]; then touch {t}/$name.pending; else box "$name"; fi\n'
         f'       echo started; [ -p {t}/ready ] && echo r > {t}/ready\n'
         '       [ "$mode" = deaf ] && exec tail -f /dev/null >/dev/null\n'
-        f'       until [ -s {t}/$name.pid ]; do sleep 0.05; done\n'                          # wallclock: the stand-in's poll
+        f'       until [ -s {t}/$name.pid ]; do read -t 0.05 <> {t}/tick; done\n'           # wallclock: the stand-in's poll
         '       [ "$2" = -d ] && exit 0\n'
-        f'       while kill -0 "$(cat {t}/$name.pid 2>/dev/null)" 2>/dev/null; do sleep 0.05; done\n'  # wallclock: poll
+        f'       while read -r p 2>/dev/null < {t}/$name.pid && kill -0 "$p" 2>/dev/null; do read -t 0.05 <> {t}/tick; done\n'  # wallclock: poll
         '       exit 137 ;;\n'
         f'  rm)  shift; [ "$1" = -f ] && shift; [ -f {t}/hang-rm ] && {{ trap \"\" TERM; exec tail -f /dev/null; }}\n'
         f'       [ -f {t}/slow-rm ] && sleep 1\n'                                          # wallclock: a slow removal
