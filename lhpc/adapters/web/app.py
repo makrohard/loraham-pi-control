@@ -1464,7 +1464,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         destination takes it and the stack runs on that radio; an RF log's writer and job come from the registry. An
         RF log without a page radio opens on the radio the stack runs on (W4: its first running instance's), a
         per-radio file else on the stack's first radio, else r1's (LEGACY-RFLOG: never a 0.13.x band file)."""
-        d = _submenus.own_page(mid)
+        d = _submenus.own_page(mid, service.stack(owner) if mid.startswith("log-") else None)
         if d is None:
             return None
         args = dict(d.args)
@@ -1506,6 +1506,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     app.jinja_env.globals["level_url"] = _level_url
     app.jinja_env.globals["log_preview_url"] = _log_preview_url
     app.jinja_env.globals["stack_logs"] = _submenus.stack_logs
+    app.jinja_env.globals["log_groups"] = _submenus.log_groups
+    app.jinja_env.globals["log_in_tree"] = _submenus.log_in_tree
     app.jinja_env.globals["daemon_views"] = _submenus.daemon_views
     app.jinja_env.globals["params_in_settings"] = _submenus.params_in_settings
     app.jinja_env.globals["with_radio"] = _submenus.with_radio

@@ -103,7 +103,7 @@ def test_a_late_reply_to_the_previous_source_is_dropped(page):
 def test_an_rf_log_panel_shows_the_last_30_records_raw(page):
     seen, settled = _serve(page, lambda route: _json(route, {"records": [{"raw": f"rec {i}", "decoded": "x"}
                                                                          for i in range(35)]}))
-    page.goto(page.lab_base + "/stacks/meshcom/menu/logs-meshcom", wait_until="load")
+    page.goto(page.lab_base + "/stacks/meshcom/menu/logs-meshcom--per-radio", wait_until="load")   # c7: its group
     page.click("#rflog-meshcom > summary")
     _status(page, "#rflog-meshcom", "updated")
     settled()
@@ -117,7 +117,7 @@ def test_an_empty_log_and_a_failed_fetch_say_so(page):
     answers = [lambda route: _json(route, {"lines": []}),
                lambda route: route.fulfill(status=200, content_type="application/json", body="not json")]
     _seen, _settled = _serve(page, lambda route: answers.pop(0)(route=route))
-    page.goto(page.lab_base + "/stacks/meshcom/menu/logs-meshcom", wait_until="load")
+    page.goto(page.lab_base + "/stacks/meshcom/menu/logs-meshcom--per-radio", wait_until="load")   # c7: its group
     page.click("#log-meshcom-bridge > summary")
     _status(page, "#log-meshcom-bridge", "no entries yet")
     page.click("#log-meshcom-bridge .logpanel-reload")

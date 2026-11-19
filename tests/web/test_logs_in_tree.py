@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from htmlq import parse
+from lhpc.adapters.web import submenus
 from lhpc.core import config as cfgmod
 from lhpc.core import radio_start
 from lhpc.core.paths import Paths
@@ -96,6 +97,9 @@ def _tree(c, radio=""):
     return dict(tree.entries)
 
 
+_GROUPS = ("Per radio", "Single")
+
+
 def _q(href):
     u = urlsplit(href)
     return u.path, {k: v[0] for k, v in parse_qs(u.query).items()}
@@ -108,11 +112,14 @@ def test_every_app_ends_with_its_logs_its_programs_then_its_rf_log(tmp_path, web
     tree = _tree(c)
     for sid, (programs, rf) in _INVENTORY.items():
         st = svc.stack(sid)
-        below = {p[-1]: href for p, href in tree.items() if p[:-1] == (st.name, "Logs")}
+        # UI-REORG c7: below Logs directly, or in its Per radio / Single group (the Per radio group ends with the RF log)
+        entries = [(p, href) for p, href in tree.items() if p[:2] == (st.name, "Logs") and len(p) > 2
+                   and p[-1] not in _GROUPS]
+        below = {p[-1]: href for p, href in entries}
         want = {st.component(cid).name: f"/logs/{cid}" for cid in programs}
         assert {k: _q(v)[0] for k, v in below.items() if k != "RF log"} == want, sid
-        if rf is not None:
-            assert list(below)[-1] == "RF log", sid    # programs, then the RF log
+        if rf is not None:                             # programs, then the RF log (of the flat list / Per radio)
+            assert [p[-1] for p, _h in entries if p[2] != "Single"][-1] == "RF log", sid
         if rf is None:
             assert "RF log" not in below, sid
         elif rf[0] == "own":
@@ -132,9 +139,12 @@ def test_the_apps_pages_logs_show_the_programs_then_the_rf_log(tmp_path, web):
     for sid, (programs, rf) in _INVENTORY.items():
         doc = parse(_html(c, f"/stacks/{sid}/body"))
         ids = [d["id"] for d in doc.within(doc.by_id(f"logs-{sid}")).find("details")][1:]   # in page order
-        n = len(programs)
-        assert sorted(ids[:n]) == sorted(f"log-{cid}" for cid in programs), (sid, ids)
-        assert ids[n:] == ([f"rflog-{sid}"] if rf else []), (sid, ids)                # the RF log last
+        single = ids[ids.index(f"logs-{sid}--single"):] if f"logs-{sid}--single" in ids else []   # c7: its group
+        ids = [i for i in ids if i not in single and not i.startswith(f"logs-{sid}--")]
+        single = [i for i in single if not i.startswith(f"logs-{sid}--")]
+        n = len(programs) - len(single)
+        assert sorted(ids[:n] + single) == sorted(f"log-{cid}" for cid in programs), (sid, ids)
+        assert ids[n:] == ([f"rflog-{sid}"] if rf else []), (sid, ids)                # the RF log last (Per radio)
 
 
 def test_the_controller_the_webserver_and_the_firewall_end_with_their_logs(tmp_path, web):
@@ -229,9 +239,10 @@ def test_with_r2_selected_the_tree_and_page_links_open_r2s_logs(tmp_path, web):
     c, svc = _client(web, tmp_path, radios=True)
     name = svc.stack("daemon").name
     tree = _tree(c, "r2")
-    assert _q(tree[(name, "Logs", svc.stack("daemon").component("loraham-daemon").name)]) == \
-        ("/logs/loraham-daemon", {"radio": "r2"})
-    assert _q(tree[(name, "Logs", "RF log")]) == ("/logs/loraham-daemon", {"job": "r2/rf-daemon.log", "radio": "r2"})
+    assert _q(tree[(name, "Logs", "Per radio", svc.stack("daemon").component("loraham-daemon").name)]) == \
+        ("/logs/loraham-daemon", {"radio": "r2"})                                      # c7: under Per radio
+    assert _q(tree[(name, "Logs", "Per radio", "RF log")]) == ("/logs/loraham-daemon",
+                                                              {"job": "r2/rf-daemon.log", "radio": "r2"})
     page = [_q(a["href"]) for a in parse(_html(c, "/stacks/daemon/body?radio=r2")).find("a", class_="pagelink")]
     assert ("/logs/loraham-daemon", {"job": "r2/rf-daemon.log", "radio": "r2"}) in page
     assert ("/logs/loraham-daemon", {"radio": "r2"}) in page
@@ -239,16 +250,16 @@ def test_with_r2_selected_the_tree_and_page_links_open_r2s_logs(tmp_path, web):
     assert r.status_code == 302 and _q(r.headers["Location"].removeprefix("http://localhost")) == \
         ("/logs/loraham-daemon", {"job": "r2/rf-daemon.log", "radio": "r2"})
     # a radio the box does not have is not carried: the per-radio RF log opens on the stack's first radio
-    assert _q(_tree(c, "r9")[(name, "Logs", "RF log")]) == ("/logs/loraham-daemon", {"job": "r1/rf-daemon.log",
-                                                                                     "radio": "r1"})
+    assert _q(_tree(c, "r9")[(name, "Logs", "Per radio", "RF log")]) == ("/logs/loraham-daemon",
+                                                                          {"job": "r1/rf-daemon.log", "radio": "r1"})
 
 
 # ---- the log pages: breadcrumbs from the tree, one heading (tests 2, 3, 6; v4 B1, B4; G1-R2 N7) -------------------
 
 _PAGES = [
-    ("/logs/meshcom-bridge", ["meshcom", "Logs", "@meshcom-bridge"]),
-    ("/logs/meshcom-bridge?job=rf-meshcom.log", ["meshcom", "Logs", "RF log"]),
-    ("/logs/loraham-kiss-tnc?job=rf-kiss.log", ["kiss", "Logs", "RF log"]),
+    ("/logs/meshcom-bridge", ["meshcom", "Logs", "Per radio", "@meshcom-bridge"]),          # c7: its group
+    ("/logs/meshcom-bridge?job=rf-meshcom.log", ["meshcom", "Logs", "Per radio", "RF log"]),
+    ("/logs/loraham-kiss-tnc?job=rf-kiss.log", ["kiss", "Logs", "Per radio", "RF log"]),
     ("/controller/logs", [_CTL, "Logs"]),
     ("/webserver/logs?src=access", [_CTL, "Webserver and mTLS proxy", "Logs"]),
     ("/firewall/logs", [_CTL, "Firewall", "Log"]),
@@ -281,8 +292,8 @@ def test_a_log_pages_crumbs_follow_the_entrys_label(tmp_path, web, monkeypatch):
                                                                "log-meshcom-bridge" else lp for lp in real(stack)])
     c, svc = _client(web, tmp_path)
     doc = parse(_html(c, "/logs/meshcom-bridge"))
-    assert doc.find("nav", class_="crumbs")[0].text.endswith(f"{svc.stack('meshcom').name} › Logs › Bridge log")
-    assert (svc.stack("meshcom").name, "Logs", "Bridge log") in _tree(c)
+    assert doc.find("nav", class_="crumbs")[0].text.endswith(f"{svc.stack('meshcom').name} › Logs › Per radio › Bridge log")
+    assert (svc.stack("meshcom").name, "Logs", "Per radio", "Bridge log") in _tree(c)
 
 
 def test_the_firewall_log_has_no_back_link(tmp_path, web):
@@ -292,7 +303,9 @@ def test_the_firewall_log_has_no_back_link(tmp_path, web):
 
 # ---- the Apps page's "logs" links go; Home keeps its (plan §2b, v4 B1) ----------------------------------------------
 
-def test_the_apps_page_has_no_logs_link_but_the_dependencies_rows_and_no_rf_pill(tmp_path, web):
+def test_the_apps_page_has_no_logs_link_but_the_dependencies_rows_whose_log_is_not_in_logs(tmp_path, web):
+    # UI-REORG c7 (his yes + the handler's fold): a Dependencies row's "logs" link goes where the log is under the
+    # stack's Logs, and stays where it is not (radiolib, …: B1)
     c, svc = _client(web, tmp_path)
     pages = ["/stacks", "/stacks/controller/menu/controller-row", "/stacks/meshcore/menu/stack-install-meshcore"]
     pages += [f"/stacks/{s.id}/body" for s in svc.stacks()]
@@ -302,6 +315,9 @@ def test_the_apps_page_has_no_logs_link_but_the_dependencies_rows_and_no_rf_pill
         deps = [d for d in doc.find("details") if d["id"] and d["id"].endswith("--dependencies")]
         kept = {id(a) for d in deps for a in doc.within(d).find("a", class_="logslink")}
         assert [a["href"] for a in doc.find("a", class_="logslink") if id(a) not in kept] == [], url
+        in_logs = {f"/logs/{lp['id'][4:]}" for s in svc.stacks() for lp in submenus.stack_logs(s) if lp["kind"] == "program"}
+        assert not [a["href"] for d in deps for a in doc.within(d).find("a", class_="logslink")
+                    if a["href"] in in_logs], url                                   # moved: no second link
         assert not [a for a in doc.find("a", class_="pill") if a.text.strip() == "RF log"], url
     doc = parse(_html(c, "/stacks/daemon/body"))
     dep = doc.by_id("stack-install-daemon--dependencies")
@@ -313,3 +329,38 @@ def test_home_keeps_its_log_links(tmp_path, web):
     c, _svc = _client(web, tmp_path, radios=True)
     # (an instance row's config/logs links are pinned in test_home_instance_card_links)
     assert [a["href"] for a in parse(_html(c, "/")).find("a", class_="logslink")] == ["/webserver/logs"]
+
+
+# ---- UI-REORG c7 (plan v7 s6): Logs grouped by radio --------------------------------------------------------------
+
+@pytest.mark.parametrize("sid, per, single, switch", [
+    ("kiss", ["log-loraham-kiss-tnc", "rflog-kiss"], ["log-loraham-kiss-serial"], True),   # mixed
+    ("reticulum", [], None, False),                     # single-only (its RF log is one file, no radio): flat
+    ("graywolf", ["log-graywolf", "rflog-graywolf"], None, True),                          # + the RF-log note (KISS's)
+])
+def test_a_stacks_logs_are_grouped_per_radio_and_single(tmp_path, web, sid, per, single, switch):
+    c, svc = _client(web, tmp_path, radios=True)
+    doc = parse(_html(c, f"/stacks/{sid}/body?radio=r1"))
+    logs = doc.within(doc.by_id(f"logs-{sid}"))
+    assert bool(logs.find("nav", class_="rswitch")) == switch, sid
+    group = doc.by_id(f"logs-{sid}--per-radio")
+    if not per:
+        assert group is None and doc.by_id(f"logs-{sid}--single") is None, sid          # no switch, no groups
+        assert [d["id"] for d in logs.find("details")][1:] == [lp["id"] for lp in submenus.stack_logs(svc.stack(sid))]
+        return
+    assert [d["id"] for d in doc.within(group).find("details")][1:] == per, sid
+    one = doc.by_id(f"logs-{sid}--single")
+    assert ([d["id"] for d in doc.within(one).find("details")][1:] if one is not None else None) == single, sid
+    if sid == "graywolf":                                                                # kind=note kept
+        assert "RF traffic is written by the" in doc.within(doc.by_id("rflog-graywolf")).text
+
+
+def test_single_logs_link_without_the_radio_and_per_radio_logs_with_it(tmp_path, web):
+    c, _svc = _client(web, tmp_path, radios=True)
+    tree = _tree(c, "r2")
+    single = [h for p, h in tree.items() if p[:3] == ("LoRaHAM KISS TNC", "Logs", "Single") and len(p) == 4]
+    per = [h for p, h in tree.items() if p[:3] == ("LoRaHAM KISS TNC", "Logs", "Per radio") and len(p) == 4]
+    assert single and all("radio" not in _q(h)[1] for h in single), single
+    assert per and all(_q(h)[1].get("radio") == "r2" for h in per), per
+    for gid in ("logs-kiss--per-radio", "logs-kiss--single"):                           # the new levels' pages
+        assert c.get(f"/stacks/kiss/menu/{gid}").status_code == 200

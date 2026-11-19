@@ -82,15 +82,38 @@ def rf_entry(sid: str):
     return next((e for e in _rflog.REGISTRY if e.owner == sid), None)
 
 
-def own_page(mid: str) -> Dest | None:
-    """The route a level opens as its page, or None (its page is /stacks/<owner>/menu/<id>)."""
+def own_page(mid: str, stack=None) -> Dest | None:
+    """The route a level opens as its page, or None (its page is /stacks/<owner>/menu/<id>). UI-REORG s6: a program's
+    log takes the page radio only when it is a per-radio log of `stack` (log_group); a single log links without it."""
     if mid in OWN_PAGES:
         return OWN_PAGES[mid]
     if mid.startswith(_PROGRAM_LOG):
-        return Dest("logs_view", (("target", mid[len(_PROGRAM_LOG):]),), radio=True)
+        cid = mid[len(_PROGRAM_LOG):]
+        comp = next((c for c in stack.components if c.id == cid), None) if stack is not None else None
+        return Dest("logs_view", (("target", cid),), radio=comp is None or log_group(comp) == "per-radio")
     if mid.startswith(_RF_LOG) and rf_entry(mid[len(_RF_LOG):]) is not None:
         return Dest("logs_view", radio=True, rf=mid[len(_RF_LOG):])
     return None
+
+
+_DAEMON_COMPONENT = "loraham-daemon"           # ControllerService.DAEMON_ID: the radio daemon writes one log per radio
+
+
+def log_group(comp) -> str:
+    """UI-REORG s6: "per-radio" for a program that runs once per radio (a process with an `instance_arg`, the daemon),
+    else "single"; an RF log entry by its registry entry (_rf_group)."""
+    per = comp.id == _DAEMON_COMPONENT or bool(comp.process and comp.process.instance_arg)
+    return "per-radio" if per else "single"
+
+
+def log_in_tree(comp) -> bool:
+    """Whether a component's log is an entry of its stack's Logs (stack_logs: a program that writes a log)."""
+    return bool(link_kinds(comp)["writes_log"])
+
+
+def _rf_group(e) -> str:
+    """An RF log's group: "per-radio" when it is one file per radio (per_radio, or an instance's: instanced)."""
+    return "per-radio" if e.per_radio or e.instanced else "single"
 
 
 def stack_logs(stack) -> list[dict]:
@@ -99,15 +122,26 @@ def stack_logs(stack) -> list[dict]:
     links; labelled with its manifest name), then the "rf" entry of the RF log of the registry entry the stack owns,
     or a "note" when another stack writes the RF log of this one's surface (Graywolf's: the KISS TNC writes it)."""
     sid = stack.id
-    out = [{"id": _PROGRAM_LOG + c.id, "owner": sid, "label": c.name, "kind": "program"}
-           for c in stack.components if link_kinds(c)["writes_log"]]
+    out = [{"id": _PROGRAM_LOG + c.id, "owner": sid, "label": c.name, "kind": "program", "group": log_group(c)}
+           for c in stack.components if log_in_tree(c)]
     own = rf_entry(sid)
     other = next((e for e in _rflog.REGISTRY if e.surface == sid and e.owner != sid), None)
     if own is not None:
-        out.append({"id": _RF_LOG + sid, "owner": sid, "label": "RF log", "kind": "rf"})
+        out.append({"id": _RF_LOG + sid, "owner": sid, "label": "RF log", "kind": "rf", "group": _rf_group(own)})
     elif other is not None:
-        out.append({"id": _RF_LOG + sid, "owner": sid, "label": "RF log", "kind": "note", "rf_owner": other.owner})
+        out.append({"id": _RF_LOG + sid, "owner": sid, "label": "RF log", "kind": "note", "rf_owner": other.owner,
+                    "group": _rf_group(other)})
     return out
+
+
+def log_groups(entries) -> list[tuple]:
+    """UI-REORG s6: [(group level suffix, label, entries)] of a stack's Logs when it has a per-radio log (Per radio,
+    then Single, each only with entries), else [] (a single-only stack: no switch, no groups)."""
+    if not any(e["group"] == "per-radio" for e in entries):
+        return []
+    out = [("per-radio", "Per radio", [e for e in entries if e["group"] == "per-radio"]),
+           ("single", "Single", [e for e in entries if e["group"] == "single"])]
+    return [g for g in out if g[2]]
 
 
 @dataclass(frozen=True)
@@ -253,8 +287,14 @@ def stack_menus(g: dict) -> list[Submenu]:
     # LOGS-IN-TREE: every row ends with its Logs: a program's log and the RF log open their log page (own_page)
     logs = f"logs-{sid}"
     add(logs, top, "Logs", "_stack_logs.html")
-    for lp in stack_logs(g["stack"]):
-        add(lp["id"], logs, lp["label"], "_rflog_note.html" if lp["kind"] == "note" else "_log_panel.html", lp=lp)
+    entries = stack_logs(g["stack"])
+    groups = log_groups(entries) or [("", "", entries)]
+    for suffix, label, items in groups:
+        parent = f"{logs}--{suffix}" if suffix else logs
+        if suffix:
+            add(parent, logs, label, "_stack_log_group.html", grp=(suffix, label, items))
+        for lp in items:
+            add(lp["id"], parent, lp["label"], "_rflog_note.html" if lp["kind"] == "note" else "_log_panel.html", lp=lp)
     return out
 
 

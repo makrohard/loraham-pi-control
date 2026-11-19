@@ -1,0 +1,14 @@
+{#- UI-REORG s6: one group of a stack's Logs (submenus.log_groups): "Per radio" (the selected radio's program logs and
+    RF log) or "Single" (logs without a radio). `grp` = (suffix, label, entries); requires `g`. -#}
+{% from "_menu.html" import page_actions -%}
+<details class="advcfg" id="logs-{{ g.stack.id }}--{{ grp[0] }}">
+  <summary>{{ grp[1] }}</summary>
+  <div class="body">
+    {% for lp in grp[2] %}
+      <div class="stackrow-wrap">
+      {% if lp.kind == "note" %}{% include "_rflog_note.html" %}{% else %}{% include "_log_panel.html" %}{% endif %}
+      {{ page_actions(g.stack.id, lp.id) }}
+      </div>
+    {% endfor %}
+  </div>
+</details>

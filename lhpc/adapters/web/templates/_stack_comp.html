@@ -14,9 +14,10 @@
                     {{ freshness_pill(g.update_states[comp.id]) }}{% endif %}</summary>
                 <div class="body">
                   <div class="actbar">
-                    {# logs link lives in the body (not the summary) so no interactive element is nested
-                       inside the summary toggle (a11y). #}
-                    <a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}" aria-label="{{ comp.id }} logs">logs</a>
+                    {# UI-REORG s6: the "logs" link goes where the component's log is under the stack's Logs (his yes); it
+                       stays where it is not (a build dependency: radiolib, …), no removal without his yes. In the
+                       body, not the summary: no interactive element inside the summary toggle (a11y). #}
+                    {% if not log_in_tree(comp) %}<a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}" aria-label="{{ comp.id }} logs">logs</a>{% endif %}
                     {% if comp.kind.value == 'service' %}
                       {{ instance_btn('start', comp.id, 'Start', g.run_on, "", page_radio) }}{{ instance_btn('stop', comp.id, 'Stop', g.run_on, "", page_radio) }}
                       {# The operator's hard stop of this component only (A §2.12): a confirm page

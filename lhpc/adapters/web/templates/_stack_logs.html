@@ -1,17 +1,37 @@
 {#- LOGS-IN-TREE: a stack's Logs, the last entry of its row: a panel per program that writes a log, then its RF log
-    (submenus.stack_logs, the descriptors' one list). -#}
+    (submenus.stack_logs, the descriptors' one list). UI-REORG s6: a stack with a per-radio log groups them (Per radio,
+    Single: submenus.log_groups) under the radio switch; a single-only stack keeps one flat list, no switch. -#}
 {% from "_menu.html" import page_actions -%}
+{% from "_radio_switch.html" import radio_switch -%}
 {% set _logs = stack_logs(g.stack) %}
+{% set _groups = log_groups(_logs) %}
 <details class="advcfg" id="logs-{{ g.stack.id }}">
   <summary>Logs</summary>
   <div class="body">
-    {% for lp in _logs %}
-      <div class="stackrow-wrap">
-      {% if lp.kind == "note" %}{% include "_rflog_note.html" %}{% else %}{% include "_log_panel.html" %}{% endif %}
-      {{ page_actions(g.stack.id, lp.id) }}
-      </div>
+    {% if _groups %}
+      {% set _ch = [] %}
+      {% for c in g.view.radio_choices or () %}{% set _ = _ch.append({'label': c.label, 'selected': c.sel, 'disabled': c.disabled, 'title': c.title,
+           'href': url_for('menu_page', owner=menu_owner, mid=menu_id, radio=c.radio) if menu_id else url_for('stacks_overview', radio=c.radio, open=g.stack.id) ~ '#logs-' ~ g.stack.id}) %}{% endfor %}
+      {% if not _ch and g.view.live_radios and g.view.live_radios | length > 1 %}{# the daemon: its radios #}
+        {% for rid, _name, band in g.view.live_radios %}{% set _ = _ch.append({'label': rid ~ ' · ' ~ band, 'selected': g.view.radios and rid == g.view.radios[0].rid,
+             'href': url_for('menu_page', owner=menu_owner, mid=menu_id, radio=rid) if menu_id else url_for('stacks_overview', radio=rid, open=g.stack.id) ~ '#logs-' ~ g.stack.id}) %}{% endfor %}
+      {% endif %}
+      {% if _ch %}{{ radio_switch(_ch) }}{% endif %}
+      {% for grp in _groups %}
+        <div class="stackrow-wrap">
+        {% include "_stack_log_group.html" %}
+        {{ page_actions(g.stack.id, 'logs-' ~ g.stack.id ~ '--' ~ grp[0]) }}
+        </div>
+      {% endfor %}
     {% else %}
-      <p class="muted">No program of {{ g.stack.name }} writes a log.</p>
-    {% endfor %}
+      {% for lp in _logs %}
+        <div class="stackrow-wrap">
+        {% if lp.kind == "note" %}{% include "_rflog_note.html" %}{% else %}{% include "_log_panel.html" %}{% endif %}
+        {{ page_actions(g.stack.id, lp.id) }}
+        </div>
+      {% else %}
+        <p class="muted">No program of {{ g.stack.name }} writes a log.</p>
+      {% endfor %}
+    {% endif %}
   </div>
 </details>

@@ -80,7 +80,7 @@ def _open_log(page, path, pattern):
     return seen
 
 
-def test_a_process_log_asks_for_new_lines_every3_s(page):
+def test_a_process_log_asks_for_new_lines_every_3_s(page):
     seen = _open_log(page, "/logs/loraham-kiss-tnc", "**/api/logs/**")
     page.clock.run_for(2900)
     _settle(page)
@@ -90,7 +90,7 @@ def test_a_process_log_asks_for_new_lines_every3_s(page):
     assert seen["n"] == 2
 
 
-def test_an_rf_log_asks_for_new_records_every3_s(page, seeded_rf_logs):
+def test_an_rf_log_asks_for_new_records_every_3_s(page, seeded_rf_logs):
     seen = _open_log(page, "/logs/loraham-kiss-tnc?job=rf-kiss.log", "**/api/rflog/**")
     page.clock.run_for(2900)
     _settle(page)
