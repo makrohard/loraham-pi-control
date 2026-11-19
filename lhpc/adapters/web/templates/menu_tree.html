@@ -8,6 +8,7 @@
       <li>{% if kids.get(m.id) %}<details><summary>{{ m.label }}</summary>
         <p class="tree-self"><a href="{{ level_url(owner, m.id, request.args.get('radio')) }}">{{ m.label }} page ›</a></p>
         {{ branch(owner, kids, m.id) }}</details>
+      {%- elif m.page_less %}{{ m.label }}{# F7: shown inline only, no page #}
       {%- else %}<a href="{{ level_url(owner, m.id, request.args.get('radio')) }}">{{ m.label }}</a>{% endif %}</li>
     {% endfor %}
   </ul>

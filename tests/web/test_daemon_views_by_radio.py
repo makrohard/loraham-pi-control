@@ -82,7 +82,7 @@ def test_the_daemon_panel_and_the_dashboard_address_each_radio(client):
     c, _fake = client
     body = c.get("/stacks?cfg=daemon&radio=r2").get_data(as_text=True)            # W2: ?radio=, no dp=&rid=
     # DAEMON-MONITOR-TREE: the r2 Monitor's views are panels of r2 (was its button row's output window liveout-r2)
-    assert 'id="stack-settings-daemon--r2-status"' in body and 'data-rid="r2" data-kind="status"' in body
+    assert 'id="stack-settings-daemon--monitor-status"' in body and 'data-rid="r2" data-kind="status"' in body   # F7
     assert 'data-rid="r2"' in body and 'action="/radio/r2/set"' in body
     assert "stack-settings-daemon--433-" not in body and 'data-rid="433"' not in body    # no band-keyed view
     dash = c.get("/").get_data(as_text=True)

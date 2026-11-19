@@ -54,7 +54,7 @@
     {% for radio in view.radios %}
       <div class="stackrow-wrap">
       {% include "_settings_radio_monitor.html" %}
-      {{ page_actions(stack.id, 'stack-settings-' ~ stack.id ~ '--' ~ radio.rid ~ '-monitor') }}
+      {{ page_actions(stack.id, 'stack-settings-' ~ stack.id ~ '--monitor') }}
       </div>
       <div class="stackrow-wrap">
       {% include "_settings_radio_live.html" %}

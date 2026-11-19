@@ -49,21 +49,26 @@ def daemon_label(ready, reachable, radio_state) -> str:
     return f"daemon ({radio_state or 'NOT READY'})" if reachable else "daemon offline"
 
 
-# DAEMON-MONITOR-TREE: a radio's live daemon views, each a level under its "Monitor · rN" (his words), in page order
-DAEMON_VIEWS = (("status", "Get STATUS"), ("stats", "Get STATS"), ("socket", "View Socket"), ("rxtx", "RX/TX View"))
+# DAEMON-MONITOR-TREE + F7: a daemon's live views, the tree nodes under its ONE "Monitor" (Q2 A: their display
+# names), in page order; they show inline in the tree and have no page of their own (Q3: only Monitor has one)
+DAEMON_VIEWS = (("status", "STATUS"), ("stats", "STATS"), ("socket", "SOCKET"), ("rxtx", "RX/TX View"))
+
+
+def monitor_id(sid: str) -> str:
+    """F7: the id of the daemon stack `sid`'s one Monitor level (radio-less: it shows the Settings radio)."""
+    return f"stack-settings-{sid}--monitor"
 
 
 def daemon_views(sid: str, rid: str) -> list[dict]:
     """The views of the daemon stack `sid` on radio `rid`: {id, rid, kind, label}, the descriptors' and the
-    Monitor template's one list."""
-    return [{"id": f"stack-settings-{sid}--{rid}-{kind}", "rid": rid, "kind": kind, "label": f"{name} · {rid}"}
+    Monitor template's one list (the label "STATUS · r1" is the view's heading)."""
+    return [{"id": f"{monitor_id(sid)}-{kind}", "rid": rid, "kind": kind, "label": f"{name} · {rid}"}
             for kind, name in DAEMON_VIEWS]
 
 
-# UI-REORG s3/s4: a per-radio level id of a daemon's Settings: `stack-settings-<sid>--<rid>-<kind>`, kind = monitor,
-# live or one of DAEMON_VIEWS; the page radio comes from the id, and the radio switch links the same kind's id
-_PER_RID = re.compile(r"^(stack-settings-[a-z0-9-]+?--)(r[0-9]+)-(monitor|live|"
-                      + "|".join(k for k, _n in DAEMON_VIEWS) + r")$")
+# UI-REORG s3/s4: a per-radio level id of a daemon's Settings: `stack-settings-<sid>--<rid>-live` (F7: the Monitor
+# and its views are radio-less now); the page radio comes from the id, and the radio switch links the same kind's id
+_PER_RID = re.compile(r"^(stack-settings-[a-z0-9-]+?--)(r[0-9]+)-(live)$")
 
 
 def id_radio(mid: str) -> str:
@@ -177,6 +182,7 @@ class Submenu:
     label: str
     template: str
     vars: dict = field(default_factory=dict, compare=False, hash=False)
+    page_less: bool = False         # F7 (G1 B1): a tree node shown inline only: no page, no "page ›", no tree link
 
     @property
     def page(self) -> Dest | None:
@@ -295,12 +301,16 @@ def stack_menus(g: dict) -> list[Submenu]:
     # UI-REORG s3: the per-radio levels of EVERY radio (always present, daemon up or not); the Settings switch shows
     # the selected radio's. Only that one carries the read state; the others are rid-only (no daemon read).
     sel = (view.get("radios") or [None])[0]
-    for rid, _name, band in (view.get("live_radios") or ()) if view.get("live_band") else ():
+    lives = (view.get("live_radios") or ()) if view.get("live_band") else ()
+    if lives:                       # F7: ONE Monitor, on the radio the Settings switch picks; its four views page-less
+        first = {"rid": lives[0][0], "band": lives[0][2]}
+        radio = sel if sel and any(sel["rid"] == rid for rid, _n, _b in lives) else first
+        add(monitor_id(sid), settings, "Monitor", "_settings_radio_monitor.html", radio=radio, **sv)
+        for dv, (_kind, name) in zip(daemon_views(sid, radio["rid"]), DAEMON_VIEWS, strict=True):
+            out.append(Submenu(dv["id"], monitor_id(sid), name, "_daemon_view.html", dict(g=g, dv=dv, radio=radio, **sv),
+                               page_less=True))
+    for rid, _name, band in lives:
         radio = sel if sel and sel["rid"] == rid else {"rid": rid, "band": band}
-        add(f"{settings}--{rid}-monitor", settings, f"Monitor · {rid}", "_settings_radio_monitor.html",
-            radio=radio, **sv)
-        for dv in daemon_views(sid, rid):
-            add(dv["id"], f"{settings}--{rid}-monitor", dv["label"], "_daemon_view.html", dv=dv, radio=radio, **sv)
         add(f"{settings}--{rid}-live", settings, f"Live radio settings · {rid}", "_settings_radio_live.html",
             radio=radio, **sv)
     if g["daemon_params"]:

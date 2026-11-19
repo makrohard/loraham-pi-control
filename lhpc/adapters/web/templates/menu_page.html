@@ -14,7 +14,7 @@
     {% set _ch = [] %}
     {% for rid, _name, band in here.vars.view.live_radios %}{% set _ = _ch.append({'label': rid ~ ' · ' ~ band, 'selected': rid == page_rid,
          'href': url_for('menu_page', owner=here.vars.stack.id, mid=with_radio(here.id, rid), radio=rid)}) %}{% endfor %}
-    <div class="pagehead">{% if _ch | length > 1 %}{{ radio_switch(_ch) }}{% endif %}
+    <div class="pagehead">{% if _ch | length > 1 and not monitor_view %}{{ radio_switch(_ch) }}{% endif %}{# F7: the Monitor has its pins #}
       <span class="pagepill">{{ daemon_badge(here.vars.radio, live=True, rid=page_rid) }}</span></div>
   {% endif %}
   <div class="card"><div class="body stacklist menupage"{% if page_rid %} data-fullpage="1"{% endif %}>

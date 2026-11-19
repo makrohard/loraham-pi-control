@@ -1,7 +1,8 @@
 """DAEMON-MONITOR-TREE (0.14.0, 11-18) + UI-REORG c4 (plan v7 s3/s4), in a real browser: a radio's
 four live daemon views under its Monitor are always open and ask only while SHOWN (every <details> around them open):
 in the tree (the Settings page) Get STATUS / Get STATS one read per show and per Reload; View Socket a poll each
-second, RX/TX View one every 3 s, both stopped by hiding; on a Monitor's own page (c5) every view repeats every 3 s; a view's own page asks from load; a reply to a run that was hidden meanwhile is dropped; one request
+second, RX/TX View one every 3 s, both stopped by hiding; the Monitor's page (F7) shows ONE view, which asks from load
+and repeats every 3 s (F6: no Reload, no "every N s" line); a reply to a run that was hidden meanwhile is dropped; one request
 out per view, and a show while one is out asks once more when it settles. Daemon down: paused ("Daemon not running",
 Reload off) until the badge's poll (dash.js, the same /api/daemon/<rid>) sees it up; Live greys and re-enables the
 same way; a block inserted later takes the cached state at once. The daemon APIs are answered by the test (counted at
@@ -13,14 +14,14 @@ import re
 
 RID = "r3"                                           # flask_page's USB radio (its daemon answers: unix_replies)
 _READY = {"/tmp/loraconf-r3.sock": b"STATUS RADIO=READY ID=r3 BOUND=- TXMODE=MANAGED\n"}
-MONITOR = f"/stacks/daemon/menu/stack-settings-daemon--{RID}-monitor?radio={RID}"        # a full page (c5): 3 s
+MONITOR = f"/stacks/daemon/menu/stack-settings-daemon--monitor?radio={RID}"   # F7: the one Monitor page (STATUS): 3 s
 TREE = f"/stacks/daemon/menu/stack-settings-daemon?radio={RID}"           # the tree's modes (its Monitor opened here)
 LIVE = f"/stacks/daemon/menu/stack-settings-daemon--{RID}-live?radio={RID}"
 _REPLY = {"": {"reachable": True, "status": {"RADIO": "READY"}, "stats": {"RX": "7"}},
           "/socket": {"reachable": True, "line": "STATUS RADIO=READY"},
           "/feed": {"feed": ["RX one", "TX two"]}}
 API = re.compile(r".*/api/daemon/" + RID + r"(/socket|/feed)?$")
-_MON = f"#stack-settings-daemon--{RID}-monitor"
+_MON = "#stack-settings-daemon--monitor"
 _KINDS = ("status", "stats", "socket", "rxtx")
 
 
@@ -66,7 +67,8 @@ def _serve(page, state=None):
 
 
 def _sel(kind):
-    return f"#stack-settings-daemon--{RID}-{kind}"
+    """A view of the one Monitor (F7: radio-less), or the radio's Live block (still per radio)."""
+    return f"#stack-settings-daemon--{RID}-live" if kind == "live" else f"#stack-settings-daemon--monitor-{kind}"
 
 
 def _ticks(page, kind, n, settled):
@@ -201,11 +203,12 @@ def test_the_rxtx_view_polls_every_3_s_only_while_shown(flask_page):
     assert seen.count("/feed") == 2
 
 
-def test_a_views_own_page_asks_from_load(flask_page):
-    page, _posts = flask_page(path=f"/stacks/daemon/menu/stack-settings-daemon--{RID}-status?radio={RID}",
-                              unix_replies=_READY, api={f"/api/daemon/{RID}": _REPLY[""]})
+def test_the_monitor_pages_view_asks_from_load(flask_page):
+    page, _posts = flask_page(path=MONITOR + "&view=status", unix_replies=_READY,
+                              api={f"/api/daemon/{RID}": _REPLY[""]})
     _wait_text(page, "status", "RADIO=READY")
-    assert page.locator(_sel("status") + " .dbadge").count() == 1           # c4: its own page carries the badge
+    assert page.locator(".daemonview").count() == 1                         # F7: one view
+    assert page.locator(_sel("status") + " .dbadge").count() == 1           # c4: the shown view carries the badge
 
 
 def test_a_reply_to_a_hidden_run_is_dropped(flask_page):
@@ -346,25 +349,33 @@ def test_a_stopped_monitor_inserted_later_pauses_at_once(flask_page):
     _running(page, True)
 
 
-def test_a_monitor_page_repeats_every_view_every_3_s_status_and_stats_included(flask_page):
-    # UI-REORG c5 (s4): the Monitor's own page works like a log page: every view repeats every 3 s
-    page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
-    seen, settled, _held = _serve(page)
-    _running(page, True)
+def test_the_monitor_pages_one_view_repeats_every_3_s_status_and_stats_included(flask_page):
+    # UI-REORG c5 (s4) + F7/F6: the Monitor's page works like a log page: its ONE view (each kind in turn) repeats
+    # every 3 s; no Reload and no "every N s" line (STATUS / STATS: "updated hh:mm:ss" only, a25 v4 N1)
+    path = {"status": "", "stats": "", "socket": "/socket", "rxtx": "/feed"}
     for kind in _KINDS:
+        page, _posts = flask_page(path=MONITOR + "&view=" + kind, unix_replies=_READY)
+        seen, settled, _held = _serve(page)
+        _running(page, True)
         page.wait_for_function("s => !document.querySelector(s).dvBusy", arg=_sel(kind), timeout=15000)
-    settled()
-    seen.clear()
-    for _ in range(2):
-        page.clock.run_for(3000)
         settled()
-        page.wait_for_function("() => [...document.querySelectorAll('.daemonview')].every(v => !v.dvBusy)", timeout=15000)
-    assert sorted(seen) == sorted(["", "", "/socket", "/feed"] * 2), seen   # 3 s each, STATUS/STATS included
-    assert page.locator(".pagehead .pagepill .dbadge").count() == 1        # the pill upper right
+        seen.clear()
+        for _ in range(2):
+            page.clock.run_for(3000)
+            settled()
+            page.wait_for_function("s => !document.querySelector(s).dvBusy", arg=_sel(kind), timeout=15000)
+        assert seen == [path[kind]] * 2, (kind, seen)                       # 3 s, STATUS/STATS included
+        assert page.locator(".daemonview").count() == 1 and page.locator(".daemonview-reload").count() == 0
+        status = page.text_content(_sel(kind) + " .daemonview-status")
+        assert (re.fullmatch(r"updated \d\d:\d\d:\d\d", status) if kind in ("status", "stats")
+                else status == ""), (kind, status)
+        assert page.locator(".pagehead .pagepill .dbadge").count() == 1    # the pill upper right
+        page.context.close()
 
 
-def test_a_status_page_without_the_hardware_list_follows_the_daemon_stopped_started_stopped(flask_page):
-    page, _posts = flask_page(path=f"/stacks/daemon/menu/stack-settings-daemon--{RID}-status?radio={RID}")
+def test_the_monitor_page_without_the_hardware_list_follows_the_daemon_stopped_started_stopped(flask_page):
+    # F7 (G1 N1): the Monitor page's shown view pauses / resumes with the daemon and flips its own down line
+    page, _posts = flask_page(path=MONITOR + "&view=status")
     state = {"up": False}
     seen, settled, _held = _serve(page, state=state)
     _paused(page)
@@ -375,7 +386,7 @@ def test_a_status_page_without_the_hardware_list_follows_the_daemon_stopped_star
     page.clock.run_for(3000)
     _running(page, True)
     _wait_text(page, "status", "RADIO=READY")
-    assert not page.locator(_sel("status") + " .daemonview-reload").is_disabled()
+    assert not page.locator(_sel("status") + " .dstate-down").is_visible()  # its down line: gone
     settled()
     n = seen.count("")
     page.clock.run_for(3000)
@@ -384,6 +395,7 @@ def test_a_status_page_without_the_hardware_list_follows_the_daemon_stopped_star
     state["up"] = False
     page.clock.run_for(3000)
     _paused(page)
+    assert page.locator(_sel("status") + " .dstate-down").is_visible()      # ... and back
 
 
 # --- UI-REORG c11 (plan v7 s13, L85): the in-tree poll rule — a poller asks only while its element and every

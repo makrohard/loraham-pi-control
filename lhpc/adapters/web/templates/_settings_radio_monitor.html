@@ -1,19 +1,34 @@
-{#- DAEMON-MONITOR-TREE: a radio's Monitor, a submenu like Logs: its live daemon views (submenus.daemon_views: Get
-    STATUS, Get STATS, View Socket, RX/TX View), each always open with its Reload and "page ›". UI-REORG s3/s4: always
-    present; daemon not running: views paused, Reload off, "Daemon not running" (daemoncfg.js resumes them when the
-    badge's poll, dash.js, sees the daemon up). -#}
-{% from "_menu.html" import page_actions -%}
+{#- DAEMON-MONITOR-TREE + F7: the daemon's ONE Monitor (Q1 B / Q3), on the radio the Settings switch picks (`radio`).
+    In the tree: its four live views (submenus.daemon_views: STATUS, STATS, SOCKET, RX/TX View) inline, each always
+    open with its Reload and its own "Daemon not running" (F8), and no page of their own. On its own page (`monitor_view`
+    = the shown view's kind): the radio pins and the view pins (as the Webserver logs' tabs; each a link to this page
+    with its radio / view), then that ONE view (F6: no Reload, no "every N s" line: it repeats every 3 s,
+    data-fullpage). Always present; daemon not running: views paused (daemoncfg.js resumes them when the badge's poll,
+    dash.js, sees the daemon up). -#}
 {% from "_macros.html" import daemon_badge -%}
-<details class="advcfg dblock" id="stack-settings-{{ stack.id }}--{{ radio.rid }}-monitor" data-rid="{{ radio.rid }}" data-up="{{ '1' if radio.reachable else '0' }}">
-              <summary>Monitor · {{ radio.rid }} {{ daemon_badge(radio, live=True, rid=radio.rid, hidden=True) }}</summary>
+<details class="advcfg dblock" id="stack-settings-{{ stack.id }}--monitor" data-rid="{{ radio.rid }}" data-up="{{ '1' if radio.reachable else '0' }}">
+              <summary>Monitor {{ daemon_badge(radio, live=True, rid=radio.rid, hidden=True) }}</summary>
   <div class="body">
     <p class="muted">Live requests on the config socket of {{ radio.rid }}; a view asks only while it is shown.</p>
-    <p class="muted dstate-down"{% if radio.reachable %} hidden{% endif %}>Daemon not running</p>
-    {% for dv in daemon_views(stack.id, radio.rid) %}
-      <div class="stackrow-wrap">
-      {% include "_daemon_view.html" %}
-      {{ page_actions(stack.id, dv.id) }}
-      </div>
-    {% endfor %}
+    {% if monitor_view %}
+      <p class="monitor-pins">
+        {%- if view.live_radios | length > 1 %}<span class="tabs">{% for rid, _name, band in view.live_radios %}
+          <a href="{{ url_for('menu_page', owner=stack.id, mid=menu_id, radio=rid, view=monitor_view) }}"
+             class="pill{{ ' mono' if rid == radio.rid else '' }}">{{ rid }} · {{ band }}</a>{% endfor %}
+        </span> {% endif -%}
+        <span class="tabs">{% for dv in daemon_views(stack.id, radio.rid) %}
+          <a href="{{ url_for('menu_page', owner=stack.id, mid=menu_id, radio=radio.rid, view=dv.kind) }}"
+             class="pill{{ ' mono' if dv.kind == monitor_view else '' }}">{{ 'RX TX' if dv.kind == 'rxtx' else dv.kind | upper }}</a>{% endfor %}
+        </span></p>
+      {% for shown in daemon_views(stack.id, radio.rid) if shown.kind == monitor_view %}
+        {% with dv = dict(shown, page=True) %}{% include "_daemon_view.html" %}{% endwith %}
+      {% endfor %}
+    {% else %}
+      {% for dv in daemon_views(stack.id, radio.rid) %}
+        <div class="stackrow-wrap">
+        {% include "_daemon_view.html" %}
+        </div>
+      {% endfor %}
+    {% endif %}
   </div>
 </details>

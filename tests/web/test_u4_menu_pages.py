@@ -167,6 +167,9 @@ def test_firewall_other_commands_opens_on_its_own_page(tmp_path, web):
 
 # ---- every level: one descriptor, one link, one page, the same block -----------------------------
 
+_PAGE_LESS = re.compile(r"stack-settings-[a-z0-9-]+--monitor-(status|stats|socket|rxtx)")
+
+
 @pytest.mark.parametrize("radios, paged", [(False, None), (True, ("daemon", "meshcore"))],
                          ids=["no-radios", "two-radios"])
 def test_each_level_has_one_link_and_its_page_shows_the_same_block(tmp_path, web, radios, paged):
@@ -194,12 +197,18 @@ def test_each_level_has_one_link_and_its_page_shows_the_same_block(tmp_path, web
             assert len(hrefs) == len(set(hrefs)), owner                 # one link per shown level
             links |= {h for h in hrefs if not only or only.fullmatch(h.rsplit("/", 1)[1].split("?")[0])}
         top = "controller-row" if owner == "controller" else f"stackrow-{owner}"
-        assert ids | {top} == menus, owner                              # descriptors == rendered levels
+        pageless = {i for i in ids if _PAGE_LESS.fullmatch(i)}            # F7: the Monitor's views: inline only, so
+        assert ids | {top} == menus | pageless, owner                   # the tree lists them unlinked; else
+        assert not pageless or owner == "daemon", owner                 # descriptors == rendered levels
         links = {h.split("?")[0] for h in links}
-        assert links == {_href(owner, m) for m in menus - {top}}, owner
-        for mid in (menus - {top}) if paged is None or owner in paged else ():
+        assert links == {_href(owner, m) for m in menus - {top} - pageless}, owner
+        for mid in pageless:
+            assert c.get(f"/stacks/{owner}/menu/{mid}").status_code == 404, mid
+        for mid in (menus - {top} - pageless) if paged is None or owner in paged else ():
             if _href(owner, mid) != f"/stacks/{owner}/menu/{mid}":
                 continue                     # its page is that route (test_a_level_with_an_own_page_has_one_page)
+            if re.fullmatch(r"stack-settings-[a-z0-9-]+--monitor", mid):
+                continue                     # F7: the Monitor's page shows ONE view + pins (test_daemon_monitor_tree)
             shown, radio = next((v, r) for v, _only, r in views if f'id="{mid}"' in v)
             page = _block(_html(c, f"/stacks/{owner}/menu/{mid}" + (f"?radio={radio}" if radio else "")), mid)
             assert _OPEN.search(_tag(page)) or 'class="daemonview"' in _tag(page), (owner, mid)   # a view: always open

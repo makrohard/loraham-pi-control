@@ -1,8 +1,8 @@
 // DAEMON-MONITOR-TREE: a radio's live daemon views (_daemon_view.html) under its Monitor, read-only over the
 // /api/daemon endpoints. UI-REORG s4: a view has no own show/hide; it asks only while it is SHOWN (every <details>
-// around it open, in the page, the tab visible: shown.js): "Get STATUS"/"Get STATS" one read of /api/daemon/<rid>
+// around it open, in the page, the tab visible: shown.js): STATUS / STATS one read of /api/daemon/<rid>
 // per show and per Reload;
-// "View Socket" a rolling 22-line window polled from the config socket each second; "RX/TX View" the dashboard's
+// SOCKET a rolling 22-line window polled from the config socket each second; "RX/TX View" the dashboard's
 // RX/TX feed every 3 s; on a Monitor's own page (data-fullpage) every view repeats every 3 s. Hiding stops the
 // polling; Reload starts the view afresh. A reply to an earlier run of the
 // view (before a hide or a Reload) is dropped; a view has ONE request out at a time, and a show while one is out
@@ -68,7 +68,7 @@
     panel.dvGen = (panel.dvGen || 0) + 1;
     var rid = panel.getAttribute("data-rid"), kind = panel.getAttribute("data-kind");
     var text = panel.querySelector(".daemonview-text"), status = panel.querySelector(".daemonview-status");
-    var full = !!panel.closest("[data-fullpage]");   // a Monitor's own page: every view repeats every 3 s (s4)
+    var full = !!panel.closest("[data-fullpage]");   // the Monitor's page: its one view repeats every 3 s (s4, F7)
     var poll;
     if (kind === "status" || kind === "stats") {
       text.textContent = "loading…";
@@ -78,7 +78,7 @@
           if (failed) { text.textContent = "request failed"; status.textContent = full ? "" : "Reload to ask again"; return; }
           text.textContent = !d || !d.reachable ? "daemon not reachable on " + rid
             : kind.toUpperCase() + " — " + rid + " (live)\n" + render(kind === "stats" ? d.stats : d.status);
-          status.textContent = "updated " + stamp() + (full ? " — every 3 s while shown" : "");
+          status.textContent = "updated " + stamp();                          // F6: no "every 3 s" line
         });
       };
       if (!full) { poll(); return; }                 // in the tree: one read per show and per Reload
@@ -107,7 +107,7 @@
       return;
     }
     var ms = full ? FULL_MS : POLL_MS[kind];
-    if (POLL_MS[kind]) status.textContent = "live — every " + ms / 1000 + " s while shown";
+    if (POLL_MS[kind] && !full) status.textContent = "live — every " + ms / 1000 + " s while shown";   // F6: the tree's
     var tick = function () { if (!shown(panel)) { stop(panel); return; } poll(); };   // hidden around, replaced: stop
     tick();
     panel.dvTimer = setInterval(tick, ms);
@@ -119,7 +119,7 @@
   function sync(panel) { if (shown(panel) && up(panel)) start(panel); else stop(panel); }
   function syncAll(root) { if (root && root.querySelectorAll) root.querySelectorAll(".daemonview").forEach(sync); }
 
-  // A daemon-state block (Monitor · rX, Live · rX, a view's own page) takes the state `isUp`; `d` = the poll's answer.
+  // A daemon-state block (the Monitor, Live · rX, the Monitor page's view) takes the state `isUp`; `d` = the poll's answer.
   function apply(block, isUp, d) {
     if ((block.getAttribute("data-up") === "1") === isUp) return;
     block.setAttribute("data-up", isUp ? "1" : "0");

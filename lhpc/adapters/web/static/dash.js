@@ -1,7 +1,7 @@
 // Radio dashboard live updater. For each radio card (W285/W286: one per radio, its band a property) it polls
 // the read-only daemon API of that radio and refreshes the RSSI meter, TX-mode, daemon badge and RX/TX feed.
 // The hardware list's daemon badges (`hw-badge-<rid>`, on /hardware and in the daemon's Hardware submenu, also
-// when a Stacks body arrives later) are polled the same way, and so is the badge of every Monitor · rX / Live · rX
+// when a Stacks body arrives later) are polled the same way, and so is the badge of every Monitor / Live · rX
 // block and of a daemon view's own page (UI-REORG s4: class dbadge + data-rid, no id). One poll per radio per page.
 // State contract (this file owns it): per radio the last answer is cached, one lhpc:daemonstate event per answer
 // ({rid, up, data}; daemoncfg.js acts on a change), a failed poll keeps the cache (the next one retries), and a block

@@ -1,14 +1,17 @@
 {#- DAEMON-MONITOR-TREE: one live daemon view of a radio, always open (UI-REORG s3: no own show/hide; it is shown when
-    every <details> around it is open). daemoncfg.js asks while it is shown: Get STATUS / Get STATS one read of
-    /api/daemon/<rid> per show and per Reload; View Socket polls /api/daemon/<rid>/socket each second (a rolling 22
+    every <details> around it is open). daemoncfg.js asks while it is shown: STATUS / STATS one read of
+    /api/daemon/<rid> per show and per Reload; SOCKET polls /api/daemon/<rid>/socket each second (a rolling 22
     lines), RX/TX View /api/daemon/<rid>/feed every 3 s. Daemon not running: paused, Reload off. Text only, in a fixed
-    22-line window. On its own page it carries the daemon badge (s4). `dv`: {id, rid, kind, label}; `radio`. -#}
+    22-line window. F7: the view the Monitor page shows (`dv.page`) carries the daemon badge and the own-page state
+    (data-up) and has no Reload (F6); every view draws its own "Daemon not running" (F8). `dv`: {id, rid, kind,
+    label[, page]}; `radio`. -#}
 {% from "_macros.html" import daemon_badge -%}
-<div class="daemonview" id="{{ dv.id }}" data-rid="{{ dv.rid }}" data-kind="{{ dv.kind }}"{% if menu_id == dv.id %} data-up="{{ '1' if radio.reachable else '0' }}"{% endif %}>
-  <h4 class="daemonview-head">{{ dv.label }}{% if menu_id == dv.id %} {{ daemon_badge(radio, live=True, rid=dv.rid) }}{% endif %}</h4>
+<div class="daemonview" id="{{ dv.id }}" data-rid="{{ dv.rid }}" data-kind="{{ dv.kind }}"{% if dv.page %} data-up="{{ '1' if radio.reachable else '0' }}"{% endif %}>
+  <h4 class="daemonview-head">{{ dv.label }}{% if dv.page %} {{ daemon_badge(radio, live=True, rid=dv.rid) }}{% endif %}</h4>
   <div class="body">
-    {%- if menu_id == dv.id %}<p class="muted dstate-down"{% if radio.reachable %} hidden{% endif %}>Daemon not running</p>{% endif %}
-    <button type="button" class="daemonview-reload"{% if not radio.reachable %} disabled{% endif %}>Reload</button>
+    <p class="muted dstate-down"{% if radio.reachable %} hidden{% endif %}>Daemon not running</p>
+    {%- if not dv.page %}
+    <button type="button" class="daemonview-reload"{% if not radio.reachable %} disabled{% endif %}>Reload</button>{% endif %}
     <span class="daemonview-status muted" role="status" aria-live="polite"></span>
     <pre class="next liveout-body stream22 daemonview-text"></pre>
     <noscript><p class="muted">This live view needs JavaScript.</p></noscript>

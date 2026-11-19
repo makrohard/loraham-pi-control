@@ -1535,17 +1535,23 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             return redirect(url_for("menu_page", owner=owner, mid=new, radio=rid or None) + "#" + new)
         ctx, menus = _owner_menus(owner)
         path = _submenus.chain(menus, mid)
-        if not path:
+        if not path or path[-1].page_less:          # F7 (G1 B1): the Monitor's views show inline only, no page
             abort(404)
         here = path[-1]
         own = _own_page_url(owner, mid, request.args.get("radio"))
         if own:
             return redirect(own)
         request.environ["lhpc.menu_return"] = _menu_url(owner, mid)
-        body = _level_html(owner, here, ctx)
+        # F7: the Monitor's page shows ONE view (?view=, else STATUS) on its radio (the Settings radio: the page's
+        # ?radio= when it is one of the daemon's, else the first), its page radio for the pins, pill and full page
+        kinds = [k for k, _n in _submenus.DAEMON_VIEWS]
+        monitor_view = (request.args.get("view") if request.args.get("view") in kinds else kinds[0]) \
+            if mid == _submenus.monitor_id(owner) else ""
+        page_rid = here.vars["radio"]["rid"] if monitor_view else _submenus.id_radio(mid)
+        body = _level_html(owner, here, {**ctx, "monitor_view": monitor_view})
         # `body` is the output of Jinja's own autoescaped render of the level's partial, not request text
         return render_template("menu_page.html", body=Markup(_open_first_details(body)), here=here,  # noqa: S704
-                               page_rid=_submenus.id_radio(mid),          # UI-REORG s4: a Monitor/Live full page
+                               page_rid=page_rid, monitor_view=monitor_view,   # UI-REORG s4: a Monitor/Live full page
                                crumbs=[(m.label, _level_url(owner, m.id, request.args.get("radio"))) for m in path],
                                show_url=_stacks_place(owner, mid), **ctx)
 

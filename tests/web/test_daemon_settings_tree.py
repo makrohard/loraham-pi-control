@@ -62,14 +62,16 @@ def test_the_switch_shows_one_radio_and_every_radio_level_stays_addressable(web,
     hp = doc.by_id("high-power-daemon")                                     # High-power: the selected radio's
     assert s.within(hp).find("summary")[0].text.strip() == f"High-power +20 dBm permission · {rid}"
     assert _hidden(s.within(hp), "/hardware/high-power") == [rid]
-    for kind in ("monitor", "live"):                                         # Monitor, Live: the selected radio's
-        assert doc.by_id(f"stack-settings-daemon--{rid}-{kind}") is not None, kind
-        assert doc.by_id(f"stack-settings-daemon--{other}-{kind}") is None, kind
+    assert doc.by_id(f"stack-settings-daemon--{rid}-live") is not None       # Live: the selected radio's
+    assert doc.by_id(f"stack-settings-daemon--{other}-live") is None
+    assert doc.by_id("stack-settings-daemon--monitor")["data-rid"] == rid    # F7: ONE Monitor, on the selected radio
     dp = doc.by_id("stack-daemon-params-daemon")                             # Daemon radio parameters: in Settings
     assert dp is not None and s.within(dp).find("form") and _hidden(s.within(dp), "daemon-params") == [rid]
     tree = c.get("/stacks/menus").get_data(as_text=True)
     ids = sorted(set(re.findall(r'/stacks/daemon/menu/(stack-settings-daemon--r\d-[a-z]+)', tree)))
-    assert {_PER_RID.fullmatch(i).group(1) for i in ids} == {"r1", "r2"} and len(ids) == 12, ids
+    assert {_PER_RID.fullmatch(i).group(1) for i in ids} == {"r1", "r2"} and len(ids) == 2, ids   # F7: Live only
+    mon = _doc(c, f"/stacks/daemon/menu/stack-settings-daemon--monitor?radio={rid}")     # F7: the page radio
+    assert mon.by_id("stack-settings-daemon--monitor")["data-rid"] == rid
     for mid in ids:                                                          # every radio's: with and without ?radio=
         for q in ("", f"?radio={rid}"):
             page = _doc(c, f"/stacks/daemon/menu/{mid}{q}")
@@ -100,8 +102,8 @@ def test_live_and_monitor_of_a_radio_whose_daemon_never_answered(web, tmp_path):
     assert fields and all(f.has_attr("disabled") for f in fields)            # greyed, server-side
     conf = svc._daemon_param_applies("daemon", "r2")                         # the configured values shown
     assert conf.get("FREQ") and _values(lv)["FREQ"] == conf["FREQ"]
-    mon = doc.by_id("stack-settings-daemon--r2-monitor")
-    assert mon["data-up"] == "0" and "Daemon not running" in doc.within(mon).text
+    mon = doc.by_id("stack-settings-daemon--monitor")                        # F7: the Settings radio's (r2)
+    assert mon["data-rid"] == "r2" and mon["data-up"] == "0" and "Daemon not running" in doc.within(mon).text
     d1 = _doc(c, "/stacks/daemon/body?radio=r1")
     up = d1.within(d1.by_id("stack-settings-daemon--r1-live"))
     assert _values(up)["CADRSSI"] == "0" and _values(up)["CADWAIT"] == "1500"     # the running values; a zero kept
@@ -147,8 +149,8 @@ def test_the_daemon_radio_parameters_take_the_settings_radio_without_a_page_radi
     sel = [a.text.strip() for a in s.within(s.find("nav", class_="rswitch")[0]).find("a", class_="sel")]
     dp = doc.by_id("stack-daemon-params-daemon")
     assert sel == ["r2 · 433"] and _hidden(s.within(dp), "daemon-params") == ["r2"], sel
-@pytest.mark.parametrize("kind", ["monitor", "status", "stats", "socket", "rxtx", "live"])
-def test_a_per_radio_page_has_the_switch_to_the_same_level_and_the_pill(web, tmp_path, kind):
+@pytest.mark.parametrize("kind", ["live"])          # F7: the Monitor and its views are radio-less (their per-radio
+def test_a_per_radio_page_has_the_switch_to_the_same_level_and_the_pill(web, tmp_path, kind):   # pages: 404)
     # UI-REORG c5 (s4, round-3 N1 = a): on Get STATUS of r1, r2 opens Get STATUS of r2; the pill upper right;
     # the Monitor and its views run in the full-page mode (data-fullpage)
     c, _svc, _fs = _box(web, tmp_path)
@@ -167,10 +169,12 @@ def test_the_monitor_and_live_header_pins_are_rendered_hidden_and_the_page_pills
     # shows it on a live answer while its node is open); the page pills that share the macro show from the load
     c, _svc, _fs = _box(web, tmp_path)
     doc = _doc(c, "/stacks/daemon/body?radio=r1")
-    for lvl in ("monitor", "live"):
-        node = doc.by_id(f"stack-settings-daemon--r1-{lvl}")
+    for node_id in ("stack-settings-daemon--monitor", "stack-settings-daemon--r1-live"):
+        node = doc.by_id(node_id)
         [pin] = doc.within(doc.within(node).find("summary")[0]).find("span", class_="dbadge")
-        assert pin.has_attr("hidden"), lvl
-    doc = _doc(c, "/stacks/daemon/menu/stack-settings-daemon--r1-status?radio=r1")
-    pills = doc.find("span", class_="dbadge")
+        assert pin.has_attr("hidden"), node_id
+    doc = _doc(c, "/stacks/daemon/menu/stack-settings-daemon--monitor?radio=r1")    # F7: the Monitor's page
+    [head] = doc.find("div", class_="pagehead")
+    [view] = doc.find("div", class_="daemonview")
+    pills = doc.within(head).find("span", class_="dbadge") + doc.within(view).find("span", class_="dbadge")
     assert len(pills) == 2 and not any(p.has_attr("hidden") for p in pills)        # the page pill + the view's own
