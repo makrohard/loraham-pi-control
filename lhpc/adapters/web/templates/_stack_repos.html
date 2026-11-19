@@ -1,0 +1,20 @@
+{# UI-REORG s2: Install › Repositories: the stack's source remotes (global, not per radio), its own form; it writes
+   `remotes` only (stack_remotes_save). Requires `g` (g.view.sources). #}
+<details class="advcfg" id="stack-install-{{ g.stack.id }}--repositories"><summary>Repositories</summary>
+  <div class="body">
+    <form method="post" action="{{ url_for('stack_remotes_save', stack_id=g.stack.id) }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+      <h3>Source remotes (GitHub)</h3>
+      <p class="muted">Override per component where install/update clones from.
+        Blank reverts to the manifest default. Stored locally only.</p>
+      <table class="paramgrid">
+        {% for src in g.view.sources %}
+          <tr><th>{{ src.name }}{% if src.overridden %} <span class="pill">override</span>{% endif %}</th>
+            <td><input type="text" name="remote_{{ src.id }}" value="{{ src.remote }}"
+                 placeholder="{{ src.default }}" autocomplete="off" class="wide"></td></tr>
+        {% endfor %}
+      </table>
+      <div class="actrow"><button type="submit">Save repositories</button></div>
+    </form>
+  </div>
+</details>

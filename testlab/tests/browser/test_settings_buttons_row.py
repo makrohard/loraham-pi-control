@@ -29,3 +29,11 @@ def test_enter_in_a_config_field_saves_once(flask_page):
         field.press("Enter")
     assert [p for p, _body in posts] == ["/stacks/chat/config"], posts
     assert "f_call=DL9TST" in posts[0][1]
+
+
+def test_the_old_repositories_url_with_its_old_fragment_lands_on_install_repositories(flask_page):
+    # UI-REORG c3 (s2): the old daemon Settings › Repositories URL, with its old in-page anchor, forwards to the new level
+    page, _posts = flask_page(path="/stacks/daemon/menu/stack-settings-daemon--repository?radio=r1"
+                                   "#stack-settings-daemon--repository")
+    page.wait_for_url("**/stack-install-daemon--repositories?radio=r1#stack-install-daemon--repositories")
+    assert page.locator("#stack-install-daemon--repositories input[name^=remote_]").first.is_visible()

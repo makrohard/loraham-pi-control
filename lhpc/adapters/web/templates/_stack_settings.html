@@ -73,8 +73,6 @@
       </section>
     {% endif %}
 
-    {% if view.live_band %}<div class="stackrow-wrap">{% include "_settings_repo.html" %}{{ page_actions(stack.id, 'stack-settings-' ~ stack.id ~ '--repository') }}</div>{% else %}
     {% include "_settings_config.html" %}
-    {% endif %}
   </div>
 </details>

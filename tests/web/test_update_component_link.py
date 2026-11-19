@@ -68,7 +68,7 @@ def test_behind_main_links_to_stack_install_section(web, tmp_path):
     main_id, dep = _ids(tmp_path)
     c = _faked_client(web, tmp_path, {main_id: "behind"})
     href = _daemon_update_href(c.get("/stacks").get_data(as_text=True))
-    assert href.endswith("#stack-install-daemon") and "comp=" not in href   # main -> Install section
+    assert href.endswith("#stack-install-daemon--actions") and "comp=" not in href   # main -> Install section
     assert "open=daemon" in href and "inst=daemon" in href
 
 
@@ -136,7 +136,7 @@ def test_main_behind_shows_the_link_to_install(web, tmp_path):
     doc = _page(web, tmp_path, _git_src(ds, A), [ds])
     links = doc.find("a", class_="update-link")
     assert len(links) == 1                                       # one link, in the row-actions overlay
-    assert links[0]["href"].endswith("#stack-install-daemon")
+    assert links[0]["href"].endswith("#stack-install-daemon--actions")
 
 
 def test_only_a_dependency_behind_shows_the_link(web, tmp_path):

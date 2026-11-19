@@ -1,6 +1,6 @@
 """#76 (0.14.0, maintainer's word 11-19): a stack's Settings buttons "Save configuration / Reset to defaults" stand in
 one button row like the other rows (.actrow, wrapping), on every page that shows a stack's Settings: the Stacks body,
-the Settings' own page, and the daemon's Repositories (the same partial). Save still submits the config form (its
+the Settings' own page, and the daemon's Settings page (UI-REORG c3: no longer under Repositories). Save still submits the config form (its
 `form=`; the browser lane pins Enter in a field); Reset posts its own form. Through the console's routes."""
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def _row(html, sid):
     ("/stacks/chat/menu/stack-settings-chat?radio=r1", "chat"),
     ("/stacks/chat/menu/stack-settings-chat", "chat"),
     ("/stacks/daemon/body?radio=r1", "daemon"),
-    ("/stacks/daemon/menu/stack-settings-daemon--repository?radio=r1", "daemon"),
+    ("/stacks/daemon/menu/stack-settings-daemon?radio=r1", "daemon"),     # c3: the daemon Settings body (was --repository)
 ])
 def test_save_and_reset_stand_in_one_button_row(box, path, sid):
     c, _tmp = box

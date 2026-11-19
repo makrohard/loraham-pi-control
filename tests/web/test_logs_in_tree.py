@@ -253,7 +253,7 @@ _PAGES = [
     ("/webserver/logs?src=access", [_CTL, "Webserver and mTLS proxy", "Logs"]),
     ("/firewall/logs", [_CTL, "Firewall", "Log"]),
     ("/logs/radiolib", ["daemon", "Install", "Dependencies", "radiolib", "Log"]),        # B1: not a tree entry
-    ("/logs/meshcore-node?job=install-meshcore.log", ["meshcore", "Install", "Job log"]),  # B4: a run's job log
+    ("/logs/meshcore-node?job=install-meshcore.log", ["meshcore", "Install", "Actions", "Job log"]),  # B4: a run's job log (c3: under Actions)
 ]
 
 

@@ -168,6 +168,9 @@ def stack_menus(g: dict) -> list[Submenu]:
             add(f"{parent}--evidence", parent, "Evidence", "_evidence.html", st=st, card_id=parent)
 
     add(inst, top, "Install", "_stack_install.html")
+    add(f"{inst}--actions", inst, "Actions", "_stack_install_actions.html")         # UI-REORG s2
+    if g["view"].get("sources"):
+        add(f"{inst}--repositories", inst, "Repositories", "_stack_repos.html")
     if g["deps"]:
         deps = f"{inst}--dependencies"
         add(deps, inst, "Dependencies", "_stack_deps.html")
@@ -201,8 +204,6 @@ def stack_menus(g: dict) -> list[Submenu]:
                 add(dv["id"], f"{settings}--{rid}-monitor", dv["label"], "_daemon_view.html", dv=dv, radio=radio, **sv)
             add(f"{settings}--{rid}-live", settings, f"Live radio settings · {rid}", "_settings_radio_live.html",
                 radio=radio, **sv)
-    if view.get("live_band"):
-        add(f"{settings}--repository", settings, "Repositories", "_settings_repo.html", **sv)
     if g["daemon_params"]:
         add(f"stack-daemon-params-{sid}", top, "Daemon radio parameters", "_daemon_params.html",
             stack_id=sid, daemon_params=g["daemon_params"])

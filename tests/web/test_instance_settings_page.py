@@ -34,7 +34,11 @@ def _stored(tmp_path, name):
 
 
 def _section(page, sid="chat"):
-    s = page[page.index(f'id="stack-settings-{sid}"'):]
+    return _block(page, f"stack-settings-{sid}")
+
+
+def _block(page, el_id):
+    s = page[page.index(f'id="{el_id}"'):]
     return s[:s.index("</details>")]
 
 
@@ -107,8 +111,10 @@ def test_an_instances_save_writes_its_own_file_with_its_auto_start_ticks(web, tm
     radios_fixture.write(tmp_path, (*ROWS, radios.Radio("r2", "c", "meshstick-1262", "868", usb_serial="MSTICK01")))
     c = web()
     token = csrf(c, "/stacks?cfg=kiss")
-    page = _section(c.get("/stacks?cfg=kiss&radio=r3").get_data(as_text=True), "kiss")
-    assert 'name="c_autostart_' in page and 'name="remote_' in page
+    body = c.get("/stacks?cfg=kiss&radio=r3").get_data(as_text=True)
+    page = _section(body, "kiss")
+    assert 'name="c_autostart_' in page and 'name="remote_' not in page      # UI-REORG c3: remotes in Install
+    assert 'name="remote_' in _block(body, "stack-install-kiss--repositories")
     r = c.post("/stacks/kiss/config", data={"_csrf": token, "radio": "r3", "c_kiss_port": "8003", "c_rf_log": "",
                                            "c_autostart_loraham-kiss-serial": "on"})
     assert r.status_code == 302
@@ -123,8 +129,9 @@ def test_an_instances_save_writes_its_own_file_with_its_auto_start_ticks(web, tm
 def test_13_12_1_the_global_controls_are_on_every_instances_page(box):
     c, _post, _tmp = box
     for url in ("/stacks?cfg=kiss", "/stacks?cfg=kiss&radio=r3"):
-        s = _section(c.get(url).get_data(as_text=True), "kiss")
-        assert "Optional components" in s and "Source remotes (GitHub)" in s, url
+        body = c.get(url).get_data(as_text=True)
+        assert "Optional components" in _section(body, "kiss"), url
+        assert "Source remotes (GitHub)" in _block(body, "stack-install-kiss--repositories"), url   # c3: Install
 
 
 def test_an_instances_page_shows_its_own_run_command(box):

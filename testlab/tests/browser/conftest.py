@@ -171,6 +171,13 @@ def flask_page(browser, tmp_path, monkeypatch):
                 route.fulfill(status=200, body="posted")              # captured, not run
                 return
             resp = client.get(path)
+            if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("Location"):
+                # Chromium does not route a redirect's follow-up request (it would reach the real port 9): the hop is
+                # served as an immediate refresh to the app's Location, its fragment included (UI-REORG c3)
+                from html import escape
+                route.fulfill(status=200, content_type="text/html",
+                              body=f'<meta http-equiv="refresh" content="0;url={escape(resp.headers["Location"])}">')
+                return
             route.fulfill(status=resp.status_code, body=resp.get_data(),
                           headers={k: v for k, v in resp.headers.items() if k.lower() != "content-length"})
         context = browser.new_context(viewport={"width": 1280, "height": 900})

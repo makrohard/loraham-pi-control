@@ -248,7 +248,9 @@ def test_inst_query_forces_and_scrolls_to_install_panel(web):
     body = c.get("/stacks?inst=kiss").get_data(as_text=True)
     doc = parse(body)
     panel = doc.by_id("stack-install-kiss")
-    assert panel.has_attr("open") and panel["data-force-open"] == "1" and panel["data-force-scroll"] == "1"
+    assert panel.has_attr("open") and panel["data-force-open"] == "1"
+    acts = doc.by_id("stack-install-kiss--actions")      # UI-REORG c3: Install AND its Actions open, the scroll on Actions
+    assert acts.has_attr("open") and acts["data-force-open"] == "1" and acts["data-force-scroll"] == "1"
     assert doc.by_id("stackrow-kiss")["data-force-open"] == "1"          # the row is forced too
     # TARGET-SPECIFIC: no other stack's Install panel is forced or scrolled to. A non-targeted
     # (closed) stack's body is lazy-loaded, so its Install panel is absent from this response —
@@ -690,7 +692,7 @@ def test_start_uninstalled_stack_redirects_to_app_page(web, csrf):
     r = c.post("/action", data={"_csrf": token, "op": "start", "target": "kiss@r1"})
     assert r.status_code == 302
     loc = r.headers["Location"]
-    assert loc.endswith("#stack-install-kiss")     # anchor + data-force-scroll land on Install
+    assert loc.endswith("#stack-install-kiss--actions")     # anchor + data-force-scroll land on Install › Actions (c3)
     assert "open=kiss" in loc and "inst=kiss" in loc   # force the row AND the Install panel
 
 

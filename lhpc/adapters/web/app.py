@@ -1513,7 +1513,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         """One level opened on its own page: the breadcrumb, a bar back to the Stacks page, then the
         level's own partial (the same markup as on the Stacks page), opened. Unknown owner, unknown
         id or an id that is not this owner's (e.g. another stack's component) -> 404."""
-        _page_radio()                                                      # an empty ?radio= is a 400
+        rid = _page_radio()[0]                                             # an empty ?radio= is a 400
+        if mid == f"stack-settings-{owner}--repository":       # UI-REORG s2: the old Repositories URL, forwarded
+            new = f"stack-install-{owner}--repositories"
+            return redirect(url_for("menu_page", owner=owner, mid=new, radio=rid or None) + "#" + new)
         ctx, menus = _owner_menus(owner)
         path = _submenus.chain(menus, mid)
         if not path:
@@ -2082,7 +2085,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # refused start lands on the Install/Build buttons instead of wherever the page last was.
         # Always /stacks — even for a dashboard-launched start, since the buttons only exist here.
         return redirect(url_for("stacks_overview", open=stack_id, inst=stack_id)
-                        + "#stack-install-" + stack_id)
+                        + "#stack-install-" + stack_id + "--actions")
 
     def _settings_back(target: str, refusal, rid: str = ""):
         """A start/restart refused over the SAVED identity: flash the refusal and send the operator
@@ -2392,7 +2395,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         owner = service.stack_of(target)
         st = service.stack(owner)
         if job:
-            return _log_crumbs(owner, "", (f"stack-install-{owner}", "Job log"))
+            return _log_crumbs(owner, "", (f"stack-install-{owner}--actions", "Job log"))
         comp = st.main_component.id if st is not None and target == st.id and st.main_component else target
         return _log_crumbs(owner, f"log-{comp}", (f"comp-{comp}", "Log"))
 
@@ -2509,25 +2512,34 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 continue                       # listed as run-on-demand: no auto-start key
             values[f"autostart_{opt['id']}"] = (
                 "on" if request.form.get("c_autostart_" + opt["id"]) else "")
-        # Per-component GitHub remote overrides as a COMPLETE map (blank reverts to
-        # the default). The whole submission is validated and persisted as ONE
-        # all-or-recoverable transaction — no per-remote sequential writes.
-        remotes = None
-        if view["sources"]:
-            remotes = {}
-            for src in view["sources"]:
-                field = request.form.get("remote_" + src["id"], src["remote"])
-                remotes[src["id"]] = "" if field.strip() == src["default"] else field.strip()
         # PLAIN CONFIG EDITING may leave a stack without an identity — the operator is allowed to
         # clear a field, and a stopped stack may hold incomplete configuration. The protection is
         # at the LAUNCH boundary, which refuses to start without a resolvable identity; the row
         # here carries the problem note, and the next Start sends the operator back to this row.
         result = service.save_config_bundle(
-            stack_id, values=values, remotes=remotes, inst=inst)                # G4-web: the instance names its band
+            stack_id, values=values, inst=inst)                # G4-web: the instance names its band
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
               "ok" if result.ok else "warn")
         return redirect(url_for("stacks_overview", radio=inst.rid if inst else None, cfg=stack_id)
                         + "#stack-settings-" + stack_id)
+
+    @app.post("/stacks/<stack_id>/remotes")
+    def stack_remotes_save(stack_id: str):
+        """UI-REORG s2: Install › Repositories saves the source remotes ONLY (the config save would clear absent flag
+        fields and auto-start ticks). A COMPLETE map (blank reverts to the default), one transaction."""
+        if service.stack(stack_id) is None:
+            abort(404)
+        if not _csrf_ok():
+            abort(400)
+        remotes = {}
+        for src in service.config_view(stack_id, "")["sources"]:
+            field = request.form.get("remote_" + src["id"], src["remote"])
+            remotes[src["id"]] = "" if field.strip() == src["default"] else field.strip()
+        result = service.save_config_bundle(stack_id, remotes=remotes)
+        flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
+              "ok" if result.ok else "warn")
+        rep = f"stack-install-{stack_id}--repositories"
+        return redirect(url_for("stacks_overview", open=stack_id) + "#" + rep)
 
     def _settings_copy(stack_id, rid, refuse=False):
         """The instance `<stack>@<rid>` a Settings page or form names (instances.copy_of: its band is its radio's), None

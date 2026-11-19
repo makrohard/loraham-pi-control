@@ -594,7 +594,7 @@ def test_a_shared_components_action_is_its_own_stacks_and_falls_back(tmp_path, w
     doc = parse(_html(c, page))
     form = [f for f in doc.find("form") if f["action"] == "/source-check/loraham-daemon"][0]
     r = c.post(form["action"], data=_fields(doc, form))
-    assert r.headers["Location"] == "/stacks?open=daemon&inst=daemon#stack-install-daemon"
+    assert r.headers["Location"] == "/stacks?open=daemon&inst=daemon#stack-install-daemon--actions"
 
 
 # ---- E3-1: the block that holds the form, or its nearest ancestor --------------------------------

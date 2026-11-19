@@ -44,21 +44,7 @@
         </section>
       {% endif %}
 
-      {% if view.sources %}{# 13.12.1: the remotes are global, on every instance's page; the auto-start ticks are the radio's own (Q-09 C) #}
-        <section class="cfgsec">
-          <h3>Source remotes (GitHub)</h3>
-          <p class="muted">Override per component where install/update clones from.
-            Blank reverts to the manifest default. Stored locally only.</p>
-          <table class="paramgrid">
-            {% for src in view.sources %}
-              <tr><th>{{ src.name }}{% if src.overridden %} <span class="pill">override</span>{% endif %}</th>
-                <td><input type="text" name="remote_{{ src.id }}" value="{{ src.remote }}"
-                     placeholder="{{ src.default }}" autocomplete="off" class="wide"></td></tr>
-            {% endfor %}
-          </table>
-        </section>
-      {% endif %}
-
+      {# UI-REORG s2: the source remotes moved to Install › Repositories (_stack_repos.html, their own form) #}
       {% if view.optional %}
         <section class="cfgsec">
           <h3>Optional components</h3>

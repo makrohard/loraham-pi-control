@@ -39,9 +39,9 @@
   {% endif %}
 
   {# ===== Install (open by default) — all stack actions + dependency sub-menus =====
-     Addressable (`#stack-install-<id>`) so a REFUSED start can land the operator here. `?inst=<id>`
-     force-opens it against a stale sessionStorage map, and data-force-scroll makes stacks_state.js
-     scroll here  — the reason lives in the banners below, not only in the top
+     Addressable (`#stack-install-<id>--actions`) so a REFUSED start can land the operator here. `?inst=<id>`
+     force-opens it and its Actions against a stale sessionStorage map, and data-force-scroll (on Actions) makes
+     stacks_state.js scroll there — the reason lives in the banners below, not only in the top
      flash, which scrolls out of view. #}
   <div class="stackrow-wrap">
   {% include "_stack_install.html" %}

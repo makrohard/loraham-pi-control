@@ -90,7 +90,7 @@ def test_source_check_post_does_probe_and_lands_on_install(web, csrf, tmp_path):
     r = c.post("/source-check/daemon", data={"_csrf": csrf(c)})
     assert r.status_code == 302
     assert "open=daemon" in r.headers["Location"] and "inst=daemon" in r.headers["Location"]
-    assert r.headers["Location"].endswith("#stack-install-daemon")
+    assert r.headers["Location"].endswith("#stack-install-daemon--actions")
     assert _probed(fake)                                                # it DID probe
     assert su.view(Paths(runtime_root=tmp_path))["components"]["loraham-daemon"]["status"] == su.BEHIND
 
@@ -99,7 +99,7 @@ def test_source_check_component_target_returns_to_its_stack(web, csrf, tmp_path)
     _repo(tmp_path, "src/RadioLib")
     c = web()
     r = c.post("/source-check/radiolib", data={"_csrf": csrf(c)})
-    assert r.status_code == 302 and r.headers["Location"].endswith("#stack-install-daemon")
+    assert r.status_code == 302 and r.headers["Location"].endswith("#stack-install-daemon--actions")
 
 
 @pytest.mark.contract
