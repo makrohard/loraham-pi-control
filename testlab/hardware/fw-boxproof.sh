@@ -52,6 +52,12 @@ for k in FWSHA FWFROM FWCI FWREF LANCIDR LABNAME LABSHORT; do
   [[ ${!k:-} =~ $g ]] || stop "$k: $(printf %q "${!k}") is not of its form ($g)"; done
 [ -n "${BOX_H_HOST:-}" ] && [ -n "${EVD_ROOT:-}" ] || { echo "STOP: $LAB sets no BOX_H_HOST or EVD_ROOT"; exit 2; }
 HOSTIP=$BOX_H_HOST; HH=${BOX_H_USER:-lhpc}@$HOSTIP; EVD=${EVD_ROOT/#\~/$HOME}/fw-boxproof-$(date -u +%Y%m%dT%H%M%SZ)
+# LAN_CERT (lab file, optional): a PEM file with a client cert + its key, for the console's remote-auth (a LAN request without a
+# client cert gets 403 by design); a plain absolute path (or ~/), a readable regular file of mode 600 (a symlink reads 777 here:
+# stat does not follow it); the kit reads no passphrase
+LANCERT=; if [ -n "${LAN_CERT:-}" ]; then LANCERT=${LAN_CERT/#\~/$HOME}
+  [[ "$LANCERT" == /* ]] && [ -f "$LANCERT" ] && [ -r "$LANCERT" ] && [ "$(stat -c %a "$LANCERT")" = 600 ] \
+    || stop "LAN_CERT: $(printf %q "$LAN_CERT") is not a readable regular file of mode 600 at an absolute path"; fi
 FROM=${FWFROM:-}; REF=${FWREF:-cons/b4-cln-r1}
 RTB=$(shq "${BOX_H_RUNTIME:-~/loraham-pi-control}")   # one shell word in every box command; ~/ stays the box login's home
 LH="$RTB/venv/lhpc/bin/lhpc"; CK="$RTB/src/loraham-pi-control"; PY="cd $RTB && ./venv/lhpc/bin/python"
@@ -152,8 +158,9 @@ undone() { UNDOS=(); }   # FE ran every undo itself: an exit after it replays no
 gstart() { echo "o=\$($RUNSET) || exit 4; if printf '%s\n' \"\$o\" | grep -qxF -- $1; then echo ALREADY-RUNNING $1; else $LH stack start $1 --yes; fi"; }
 gstop() { echo "o=\$($RUNSET) || exit 4; if printf '%s\n' \"\$o\" | grep -qxF -- $1; then $LH stack stop $1 --yes; else echo ALREADY-STOPPED $1; fi"; }
 page_ok() { [[ "$1" =~ ^[23][0-9][0-9]$ ]]; }   # a page answers 2xx or 3xx; 000 (no answer), 4xx and 5xx are not reachable
-lan() { if [ "$MODE" = dry ]; then echo "  [dry] PC > $1: curl -sk https://$HOSTIP:$2/"; LANCODE=200; return 0; fi
-  LANCODE=$(curl -sk --max-time 10 -o /dev/null -w '%{http_code}' "https://$HOSTIP:$2/" 2>/dev/null); echo "$LANCODE" > "$EVD/$1"; }   # 000 = not reachable
+lan() { local cert=(); [ -z "${LANCERT:-}" ] || cert=(--cert "$LANCERT")   # the client cert (LAN_CERT) only when set
+  if [ "$MODE" = dry ]; then echo "  [dry] PC > $1: curl -sk ${cert[*]:+${cert[*]} }https://$HOSTIP:$2/"; LANCODE=200; return 0; fi
+  LANCODE=$(curl -sk "${cert[@]}" --max-time 10 -o /dev/null -w '%{http_code}' "https://$HOSTIP:$2/" 2>/dev/null); echo "$LANCODE" > "$EVD/$1"; }   # 000 = not reachable
 fwstate() { X "$1" "$LH firewall"; }
 ROWRID='^r[24]$'   # the radios this proof's rows use: r2 (meshtastic@r2 starts) and r4 (FW3 off, FW5 on, FW6's try)
 pwrok() {   # pwrok <tag> <key>: rc 0 when the unit's power reads within min(17, its radio model's cap) and its radio has one row with no

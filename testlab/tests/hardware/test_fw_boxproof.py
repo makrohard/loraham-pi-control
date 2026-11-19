@@ -718,3 +718,57 @@ def test_an_unreadable_start_log_gives_no_count(tmp_path):
     finally:
         f.chmod(0o644)
     assert p.stdout.splitlines() == ["RC=1"], p.stdout + p.stderr       # no number: mtstart's check STOPs
+
+
+# ---- LAN_CERT: the console's remote-auth needs a client cert from the LAN (GO-D FW0 got 403 without one) -------------------
+
+def test_lan_sends_the_client_cert_only_when_lan_cert_is_set(tmp_path):
+    # red-before (9aa5ad11): lan() sent no client cert at all: FW0 got 403 from the console's remote-auth
+    bin_ = tmp_path / "cb"
+    bin_.mkdir()
+    (bin_ / "curl").write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$ARGV"; echo 200\n')
+    (bin_ / "curl").chmod(0o755)
+    argv = tmp_path / "argv"
+    p, _ = proof(tmp_path, 'HOSTIP=192.0.2.10; lan a.txt 8443; LANCERT=/x/lan-cert.pem; lan b.txt 8443; echo "codes $LANCODE"',
+                   bin_, env={"ARGV": str(argv)})
+    calls = argv.read_text().splitlines()
+    assert calls[0] == "-sk --max-time 10 -o /dev/null -w %{http_code} https://192.0.2.10:8443/", calls
+    assert calls[1] == "-sk --cert /x/lan-cert.pem --max-time 10 -o /dev/null -w %{http_code} https://192.0.2.10:8443/", calls
+    assert "codes 200" in p.stdout, p.stderr
+
+
+def _cert(tmp_path, mode=0o600, name="lan-cert.pem"):
+    c = tmp_path / name
+    c.write_text("-----BEGIN CERTIFICATE-----\n")
+    c.chmod(mode)
+    return c
+
+
+@pytest.mark.parametrize("kind", ["mode644", "missing", "relative", "dir", "symlink"])
+def test_a_lan_cert_that_is_not_a_600_file_stops_before_any_box_call(tmp_path, kind):
+    if kind == "mode644":
+        v = str(_cert(tmp_path, 0o644))
+    elif kind == "missing":
+        v = str(tmp_path / "none.pem")
+    elif kind == "relative":
+        _cert(tmp_path)
+        v = "lan-cert.pem"
+    elif kind == "dir":
+        (tmp_path / "d").mkdir()
+        v = str(tmp_path / "d")
+    else:
+        (tmp_path / "l.pem").symlink_to(_cert(tmp_path))
+        v = str(tmp_path / "l.pem")
+    p, ssh = live_copy(tmp_path, lab={"LAN_CERT": v}, env=INPUTS)
+    assert p.returncode == 2 and "STOP: LAN_CERT: " in p.stdout + p.stderr and not ssh, p.stdout + p.stderr
+
+
+def test_a_600_lan_cert_passes_its_check(tmp_path):
+    # control: a good file passes the LAN_CERT check (the run stops later, at the git prep of the fake repo, before any box call)
+    p, ssh = live_copy(tmp_path, lab={"LAN_CERT": str(_cert(tmp_path))}, env=INPUTS)
+    assert "LAN_CERT" not in p.stdout + p.stderr and not ssh, p.stdout + p.stderr
+
+
+def test_lan_cert_is_a_lab_key_of_path_form(tmp_path):
+    p, ssh = live_copy(tmp_path, lab={"LAN_CERT": str(tmp_path / "a.pem") + PROBE}, env=INPUTS)
+    assert p.returncode == 2 and "STOP: LAN_CERT: " in p.stdout + p.stderr and not ssh, p.stdout + p.stderr

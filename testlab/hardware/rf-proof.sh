@@ -1377,7 +1377,7 @@ ROW r4 pinedio-usb-1262 868 True serial= port=1-1 hp=True'
   scok tx-dispatch
   echo "dry self-check: all $SCN OK"; }
 # ---- the lab file: DATA, never run ---------------------------------------------------------------------------------------
-LABKEYS='^(BOX_[HZ]_(HOST|USER|RUNTIME)|RADIO_[A-Z0-9]+|PEER_[a-z0-9]+|OPERATOR_CALL|VENV_MT|VENV_RNS|RNS_CONFIG|PEER_LOCK|EVD_ROOT|DRY_[A-Za-z0-9_]+)$'
+LABKEYS='^(BOX_[HZ]_(HOST|USER|RUNTIME)|RADIO_[A-Z0-9]+|PEER_[a-z0-9]+|OPERATOR_CALL|VENV_MT|VENV_RNS|RNS_CONFIG|PEER_LOCK|EVD_ROOT|LAN_CERT|DRY_[A-Za-z0-9_]+)$'
 labread() {   # labread <file>: blank and # lines, else one KEY=VALUE entry, KEY a lab key (LABKEYS), VALUE one of: a bare word of
   # [A-Za-z0-9_.,:/@+=-], '...' (may span lines), "..." (one line, no $ ` \ "), each with an optional ' # comment' after it.
   # Anything else is a STOP: no form, constant, table, function or command of the script can come from the lab file. A key
@@ -1402,7 +1402,7 @@ labread() {   # labread <file>: blank and # lines, else one KEY=VALUE entry, KEY
 labcheck() { local k v w g fd='(-|[A-Za-z0-9._/@:+=][A-Za-z0-9._/@:+=-]*)'
   for k in $(compgen -v); do [[ $k =~ $LABKEYS ]] || continue; v=${!k}
     case "$k" in
-      BOX_?_RUNTIME|VENV_MT|VENV_RNS|RNS_CONFIG|PEER_LOCK|EVD_ROOT) w="a path (or empty)"; g='^((~/)?[A-Za-z0-9._/@:+][A-Za-z0-9._/@:+-]*)?$';;
+      BOX_?_RUNTIME|VENV_MT|VENV_RNS|RNS_CONFIG|PEER_LOCK|EVD_ROOT|LAN_CERT) w="a path (or empty)"; g='^((~/)?[A-Za-z0-9._/@:+][A-Za-z0-9._/@:+-]*)?$';;
       BOX_?_HOST) w="a host (or empty)"; g='^([A-Za-z0-9][A-Za-z0-9._:-]*)?$';;
       BOX_?_USER) w="a login (or empty)"; g='^([A-Za-z0-9_][A-Za-z0-9._-]*)?$';;
       OPERATOR_CALL) w="a call"; g='^[A-Za-z0-9-]*$';;   # its exact form is checked at the start
