@@ -329,7 +329,8 @@ def test_k6_instances_compete_only_on_their_own_radio(tmp_path):
 
 def test_g1_k6c_n2_a_stack_launched_on_two_bands_shows_in_both_columns(tmp_path):
     # meshtastic@r1 (433) and meshtastic@r2 (868) both run by their verified records: each band's column holds it
-    # running, so each card links its RF log; before, the one-band answer kept it in its primary column only
+    # running, so each card links its RF log; before, the one-band answer kept it in its primary column only.
+    # #75: each card's link is that band's instance's own file (<rid>/rf-meshtastic.log), named "meshtastic <rid>"
     import subprocess
     import sys
 
@@ -349,8 +350,9 @@ def test_g1_k6c_n2_a_stack_launched_on_two_bands_shows_in_both_columns(tmp_path)
             table[p.pid] = ["/x/meshtasticd", *instances._token(plain, node, Instance(rid), band)]
         svc = ControllerService(system=FakeSystem(cmdlines_data=table).system, paths=Paths(runtime_root=tmp_path))
         assert instances.launch_bands(svc, "meshtastic") == {"433", "868"}
-        links = {row["band"]: [x["label"] for x in row["rflogs"]] for row in svc.radio_overview()}
-        assert links == {"433": ["daemon r1 (433)", "meshtastic"], "868": ["daemon r2 (868)", "meshtastic"]}, links
+        links = {row["band"]: [(x["label"], x["job"]) for x in row["rflogs"]] for row in svc.radio_overview()}
+        assert links == {"433": [("daemon r1 (433)", "r1/rf-daemon.log"), ("meshtastic r1", "r1/rf-meshtastic.log")],
+                         "868": [("daemon r2 (868)", "r2/rf-daemon.log"), ("meshtastic r2", "r2/rf-meshtastic.log")]}, links
     finally:
         for p in procs:
             p.kill()
