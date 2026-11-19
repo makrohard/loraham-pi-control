@@ -308,8 +308,13 @@ def test_the_evidence_file_is_opened_before_its_command_runs(tmp_path):
 
 # ---- RS counts each radio's physical frames of the run once, against TXMAX; a count it cannot prove complete fails ---------
 
-NOW = int(time.time())   # wallclock: the box stand-in stamps R0 with its real clock (date -u +%s), so the records sit around it
+NOW = int(time.time())   # wallclock: taken at import; _rs pins the box stand-in's clock (T0) to it, so the records sit around T0
 PRE, RUN = NOW - 3600, NOW + 300      # a record from before R0's clock (T0), and one of the run
+
+
+def _clock(t):
+    """The box's clock (date -u +%s, R0's T0) pinned to t: a serial suite reaches these tests minutes after import."""
+    return f'date() {{ [ "$*" = "-u +%s" ] && echo {t} || command date "$@"; }}\n'
 
 
 def _l(ts, d="TX", out="ok"):
@@ -366,7 +371,7 @@ def _rs(tmp_path, before, after, rns, want, box_env="", extra=""):
     box, setup, env = box_stand_in(tmp_path)
     rt = box / "rt"
     with open(box / "env.sh", "a") as f:
-        f.write(box_env)
+        f.write(_clock(NOW) + box_env)            # a box_env clock, defined later, wins
     for f, c in before.items():
         (rt / f).parent.mkdir(parents=True, exist_ok=True)
         (rt / f).write_text(c)
@@ -406,7 +411,7 @@ def test_a_frame_in_the_second_of_t0_counts(tmp_path):
     # the box clock at R0 is T0 (whole seconds): a frame within that second counts (the safe side), one before it does not
     t0 = NOW - 600
     _rs(tmp_path, BASE, {DMN: _l(PRE) + _l(t0 - 1) + _l(t0)}, "", "r1 1|",
-        box_env=f'date() {{ [ "$*" = "-u +%s" ] && echo {t0} || command date "$@"; }}\n')
+        box_env=_clock(t0))
 
 
 def test_row_5_records_its_radio_for_the_reticulum_count(tmp_path):
