@@ -69,3 +69,26 @@ def test_a_stacks_tasks_mark_its_row_and_cards_and_follow_the_one_poll(flask_pag
     page.clock.run_for(2000)
     _wait_marks(page, _ROW, [])                                                       # done: gone
     _wait_marks(page, ".jobruns[data-jobs-for='kiss']", [])
+
+
+def test_a_server_rendered_job_line_meets_its_feed_item_once_and_a_line_without_one_stays(flask_page, monkeypatch):
+    """a25 c12 N1 + B2: a web job's server-rendered body line and the same feed item make ONE line (key
+    "job-<log>"); a running HMAC apply has a job marker but no feed job item (no attempt id), so its line carries
+    no data-task and the poll leaves it. B1: the row shows the live mark, no static "⏳ N job" pill."""
+    from lhpc.core.services import ControllerService
+    monkeypatch.setattr(ControllerService, "active_jobs", lambda self, *a, **k: [
+        {"log": "build-kiss.log", "target": "loraham-kiss-tnc", "op": "build", "stack": "kiss",
+         "attempt_id": "b" * 32},
+        {"log": "hmac-apply-meshcom.log", "target": "meshcom", "op": "hmac-apply", "stack": "meshcom",
+         "attempt_id": ""}])
+    page = _open(flask_page, {"tasks": [_BUILD]})
+    _wait_marks(page, _ROW, ["⏳ build"])
+    assert page.locator(".col-extra .pill", has_text="job").count() == 0              # B1: the marks replace it
+    page.click("#stackrow-kiss > summary")
+    page.click("#stackrow-meshcom > summary")
+    page.wait_for_selector(".jobruns[data-jobs-for='meshcom'] > p", state="attached")       # in the DOM
+    page.clock.run_for(2000)                                                          # a poll after both bodies
+    _wait_marks(page, ".jobruns[data-jobs-for='kiss']", ["⏳ build running (loraham-kiss-tnc) — open log"])
+    lines = page.locator(".jobruns[data-jobs-for='meshcom'] > p")
+    assert lines.all_text_contents() == ["⏳ hmac-apply running (meshcom) — open log"]
+    assert lines.first.get_attribute("data-task") is None

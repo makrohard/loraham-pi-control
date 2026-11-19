@@ -24,9 +24,10 @@
     </form>
   {% endif %}
 
-  <div class="jobruns" data-jobs-for="{{ g.stack.id }}">{# UI-REORG s14: taskbanner.js keeps these current #}
+  <div class="jobruns" data-jobs-for="{{ g.stack.id }}">{# UI-REORG s14: taskbanner.js keeps the web jobs' lines current; a job
+    without an attempt id (HMAC apply) has no feed item, so its line carries no data-task and stays as rendered #}
   {%- for job in g.jobs %}
-    <p class="jobrun" data-task="job-{{ job.log }}">⏳ {{ job.op }} running ({{ job.target }}) — <a href="{{ url_for('logs_view', target=job.target, job=job.log) }}">open log</a></p>
+    <p class="jobrun"{% if job.attempt_id %} data-task="job-{{ job.log }}"{% endif %}>⏳ {{ job.op }} running ({{ job.target }}) — <a href="{{ url_for('logs_view', target=job.target, job=job.log) }}">open log</a></p>
   {%- endfor %}</div>
   {# W272: the stack's warnings in its own row, like jobs: a degraded or failed component's reason, a feed without a fix #}
   {% for cid, note in g.notes %}<p class="depnote depnote-warn" data-note="{{ cid }}">⚠ {{ cid }}: {{ note }}</p>{% endfor %}
