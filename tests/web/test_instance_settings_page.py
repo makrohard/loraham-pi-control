@@ -43,7 +43,7 @@ def test_the_chooser_names_each_radio_by_its_radio(box):
     # its band's instance (r1), whose form names it
     c, _post, _tmp = box
     s = _section(c.get("/stacks?cfg=chat").get_data(as_text=True))
-    assert 'href="/stacks?radio=r1&amp;cfg=chat#stack-settings-chat">r1 · 433</a>' in s
+    assert 'href="/stacks?radio=r1&amp;cfg=chat#stack-settings-chat" aria-current="page">r1 · 433</a>' in s
     assert 'href="/stacks?radio=r3&amp;cfg=chat#stack-settings-chat">r3 · 433</a>' in s
     assert '<input type="hidden" name="radio" value="r1">' in s
 

@@ -1,0 +1,10 @@
+{# UI-REORG s1: the ONE radio switch (presentation only). Each caller computes its own choices
+   [{label, href, selected, disabled, title}]; radio buttons only, no label, no trailing text. #}
+{% macro radio_switch(choices, aria="Radio") -%}
+<nav class="rswitch" aria-label="{{ aria }}"><span class="bandswitch">
+  {%- for c in choices %}
+    {% if c.disabled %}<span class="disabled" title="{{ c.title }}">{{ c.label }}</span>
+    {%- else %}<a class="{{ 'sel' if c.selected else '' }}" href="{{ c.href }}"{% if c.selected %} aria-current="page"{% endif %}>{{ c.label }}</a>{% endif %}
+  {%- endfor %}
+</span></nav>
+{%- endmacro %}

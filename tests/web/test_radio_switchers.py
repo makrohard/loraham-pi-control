@@ -64,3 +64,20 @@ def test_the_meshcore_mode_saves_the_shown_radio(client, rid):
 def test_the_kill_confirm_kills_the_named_radio(client, rid):
     s = _scope(client, f"/kill/meshcom?component=meshcom-bridge&radio={rid}", "kill-form")
     assert _hidden_radio(s) == [rid]
+
+
+@pytest.mark.parametrize("url, el_id, sel", [
+    ("/stacks?radio=r3&cfg=meshcom", "stack-settings-meshcom", "r3 · 433"),                     # a stack's Settings
+    ("/stacks?radio=r2&cfg=daemon", "stack-settings-daemon", "r2 · 868"),                       # the daemon's live switch
+    ("/stacks?radio=r4&open=daemon&dp=daemon", "stack-daemon-params-daemon", "r4 · 868"),        # Daemon radio parameters
+    ("/stacks?radio=r3&open=meshcom", "stack-webservers-meshcom", "r3 · 433"),                  # Web Proxies
+])
+def test_every_view_switch_is_the_one_shared_switch(client, url, el_id, sel):
+    # UI-REORG c1 (s1): one presentation partial: radio buttons only, no "Radio:" label, no trailing text; the shown
+    # radio is marked (sel + aria-current). Red before c1: <p><strong>Radio:</strong> … <span class="muted">— …</span>
+    s = _scope(client, url, el_id)
+    [nav] = s.find("nav", class_="rswitch")
+    labels = [a.text.strip() for a in s.within(nav).find("a")]
+    assert sel in labels and " ".join(s.within(nav).text.split()) == " ".join(labels)
+    assert [a.text.strip() for a in s.within(nav).find("a") if a["aria-current"] == "page"] == [sel]
+    assert "Radio:" not in s.text and "— each radio" not in s.text and "select the radio to tune" not in s.text

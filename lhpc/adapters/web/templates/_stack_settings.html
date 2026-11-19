@@ -3,6 +3,7 @@
    'stack-settings' — pass a per-stack id when several are rendered on one page). Collapsed by
    default; opens when `?cfg=<stack id>` names THIS stack. #}
 {% from "_macros.html" import action_btn, restart_note %}
+{% from "_radio_switch.html" import radio_switch %}
 {% set _sid = settings_id | default('stack-settings') %}
 {# `?bad=<field>[,<field>]` (a start refused over the saved identity) marks those rows — only
    when this stack's section is the one the link opened. #}
@@ -27,15 +28,10 @@
     {% if view.radio_choices %}
       {# 7f, DEC-W40: one entry per radio of the stack's bands; a listed instance opens its own settings
          (U4: on a level's own page the switch stays on that page) #}
-      <p><strong>Radio:</strong>
-        <span class="bandswitch">
-          {% for c in view.radio_choices %}
-            {% if c.disabled %}<span class="disabled" title="{{ c.title }}">{{ c.label }}</span>
-            {% else %}<a class="{{ 'sel' if c.sel else '' }}"
-               href="{% if menu_id %}{{ url_for('menu_page', owner=menu_owner, mid=menu_id, radio=c.radio) }}{% else %}{{ url_for('stacks_overview', radio=c.radio, cfg=stack.id) }}#stack-settings-{{ stack.id }}{% endif %}">{{ c.label }}</a>{% endif %}
-          {% endfor %}
-        </span>
-        <span class="muted">— each radio has its own config</span></p>
+      {% set _ch = [] %}
+      {% for c in view.radio_choices %}{% set _ = _ch.append({'label': c.label, 'selected': c.sel, 'disabled': c.disabled, 'title': c.title,
+           'href': url_for('menu_page', owner=menu_owner, mid=menu_id, radio=c.radio) if menu_id else url_for('stacks_overview', radio=c.radio, cfg=stack.id) ~ '#stack-settings-' ~ stack.id}) %}{% endfor %}
+      {{ radio_switch(_ch) }}
       {% if view.radio %}<p class="muted instance-note">{{ stack.id }}@{{ view.radio }} starts from the defaults: each radio's settings are its own, and a change applies at its next start.</p>{% endif %}
       {% if g.copy_restart_required %}
         {# Cleanup C7: the shown copy's own marker; the console cannot restart a copy, so the CLI command is named. #}
@@ -49,14 +45,10 @@
       {% endif %}
     {% elif view.live_band and view.live_radios | length > 1 %}
       {# W3 (W319/W320): the daemon's live block per radio, in place of the band switch #}
-      <p><strong>Radio:</strong>
-        <span class="bandswitch">
-          {% for rid, _name, band in view.live_radios %}
-            <a class="{{ 'sel' if view.radios and rid == view.radios[0].rid else '' }}"
-               href="{% if menu_id %}{{ url_for('menu_page', owner=menu_owner, mid=menu_id, radio=rid) }}{% else %}{{ url_for('stacks_overview', radio=rid, cfg=stack.id) }}#stack-settings-{{ stack.id }}{% endif %}">{{ rid }} · {{ band }}</a>
-          {% endfor %}
-        </span>
-        <span class="muted">— select the radio to tune live below</span></p>
+      {% set _ch = [] %}
+      {% for rid, _name, band in view.live_radios %}{% set _ = _ch.append({'label': rid ~ ' · ' ~ band, 'selected': view.radios and rid == view.radios[0].rid,
+           'href': url_for('menu_page', owner=menu_owner, mid=menu_id, radio=rid) if menu_id else url_for('stacks_overview', radio=rid, cfg=stack.id) ~ '#stack-settings-' ~ stack.id}) %}{% endfor %}
+      {{ radio_switch(_ch) }}
     {% endif %}
 
     {% if view.radios %}

@@ -11,11 +11,10 @@
     {% if switcher %}
       {# Two rows, plain links (a full page load — rflog.js polls whatever data-job the loaded
          card carries): every radio, then the RF logs of the shown radio in registry order (W4). #}
-      <nav class="rfbands" aria-label="RF log radios">
-        {% for b in switcher.radios %}
-          <a class="pill" href="{{ url_for('logs_view', target=b.target, job=b.job, radio=b.rid) }}"{% if b.current %} aria-current="page"{% endif %}>{{ b.rid }} · {{ b.band }}</a>
-        {% endfor %}
-      </nav>
+      {% from "_radio_switch.html" import radio_switch %}{% set _ch = [] %}
+      {% for b in switcher.radios %}{% set _ = _ch.append({'label': b.rid ~ ' · ' ~ b.band, 'selected': b.current,
+           'href': url_for('logs_view', target=b.target, job=b.job, radio=b.rid)}) %}{% endfor %}
+      {{ radio_switch(_ch, "RF log radios") }}
       <nav class="rfswitch" aria-label="RF logs">
         {% for s in switcher.stacks %}
           <a class="pill" href="{{ url_for('logs_view', target=s.target, job=s.job, radio=radio or None) }}"{% if s.current %} aria-current="page"{% endif %}>{{ s.label }}</a>

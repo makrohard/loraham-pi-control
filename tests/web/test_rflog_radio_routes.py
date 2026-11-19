@@ -18,8 +18,8 @@ def test_a_radios_daemon_log_page_shows_the_file_and_its_radio_row(web, tmp_path
     page = web().get("/logs/loraham-daemon?job=r2/rf-daemon.log").get_data(as_text=True)
     assert 'data-job="r2/rf-daemon.log"' in page
     assert str(tmp_path / "logs" / "r2" / "rf-daemon.log") in page
-    assert 'class="rfbands"' in page
-    radio_row = page[page.index('class="rfbands"'):page.index('class="rfswitch"')]
+    assert 'aria-label="RF log radios"' in page        # UI-REORG c1: the shared radio switch (was nav.rfbands)
+    radio_row = page[page.index('aria-label="RF log radios"'):page.index('class="rfswitch"')]
     assert radio_row.count('aria-current="page"') == 1 and '>r2 · 868</a>' in radio_row.split('aria-current="page"')[1][:20]
 
 
@@ -40,4 +40,4 @@ def test_any_other_path_is_refused(web, tmp_path, job):
     c = web()
     assert c.get(f"/api/rflog/loraham-daemon?job={job}").status_code == 404
     page = c.get(f"/logs/loraham-daemon?job={job}").get_data(as_text=True)
-    assert 'data-job=""' in page and 'class="rfbands"' not in page
+    assert 'data-job=""' in page and 'aria-label="RF log radios"' not in page

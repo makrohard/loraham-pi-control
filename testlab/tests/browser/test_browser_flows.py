@@ -531,14 +531,14 @@ def test_the_radio_row_leads_to_the_stack_row_of_that_radio(page, seeded_rf_logs
     """W4: two rows of plain links: a radio pill opens that radio's own file of the same log (#75: also from the
     band-less file's page), and the stack row then offers that radio's logs — its daemon's own file first."""
     page.goto(page.lab_base + "/logs/loraham-kiss-tnc?job=rf-kiss.log", wait_until="networkidle")
-    page.locator("nav.rfbands a", has_text="r2 · 868").click()             # r2 is the lab list's 868 radio
+    page.locator("nav[aria-label='RF log radios'] a", has_text="r2 · 868").click()             # r2 is the lab list's 868 radio
     page.wait_for_url(_at("/logs/loraham-kiss-tnc", job="r2/rf-kiss.log", radio="r2"), timeout=15000)
-    assert page.locator("nav.rfbands a[aria-current=page]").inner_text() == "r2 · 868"
+    assert page.locator("nav[aria-label='RF log radios'] a[aria-current=page]").inner_text() == "r2 · 868"
     assert page.locator("nav.rfswitch a[aria-current=page]").inner_text() == "graywolf r2"
     assert page.locator("#log-card").get_attribute("data-job") == "r2/rf-kiss.log"
     page.locator("nav.rfswitch a", has_text="daemon r2").click()
     page.wait_for_url(_at("/logs/loraham-daemon", job="r2/rf-daemon.log", radio="r2"), timeout=15000)
-    assert page.locator("nav.rfbands a[aria-current=page]").inner_text() == "r2 · 868"
+    assert page.locator("nav[aria-label='RF log radios'] a[aria-current=page]").inner_text() == "r2 · 868"
     assert page.locator("nav.rfswitch a[aria-current=page]").inner_text() == "daemon r2"
     assert page.locator("#log-card").get_attribute("data-job") == "r2/rf-daemon.log"
 
