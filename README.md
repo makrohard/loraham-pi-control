@@ -216,7 +216,7 @@ sudo usermod -aG spi,gpio "$USER"                        # → applied by the re
 <!-- test:deps-manual:end -->
 
 The polkit rules (Reboot/Shut down, Network panel) and the clock packages are not in this list:
-`lhpc doctor` (or Apps → LoRaHAM Pi Control → System dependencies) prints their commands while
+`lhpc doctor` (or Apps → LoRaHAM Pi Control → Install → System dependencies) prints their commands while
 they are missing. The USB setup (udev rule, `plugdev`) is not in it either: the console's Hardware
 section gives it as one command.
 </details>

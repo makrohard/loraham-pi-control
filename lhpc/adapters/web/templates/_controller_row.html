@@ -17,17 +17,12 @@
             {% else %}<span class="pill">not self-hosted</span>{% endif %}
           </span>
           {# Same column as the stack rows (grid alignment), same call-to-action: the controller's
-             update lives in its nested Update panel rather than an Install section. #}
+             update lives in its Install › Update panel (F1). #}
         </summary>
         <div class="stackrow-body">
           <div class="stackrow-wrap">
-          {% include "_ctl_update.html" %}
-          {{ page_actions('controller', 'controller-update') }}
-          </div>
-          {# ----- Controller's own system dependencies (styled like a stack's panel) ----- #}
-          <div class="stackrow-wrap">
-          {% include "_ctl_sysdeps.html" %}
-          {{ page_actions('controller', 'controller-system-deps') }}
+          {% include "_ctl_install.html" %}
+          {{ page_actions('controller', 'controller-install') }}
           </div>
           {# ----- Global operator callsign — the OPTIONAL base-callsign fallback ----- #}
           <div class="stackrow-wrap">

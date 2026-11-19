@@ -1388,6 +1388,8 @@ def test_self_update_one_click_confirm_then_trigger(tmp_path, monkeypatch, web, 
     assert "reconnects by itself" not in r1 and "Return to the console" in r1
     assert "Update &amp; restart now" in r1
     assert "reset to upstream" not in r1                        # clean, ff-able tree -> no consent box
+    d1 = parse(r1)                                              # F1: the confirm opens Install AND its Update
+    assert d1.by_id("controller-install").has_attr("open") and d1.by_id("controller-update").has_attr("open")
     r2 = c.post("/self-update/apply", data={"_csrf": tok, "confirmed": "yes"}).get_data(as_text=True)
     assert "Return to the console" in r2 and "updating.js" not in r2   # static updating page, no reload JS
     assert triggered["overwrite"] is False
@@ -1406,6 +1408,7 @@ def test_stacks_first_load_all_main_headers_collapsed(tmp_path, web):
     # still signalled — now as the col-update link (same column as the stack rows)
     assert doc.find("a", **{"class": "update-link"}) and ">Update</a>" in body
     assert not doc.by_id("controller-row").has_attr("open")             # controller row collapsed
+    assert not doc.by_id("controller-install").has_attr("open")         # nested Install collapsed (F1)
     assert not doc.by_id("controller-update").has_attr("open")          # nested Update collapsed
     assert not re.search(r'id="stackrow-[a-z0-9-]+"[^>]*\sopen', body)  # every stack row collapsed
 

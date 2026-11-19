@@ -45,19 +45,19 @@ def test_a_link_to_a_nested_panel_leaves_it_open_when_the_zero_timer_runs_first(
 
 
 def test_a_user_click_or_key_still_drives_both_accordions_and_a_click_that_toggles_nothing_leaves_no_mark(flask_page):
-    page = _open(flask_page)
-    page.click("#controller-update > summary")                      # sub accordion, mouse: the sibling closes
-    _wait_open(page, "controller-update", True)
+    page = _open(flask_page)                                        # F1: Install is gps-row's sibling (was Update)
+    page.click("#controller-install > summary")                      # sub accordion, mouse: the sibling closes
+    _wait_open(page, "controller-install", True)
     _wait_open(page, "gps-row", False)
     page.focus("#gps-row > summary")
     page.keyboard.press("Enter")                                     # sub accordion, keyboard
     _wait_open(page, "gps-row", True)
-    _wait_open(page, "controller-update", False)
-    page.evaluate("() => { document.getElementById('controller-update').open = true; }")   # a scripted sub open
-    _wait_open(page, "controller-update", True)
+    _wait_open(page, "controller-install", False)
+    page.evaluate("() => { document.getElementById('controller-install').open = true; }")   # a scripted sub open
+    _wait_open(page, "controller-install", True)
     _frames(page)
     assert _is_open(page, "gps-row")                                 # its sibling stays open
-    page.evaluate("() => { document.getElementById('controller-update').open = false; }")
+    page.evaluate("() => { document.getElementById('controller-install').open = false; }")
     page.click("#stackrow-kiss > summary")                          # main accordion, mouse
     _wait_open(page, "stackrow-kiss", True)
     _wait_open(page, "controller-row", False)
@@ -87,3 +87,13 @@ def test_a_user_click_or_key_still_drives_both_accordions_and_a_click_that_toggl
     _wait_open(page, "stackrow-kiss", True)
     _frames(page)
     assert _is_open(page, "controller-row")
+
+
+def test_the_update_link_opens_install_and_shows_update(page):
+    # F1: the controller's Update moved under Install; a link to #controller-update (the Update row link, the
+    # self-update redirects) opens its ancestors, Install included (stacks_state.js), and shows Update.
+    page.goto(page.lab_base + "/stacks#controller-update", wait_until="load")
+    page.wait_for_function("() => document.getElementById('controller-update').open || "
+                           "document.getElementById('controller-install').open", timeout=10000)
+    assert page.evaluate("() => ['controller-row', 'controller-install'].every(i => document.getElementById(i).open)")
+    assert page.locator("#controller-update > summary").is_visible()

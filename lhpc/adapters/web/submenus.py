@@ -196,8 +196,9 @@ def controller_menus(ctx: dict) -> list[Submenu]:
     def add(mid, parent, label, template, **kw):
         out.append(Submenu(mid, parent, label, template, kw))
 
-    add("controller-update", "controller-row", "Update", "_ctl_update.html")
-    add("controller-system-deps", "controller-row", "System dependencies", "_ctl_sysdeps.html")
+    add("controller-install", "controller-row", "Install", "_ctl_install.html")           # F1: his proposal C
+    add("controller-update", "controller-install", "Update", "_ctl_update.html")
+    add("controller-system-deps", "controller-install", "System dependencies", "_ctl_sysdeps.html")
     add("operator-callsign", "controller-row", "Global operator callsign", "_ctl_callsign.html")
     if ctx.get("network_view"):
         add("controller-network", "controller-row", "Network", "_network.html")

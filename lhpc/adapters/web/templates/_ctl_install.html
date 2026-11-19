@@ -1,0 +1,17 @@
+{#- F1 (his proposal C): the controller's Install: its Update and its own system dependencies, as a stack's Install.
+    Opened with Update on the update confirm flow (`confirm`). -#}
+{% from "_menu.html" import page_actions -%}
+<details class="advcfg" id="controller-install"{% if confirm %} open{% endif %}>
+  <summary>Install</summary>
+  <div class="body">
+    <div class="stackrow-wrap">
+    {% include "_ctl_update.html" %}
+    {{ page_actions('controller', 'controller-update') }}
+    </div>
+    {# ----- Controller's own system dependencies (styled like a stack's panel) ----- #}
+    <div class="stackrow-wrap">
+    {% include "_ctl_sysdeps.html" %}
+    {{ page_actions('controller', 'controller-system-deps') }}
+    </div>
+  </div>
+</details>
