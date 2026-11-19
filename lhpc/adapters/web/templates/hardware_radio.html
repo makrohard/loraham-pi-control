@@ -3,6 +3,7 @@
 {% block title %}{{ r.rid }} — Hardware — LoRaHAM Pi Control{% endblock %}
 {% block content %}
 {% with here = r.rid ~ " — " ~ r.name %}{% include "_hw_crumbs.html" %}{% endwith %}
+<p class="pagebar"><a href="{{ url_for('hardware_view') }}">‹ The radios</a></p>
 <section class="card" id="hardware-radio" data-rid="{{ r.rid }}">
   <div class="body">
     <dl class="facts">
@@ -49,7 +50,6 @@
       {% endif %}
     </div>
     {{ detect_result(r.rid) }}
-    <p><a href="{{ url_for('hardware_view') }}">‹ The radios</a></p>
   </div>
 </section>
 {% endblock %}

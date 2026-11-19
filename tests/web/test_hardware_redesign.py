@@ -322,3 +322,15 @@ def test_detect_returns_to_each_hardware_page(web, tmp_path, monkeypatch, csrf, 
     monkeypatch.setattr(run, "detect_radio", lambda svc, rid: run.Detected("found", "r2: found", "sx127x"))
     assert _where(_post(c, csrf, "/hardware/detect", page="/hardware/radio/r2", kind="radio", rid="r2",
                         back=back)) == where
+
+
+@pytest.mark.parametrize("url", ["/hardware/radio/r2", "/hardware/add"])
+def test_the_radios_link_is_the_line_under_the_breadcrumb(web, tmp_path, monkeypatch, url):
+    # F5: "‹ The radios" moved from the card's end to a pagebar line right under the crumbline (as the menu pages'
+    # "‹ show in Stacks"); the card has no second one
+    page = _box(web, tmp_path, monkeypatch).get(url).get_data(as_text=True)
+    after = page[page.index('<div class="crumbline">'):]
+    after = after[after.index("</nav></div>") + len("</nav></div>"):].lstrip()
+    first = re.match(r"<p\b[^>]*>.*?</p>", after)                # the first element after the crumbline
+    assert first and first.group(0) == '<p class="pagebar"><a href="/hardware">‹ The radios</a></p>', after[:120]
+    assert page.count("‹ The radios") == 1

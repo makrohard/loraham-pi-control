@@ -110,3 +110,15 @@ def test_a_blocked_remove_looks_disabled(flask_page, monkeypatch):
     page.hover(sel, force=True)
     assert _style(page, sel, "backgroundColor")[0] == bg
     page.context.close()
+
+
+def test_the_radios_line_sits_between_the_breadcrumb_and_the_card(flask_page):
+    # F5: "‹ The radios" is the line under the crumbline, above the card, on the radio page and on Add Hardware.
+    page, _posts = flask_page()
+    for card in ("#hardware-radio", "#hardware-add"):
+        if card == "#hardware-add":
+            page.goto("http://127.0.0.1:9/hardware/add", wait_until="load")
+        crumb, bar, box = (page.locator(s).first.bounding_box() for s in (".crumbline", "p.pagebar", card))
+        assert page.text_content("p.pagebar").strip() == "‹ The radios"
+        assert crumb["y"] + crumb["height"] <= bar["y"] and bar["y"] + bar["height"] <= box["y"], (card, crumb, bar, box)
+    page.context.close()
