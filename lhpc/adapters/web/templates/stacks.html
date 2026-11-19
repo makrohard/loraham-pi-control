@@ -36,7 +36,6 @@
       <div class="body">{% for c in observed_conflicts %}<p class="conflict">{{ c.message }}</p>{% endfor %}</div></div>
   {% endif %}
 
-  <p class="pagebar"><a href="{{ url_for('menu_tree') }}">All menus (tree) ›</a></p>
   <div class="card">
     <div class="body stacklist">
       {% if controller %}

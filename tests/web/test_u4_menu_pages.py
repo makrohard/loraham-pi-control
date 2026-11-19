@@ -376,7 +376,7 @@ def test_the_tree_page_lists_every_level_nested_without_script(tmp_path, web):
         assert {f"stackrow-{sid}", f"stack-install-{sid}", f"stack-settings-{sid}"} <= tree[sid], sid
     tree = body[body.index('<h2 class="here">All menus</h2>'):]
     assert "<script" not in tree.split("</main>")[0] and "<details>" in tree
-    assert parse(_html(c, "/stacks")).find("a", href="/stacks/menus")             # "All menus (tree) ›"
+    assert parse(_html(c, "/stacks")).find("a", href="/stacks/menus")             # the crumbline's "All menus"
 
 
 _HEADERS_PAGES = ["/stacks", "/stacks/menus", "/stacks/meshcore/menu/stack-install-meshcore--dependencies",
@@ -432,9 +432,14 @@ def test_the_tree_page_does_not_link_itself_before_its_crumbs(tmp_path, web):
     assert 'class="crumbs-all"' not in body and main.count("All menus") == 1        # only its own heading
 
 
-def test_the_stacks_page_keeps_its_tree_link(tmp_path, web):
+def test_the_stacks_page_has_no_second_tree_line(tmp_path, web):
+    # F13, his "Delete second line" (supersedes his earlier "Nah: it stays"): the pagebar "All menus (tree) ›" is
+    # gone; the crumbline's "All menus" is the page's one link to the tree
     c, _svc = _client(web, tmp_path)
-    assert "All menus (tree) ›</a>" in _html(c, "/stacks")                              # his "Nah": it stays
+    body = _html(c, "/stacks")
+    doc = parse(body)
+    assert "All menus (tree)" not in body and doc.find("p", class_="pagebar") == []
+    assert [a["class"] for a in doc.find("a", href="/stacks/menus")] == ["crumbs-all"]
 
 
 def test_descriptor_chain_and_children_follow_the_parents():
