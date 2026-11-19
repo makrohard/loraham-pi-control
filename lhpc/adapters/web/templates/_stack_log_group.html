@@ -1,7 +1,7 @@
 {#- UI-REORG s6: one group of a stack's Logs (submenus.log_groups): "Per radio" (the selected radio's program logs and
     RF log) or "Single" (logs without a radio). `grp` = (suffix, label, entries); requires `g`. F9: the radio switch
     stands in Per radio only (here, so inline under Logs and on this level's own page alike); its links come back to
-    this group (#logs-<sid>--per-radio). -#}
+    this group: #logs-<sid>--per-radio on the Stacks page, the group's own page (opened there) from a menu page. -#}
 {% from "_menu.html" import page_actions -%}
 {% from "_radio_switch.html" import radio_switch -%}
 <details class="advcfg" id="logs-{{ g.stack.id }}--{{ grp[0] }}">
@@ -9,12 +9,13 @@
   <div class="body">
     {% if grp[0] == "per-radio" %}
       {% set _to = '#logs-' ~ g.stack.id ~ '--per-radio' %}
+      {% set _grp = 'logs-' ~ g.stack.id ~ '--per-radio' %}{# B1: a menu page's link opens this group's own page #}
       {% set _ch = [] %}
       {% for c in g.view.radio_choices or () %}{% set _ = _ch.append({'label': c.label, 'selected': c.sel, 'disabled': c.disabled, 'title': c.title,
-           'href': (url_for('menu_page', owner=menu_owner, mid=menu_id, radio=c.radio) if menu_id else url_for('stacks_overview', radio=c.radio, open=g.stack.id)) ~ _to}) %}{% endfor %}
+           'href': (url_for('menu_page', owner=menu_owner, mid=_grp, radio=c.radio) if menu_id else url_for('stacks_overview', radio=c.radio, open=g.stack.id)) ~ _to}) %}{% endfor %}
       {% if not _ch and g.view.live_radios and g.view.live_radios | length > 1 %}{# the daemon: its radios #}
         {% for rid, _name, band in g.view.live_radios %}{% set _ = _ch.append({'label': rid ~ ' · ' ~ band, 'selected': g.view.radios and rid == g.view.radios[0].rid,
-             'href': (url_for('menu_page', owner=menu_owner, mid=menu_id, radio=rid) if menu_id else url_for('stacks_overview', radio=rid, open=g.stack.id)) ~ _to}) %}{% endfor %}
+             'href': (url_for('menu_page', owner=menu_owner, mid=_grp, radio=rid) if menu_id else url_for('stacks_overview', radio=rid, open=g.stack.id)) ~ _to}) %}{% endfor %}
       {% endif %}
         {% if _ch %}{{ radio_switch(_ch) }}{% endif %}
     {% endif %}

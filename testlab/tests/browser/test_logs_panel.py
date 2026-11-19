@@ -123,3 +123,16 @@ def test_an_empty_log_and_a_failed_fetch_say_so(page):
     page.click("#log-meshcom-bridge .logpanel-reload")
     _status(page, "#log-meshcom-bridge", "could not load the log (reload or open the page)")
     assert page.text_content("#log-meshcom-bridge .logpanel-text") == ""
+
+
+def test_a_radio_switch_click_on_the_logs_page_lands_with_the_switch_shown(page):
+    # F9 B1: on the Logs level's page the switch sits in the closed Per radio group; a click on one of its radios
+    # lands on a page where Per radio (with the switch just used) is open, not hidden in a closed group.
+    page.goto(page.lab_base + "/stacks/meshcom/menu/logs-meshcom", wait_until="load")
+    page.click("#logs-meshcom--per-radio > summary")
+    links = page.locator("#logs-meshcom--per-radio nav.rswitch a")
+    assert links.count() >= 1
+    links.last.click()
+    page.wait_for_load_state("load")
+    assert page.evaluate("() => document.getElementById('logs-meshcom--per-radio').open")
+    assert page.locator("#logs-meshcom--per-radio nav.rswitch").is_visible()

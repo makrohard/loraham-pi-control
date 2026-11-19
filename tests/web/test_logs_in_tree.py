@@ -487,6 +487,8 @@ def test_the_radio_switch_is_inside_per_radio_inline_and_on_the_groups_page(tmp_
         for h in hrefs:
             path, query = _q(h)
             assert h.endswith(f"#logs-{sid}--per-radio") and query.get("radio") in ("r1", "r2"), (url, h)
+            # B1: from a menu page the link opens the group's own page (Per radio opened there, the switch shown)
+            assert path == ("/stacks" if "/body" in url else f"/stacks/{sid}/menu/logs-{sid}--per-radio"), (url, h)
         assert {_q(h)[1]["radio"] for h in hrefs} | {"r2"} == {"r1", "r2"}, (url, hrefs)
 
 
