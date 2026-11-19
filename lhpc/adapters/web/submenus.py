@@ -40,6 +40,14 @@ _PROGRAM_LOG, _RF_LOG = "log-", "rflog-"
 
 
 # DAEMON-MONITOR-TREE: a radio's live daemon views, each a level under its "Monitor · rN" (his words), in page order
+def daemon_label(ready, reachable, radio_state) -> str:
+    """UI-REORG s9: the daemon pill's text, the ONE readiness -> label mapping (the badge macro renders it, the
+    /api/daemon/<rid> answer carries it for dash.js)."""
+    if ready:
+        return "daemon READY"
+    return f"daemon ({radio_state or 'NOT READY'})" if reachable else "daemon offline"
+
+
 DAEMON_VIEWS = (("status", "Get STATUS"), ("stats", "Get STATS"), ("socket", "View Socket"), ("rxtx", "RX/TX View"))
 
 

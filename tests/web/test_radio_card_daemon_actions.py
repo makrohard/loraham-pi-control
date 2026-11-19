@@ -208,7 +208,7 @@ def test_a_running_daemon_keeps_its_card_while_its_stick_is_unplugged(tmp_path, 
     fs = FakeSystem(unix_replies={"/tmp/loraconf-r2.sock": _READY})
     doc = parse(web(system=fs.system).get("/").get_data(as_text=True))
     card = doc.find("div", class_="radio-col", **{"data-radio-rid": "r2"})[0]
-    assert doc.within(card).by_id("rd-badge-r2").text.strip() == "daemon usable (READY)"
+    assert doc.within(card).by_id("rd-badge-r2").text.strip() == "daemon READY"
     assert _daemon_forms(doc, card) == {("stop", "daemon@r2", None), ("restart", "daemon@r2", None)}   # its instance
 
 
@@ -245,10 +245,23 @@ def test_a_cards_daemon_log_and_occupied_badge_are_its_radios(tmp_path, monkeypa
     c = web(system=fs.system)
     doc = parse(c.get("/").get_data(as_text=True))
     card = doc.find("div", class_="radio-col", **{"data-radio-rid": "r2"})[0]
-    assert doc.within(card).by_id("rd-badge-r2").text.strip() == "daemon occupied (FAILED)"
+    assert doc.within(card).by_id("rd-badge-r2").text.strip() == "daemon (FAILED)"
     href = next(a["href"] for a in doc.within(card).find("a") if a.text.strip() == "Daemon log")
     assert href == "/logs/loraham-daemon?job=start-loraham-daemon-868-r2.log"
     assert c.get(href).status_code == 200
+
+
+def test_the_daemon_pill_text_is_one_mapping_for_the_page_and_its_poll(tmp_path, monkeypatch, web):
+    # UI-REORG s9: ONE readiness -> label mapping; the server's badge and the /api/daemon/<rid> label dash.js shows
+    # are the same text in every state.
+    _box(tmp_path)
+    monkeypatch.setattr(ControllerService, "_daemon_installed", lambda self, dstat: True)
+    for reply, label in ((_READY, "daemon READY"), (_READY.replace(b"RADIO=READY", b"RADIO=FAILED"), "daemon (FAILED)"),
+                         (_READY.replace(b"RADIO=READY ", b""), "daemon (NOT READY)"), (None, "daemon offline")):
+        fs = FakeSystem(unix_replies={"/tmp/loraconf-r2.sock": reply} if reply else {})
+        c = web(system=fs.system)
+        badge = parse(c.get("/").get_data(as_text=True)).by_id("rd-badge-r2").text.strip()
+        assert (badge, c.get("/api/daemon/r2").get_json()["label"]) == (label, label)
 
 
 def test_the_hardware_list_shows_each_radios_daemon_badge_as_home_does(tmp_path, web):
@@ -260,7 +273,7 @@ def test_the_hardware_list_shows_each_radios_daemon_badge_as_home_does(tmp_path,
     rows = {r["data-rid"]: r for r in doc.find("tr", class_="hwrow")}
     badge = {rid: doc.within(row).find("span", class_="badge")[0] for rid, row in rows.items()}
     assert {rid: (b.text.strip(), b.classes) for rid, b in badge.items()} == {
-        "r1": ("daemon offline", {"badge", "badge-stopped"}), "r2": ("daemon occupied (FAILED)", {"badge", "badge-degraded"})}
+        "r1": ("daemon offline", {"badge", "badge-stopped"}), "r2": ("daemon (FAILED)", {"badge", "badge-degraded"})}
     home = parse(c.get("/").get_data(as_text=True))
     assert home.by_id("rd-badge-r2").text.strip() == badge["r2"].text.strip()             # the same rendering
 
@@ -270,8 +283,8 @@ def test_a_band_card_without_a_radio_list_shows_its_daemons_badge(tmp_path, monk
     # G1-C34 (handler DEC): Home's band card (no hardware list, so no radio card) renders the same badge from the band's
     # daemon view: a READY daemon is usable, a reachable one whose radio failed is occupied with that state.
     monkeypatch.setattr(ControllerService, "_daemon_installed", lambda self, dstat: True)
-    for state, label, cls in ((b"READY", "daemon usable (READY)", "badge-running"),
-                              (b"FAILED", "daemon occupied (FAILED)", "badge-degraded")):
+    for state, label, cls in ((b"READY", "daemon READY", "badge-running"),
+                              (b"FAILED", "daemon (FAILED)", "badge-degraded")):
         fs = FakeSystem(unix_replies={"/tmp/loraconf433.sock": b"STATUS RADIO=" + state + b" TX=0 TXMODE=MANAGED\n"})
         badge = parse(web(system=fs.system).get("/").get_data(as_text=True)).by_id("rd-badge-433")
         assert (badge.text.strip(), cls in badge.classes) == (label, True)

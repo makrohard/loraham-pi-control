@@ -13,7 +13,7 @@ import re
 
 RIDS = {"r1": "433", "r2": "868"}                       # the lab's radios: one card each
 DAEMON = re.compile(r".*/api/daemon/(r[0-9]+)$")
-LIVE = {"reachable": True, "ready": True, "radio_state": "READY", "channel": {}, "status": {}, "stats": {}, "feed": []}
+LIVE = {"reachable": True, "ready": True, "radio_state": "READY", "label": "daemon READY", "channel": {}, "status": {}, "stats": {}, "feed": []}
 
 
 def _open(page, answer, hidden=False, path="/"):
@@ -56,7 +56,7 @@ def _wait_rendered(page):
     """dash.js has rendered a daemon answer on every radio's card (the server renders other text)."""
     page.wait_for_function(
         "rids => rids.every(r => document.getElementById('rd-badge-' + r).textContent"
-        " === 'daemon usable (READY)')", arg=list(RIDS), timeout=15000)
+        " === 'daemon READY')", arg=list(RIDS), timeout=15000)
 
 
 def _set_hidden(page, hidden):
@@ -132,12 +132,12 @@ def test_a_failed_poll_is_retried_after_the_slow_interval_not_the_normal_one(pag
 
 
 def test_a_reachable_daemon_whose_radio_failed_reads_occupied_not_usable(page):
-    """G1-C28 N1: the badge follows the radio's readiness, as the server renders it; reachability alone is not usable."""
-    failed = dict(LIVE, ready=False, radio_state="FAILED")
+    """G1-C28 N1 / UI-REORG s9: the badge shows the server's label (its ONE readiness -> label mapping), not reachability."""
+    failed = dict(LIVE, ready=False, radio_state="FAILED", label="daemon (FAILED)")
     _open(page, lambda route, band: route.fulfill(
         status=200, content_type="application/json", body=json.dumps(dict(failed, band=band))))
     page.wait_for_function(
-        "rids => rids.every(r => document.getElementById('rd-badge-' + r).textContent === 'daemon occupied (FAILED)')",
+        "rids => rids.every(r => document.getElementById('rd-badge-' + r).textContent === 'daemon (FAILED)')",
         arg=list(RIDS), timeout=15000)
     assert all(page.get_attribute(f"#rd-badge-{rid}", "class") == "badge badge-degraded" for rid in RIDS)
 
@@ -146,7 +146,7 @@ def test_a_reachable_daemon_whose_radio_failed_reads_occupied_not_usable(page):
 #     dash.js's own poll) ---------------------------------------------------------------------------------------
 
 _READY = b"STATUS RADIO=READY ID=r3 BOUND=- TXMODE=MANAGED\n"
-_POLL = {"reachable": True, "ready": True, "channel": {"LIVERSSI": "-115.00"}, "status": {"RADIO": "READY"}}
+_POLL = {"reachable": True, "ready": True, "label": "daemon READY", "channel": {"LIVERSSI": "-115.00"}, "status": {"RADIO": "READY"}}
 
 _CELL = """rid => { const td = document.querySelector('#monitor-' + rid + ' .monrssi td');
   const sp = td.querySelector('span'), lh = parseFloat(getComputedStyle(sp).lineHeight) || 20;
@@ -182,7 +182,7 @@ def _wait_list_rendered(page):
     page.wait_for_function(
         # a lazily loaded body has no badge yet: a throwing predicate is not retried, so a missing badge reads ""
         "rids => rids.every(r => (document.getElementById('hw-badge-' + r) || {}).textContent"
-        " === 'daemon usable (READY)')",
+        " === 'daemon READY')",
         arg=list(RIDS), timeout=15000)
 
 
@@ -240,10 +240,10 @@ def test_a_list_badge_follows_a_later_change_of_its_daemon(page):
     the next poll each time (the server rendered the page once)."""
     up = [True]
     seen, settled = _open(page, lambda route, band: _live(route, band) if up[0] else route.fulfill(
-        status=200, content_type="application/json", body=json.dumps({"reachable": False, "ready": False})),
+        status=200, content_type="application/json", body=json.dumps({"reachable": False, "ready": False, "label": "daemon offline"})),
         path="/hardware")
     _wait_list_rendered(page)
-    for n, (state, text, cls) in enumerate(((False, "daemon offline", "stopped"), (True, "daemon usable (READY)",
+    for n, (state, text, cls) in enumerate(((False, "daemon offline", "stopped"), (True, "daemon READY",
                                                                                    "running")), 2):
         up[0] = state
         page.clock.run_for(3500)

@@ -40,9 +40,7 @@
           if (b) badges.push(b);
         });
         badges.forEach(function (badge) {
-          // G1-C28 N1: the server's labels, from the radio's readiness, not reachability alone
-          var text = d.ready ? "daemon usable (READY)"
-            : d.reachable ? "daemon occupied (" + (d.radio_state || "not READY") + ")" : "daemon offline";
+          var text = d.label;   // UI-REORG s9: the server's ONE readiness -> label mapping
           if (badge.textContent !== text) badge.textContent = text;   // aria-live: announce changes only
           badge.className = "badge badge-" + (d.ready ? "running" : (d.reachable ? "degraded" : "stopped"))
             + (badge.classList.contains("dbadge") ? " dbadge" : "");

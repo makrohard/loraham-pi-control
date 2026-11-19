@@ -238,5 +238,5 @@
    same labels): `d` has ready, reachable and radio_state. #}
 {#- UI-REORG s4: `rid` marks a Monitor/Live block's badge (class dbadge + data-rid, no id): dash.js polls that radio -#}
 {% macro daemon_badge(d, id="", live=False, rid="") %}<span class="badge badge-{{ 'running' if d.ready else ('degraded' if d.reachable else 'stopped') }}{{ ' dbadge' if rid }}"{% if id %} id="{{ id }}"{% endif %}{% if rid %} data-rid="{{ rid }}"{% endif %}{% if live %} aria-live="polite"{% endif %}>
-  {%- if d.ready %}daemon usable (READY){% elif d.reachable %}daemon occupied ({{ d.radio_state or 'not READY' }}){% else %}daemon offline{% endif %}</span>
+  {{- daemon_label(d.ready, d.reachable, d.radio_state) }}</span>
 {%- endmacro %}

@@ -1509,6 +1509,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     app.jinja_env.globals["log_groups"] = _submenus.log_groups
     app.jinja_env.globals["log_in_tree"] = _submenus.log_in_tree
     app.jinja_env.globals["daemon_views"] = _submenus.daemon_views
+    app.jinja_env.globals["daemon_label"] = _submenus.daemon_label
     app.jinja_env.globals["params_in_settings"] = _submenus.params_in_settings
     app.jinja_env.globals["with_radio"] = _submenus.with_radio
     app.jinja_env.globals["log_panels"] = _submenus.LOG_PANELS
@@ -2057,7 +2058,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         view = service.daemon_view(band, rid)
         channel = service.daemon_channel(band, rid) if view.reachable else {}
         return jsonify(rid=rid, band=band, reachable=view.reachable, ready=view.ready,
-                       radio_state=view.radio_state, status=view.status,
+                       radio_state=view.radio_state,
+                       label=_submenus.daemon_label(view.ready, view.reachable, view.radio_state),
+                       status=view.status,
                        stats=view.stats, channel=channel,
                        feed=service.daemon_feed(band, 40, rid))
 
