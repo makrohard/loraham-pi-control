@@ -4,6 +4,7 @@ the child printed before. It runs without core dumps. A stand-in replaces the `l
 from __future__ import annotations
 
 import os
+import re
 import resource
 import select
 import signal
@@ -50,6 +51,38 @@ def test_a_hang_after_output_keeps_that_output_and_runs_without_core_dumps(tmp_p
         resource.setrlimit(resource.RLIMIT_CORE, (soft, hard))
     assert "stdout: PARTIAL-OUT core-limit 0\n" in str(hang.value), str(hang.value)
     assert not list(tmp_path.glob("core*"))
+
+
+@pytest.mark.wallclock("a real child hangs past run_lab's timeout")
+def test_a_hang_in_the_kernel_names_where_the_lab_waits(tmp_path, monkeypatch):
+    """SLOWBUILD-RESET-ABORT: a lab that had done its work hung in its exit, where no Python frame is left, so the
+    stack dump named nothing. The error now also keeps where the lab waited in the kernel when its time ran out,
+    read before the abort: its State, its wait channel and its kernel stack (or why /proc does not give it). That
+    is the lab's, not that of a child it started."""
+    _stand_in(tmp_path, monkeypatch, "import os, subprocess\n"
+              "kid = subprocess.Popen(['sleep', '60'])\n"
+              f"open({str(tmp_path / 'pids')!r}, 'w').write(f'{{os.getpid()}} {{kid.pid}}')\n"
+              "r, w = os.pipe()\nos.read(r, 1)\n")                    # in the kernel: a pipe no one writes to
+    with pytest.raises(RuntimeError) as hang:
+        testing.run_lab({}, "reset", timeout=1)
+    lab, kid = (tmp_path / "pids").read_text().split()
+    text = str(hang.value)
+    at = re.search(r"^lab at the timeout: pid (\d+) State: (.+); wchan: (.+); stack: (.+)$", text, re.MULTILINE)
+    assert at, text
+    assert at.group(1) == lab != kid, text
+    assert at.group(2) == "S (sleeping)", text                         # waiting, not running
+    assert "pipe" in at.group(3), text                                 # the kernel function it waits in
+    assert text.index("lab at the timeout:") < text.index("stdout: "), text
+
+
+@pytest.mark.wallclock("a real process stands in for a keeper with no descendant; killed at once")
+def test_a_keeper_with_no_lab_left_says_so():
+    """The lab already ended and only its keeper is left: the capture says that, it names no other process."""
+    with subprocess.Popen(["sleep", "60"]) as alone:        # a process with no descendant
+        try:
+            assert testing._lab_at_timeout(alone.pid) == "lab at the timeout: no lab process left under the keeper"
+        finally:
+            alone.kill()
 
 
 def _ended(pid: int, timeout: float = 5.0) -> bool:
