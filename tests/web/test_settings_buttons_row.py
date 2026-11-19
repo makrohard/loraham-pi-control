@@ -47,9 +47,9 @@ def _row(html, sid):
     ("/stacks/chat/body?radio=r1", "chat"),
     ("/stacks/chat/menu/stack-settings-chat?radio=r1", "chat"),
     ("/stacks/chat/menu/stack-settings-chat", "chat"),
-    ("/stacks/daemon/body?radio=r1", "daemon"),
-    ("/stacks/daemon/menu/stack-settings-daemon?radio=r1", "daemon"),     # c3: the daemon Settings body (was --repository)
-])
+    ("/stacks/meshcore/body?radio=r1", "meshcore"),
+    ("/stacks/meshcore/menu/stack-settings-meshcore?radio=r1", "meshcore"),
+])                                         # F10: the daemon has no form and no row (test_only_a_stack_with_rows...)
 def test_save_and_reset_stand_in_one_button_row(box, path, sid):
     c, _tmp = box
     r = c.get(path)
@@ -74,3 +74,37 @@ def test_the_save_button_submits_the_config_form(box):
     assert r.status_code in (302, 303), r.status_code
     saved = tomllib.loads((tmp_path / "config" / "stacks" / "chat@r1.toml").read_text())
     assert saved.get("file_call") == "DL9TST", saved
+
+
+def test_only_a_stack_with_rows_or_ticks_has_the_form_and_its_buttons(box):
+    # F10 ("delete them, if unused"): the daemon's form is empty (no config rows, no optional ticks), so its Settings
+    # draw no form and no Save / Reset row, inline and on its own page; every other stack keeps both (their only
+    # web save); the "Run an optional component now" block stays outside the guard, where a stack has one.
+    c, _tmp = box
+    shown = set()
+    for sid in [s.id for s in ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=_tmp)).stacks()]:
+        for path in (f"/stacks/{sid}/body?radio=r1", f"/stacks/{sid}/menu/stack-settings-{sid}?radio=r1"):
+            r = c.get(path)
+            assert r.status_code == 200, (path, r.status_code)
+            html = r.get_data(as_text=True)
+            if sid == "daemon":
+                assert f'id="cfg-form-{sid}"' not in html and "Save configuration" not in html, path
+                assert f"/stacks/{sid}/config/reset" not in html, path       # its radio-params Reset stays
+            else:
+                _row(html, sid)
+            if "Run an optional component now" in html:
+                shown.add(sid)
+    assert shown == {"kiss", "meshcore", "meshtastic", "reticulum"}, shown        # unchanged by the guard
+
+
+def test_a_stack_with_optional_ticks_only_keeps_the_form(box, monkeypatch):
+    # F10: the guard is "rows OR ticks": a stack whose only saved fields are its optional auto-start ticks keeps the
+    # form and its buttons (the KISS stack with its config rows taken away)
+    real = ControllerService.config_param_groups
+    monkeypatch.setattr(ControllerService, "config_param_groups",
+                        lambda self, target, *a, **k: [] if target == "kiss" else real(self, target, *a, **k))
+    c, _tmp = box
+    html = c.get("/stacks/kiss/menu/stack-settings-kiss?radio=r1").get_data(as_text=True)
+    doc, _row_, form = _row(html, "kiss")
+    assert [i["name"] for i in doc.within(form).find("input") if i.attrs.get("type") == "checkbox"] == \
+        ["c_autostart_loraham-kiss-serial"]
