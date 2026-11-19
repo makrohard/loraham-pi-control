@@ -440,7 +440,7 @@ A default install starts the WebGUI at boot, and the stacks running before a reb
 
 ### Updating
 
-**Apps → LoRaHAM Pi Control → Update → Check for updates → Update now**, or
+**Apps → LoRaHAM Pi Control → Install → Update → Check for updates → Update now**, or
 `lhpc self-update --apply`. Backup and mechanism: [self-update](docs/deployment.md#self-update).
 
 ## Troubleshooting
