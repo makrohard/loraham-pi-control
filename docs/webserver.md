@@ -171,7 +171,7 @@ lhpc webserver apply
   port, or leave 1024..65535, is refused and names the other owner. The MeshCom bridge's port 0 is
   refused too: it must equal the firmware's `XR_PORT`.
 
-**Webserver and mTLS proxy → Stacks Web Proxies** applies one policy (access, scheme, access mode, CIDRs) to
+**Webserver and mTLS proxy → Web Proxies All Stacks** applies one policy (access, scheme, access mode, CIDRs) to
 **every** page in one confirmed action (**LHPC Webserver** is the console's own). Existing ports
 are kept; a page without one gets its suggested default. The whole set is validated first, and
 any problem (confirmation, CIDRs, http + cert-auth, a port that cannot be assigned) refuses the

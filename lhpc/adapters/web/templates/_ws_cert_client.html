@@ -1,0 +1,71 @@
+{% from "_macros.html" import cmdbox -%}
+{#- UI-REORG s7 (L78): Certificates › Client certificate: issue, the remote-session warning, the .p12 fetch
+    commands, the certificates table (Revoke, Download .p12). -#}
+<details class="advcfg" id="webserver-row--certificates--client">
+    <summary>Client certificate</summary>
+    <section class="cfgsec">
+      <form method="post" action="{{ url_for('webserver_cert') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+        <input type="hidden" name="op" value="issue">
+        <p class="setting"><label for="ws-issue-label">Issue client cert</label>
+          <input id="ws-issue-label" name="label" placeholder="laptop">
+          <span class="muted">Device label; prints a one-time bundle passphrase</span></p>
+        <p class="setting"><label for="ws-issue-clock">Accept unverified clock</label>
+          <input id="ws-issue-clock" type="checkbox" name="accept_unverified_clock" value="1">
+          <span class="muted">Only if this box's clock is not synchronised. The certificate will be
+            dated from it. Not the same as confirming a destructive change.</span></p>
+        <button type="submit">Issue</button>
+      </form>
+      {% if not loopback %}
+        <p class="depnote depnote-warn">Remote session: a NEW private-key bundle can be downloaded
+          only from a loopback session. You may still manage existing certificates.</p>
+      {% endif %}
+      {% if ws_fetch and not ws_fetch.p12 and certs %}
+        {# An issued cert with no STORED export rendered nothing here, and
+           "nothing" reads as broken. Say why, and what creates a fetchable bundle. #}
+        <p class="muted">No stored <code>.p12</code> export to fetch — a bundle exists only until
+          it is downloaded/discarded. <em>Issue</em> a new certificate to get a fetch command
+          here; an existing label is rotated from the CLI (<code>lhpc webserver cert reissue</code>).</p>
+      {% endif %}
+      {% if ws_fetch and ws_fetch.p12 %}
+        {# Fetch an issued USER CERT (.p12) to a Linux PC over ssh — the sanctioned remote path
+           (the browser download above stays loopback-only). Import asks for the one-time
+           passphrase printed when the certificate was issued. #}
+        <p class="muted">Fetch an issued client certificate (.p12) to your PC — the import asks
+          for the one-time passphrase from the issue step:</p>
+        {% for label, cmd in ws_fetch.p12 | dictsort %}
+          {{ cmdbox('ws-fetch-p12-' ~ label, cmd) }}
+        {% endfor %}
+      {% endif %}
+      <table class="certs">
+        <tr><th>Label</th><th>State</th><th>Serial</th><th>Expires</th><th>Actions</th></tr>
+        {% for c in certs %}
+        <tr>
+          <td>{{ c.label }}</td><td>{{ c.state }}</td>
+          <td><code>{{ c.serial[:16] }}</code></td><td>{{ c.not_after }}{% if c.expiry_mark %} <strong>{{ c.expiry_mark }}</strong>{% endif %}</td>
+          <td>
+            {% if c.state == 'active' %}
+              <form method="post" action="{{ url_for('webserver_cert') }}" class="inline">
+                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+                <input type="hidden" name="op" value="revoke">
+                <input type="hidden" name="label" value="{{ c.label }}">
+                <input name="confirm_phrase" placeholder="type '{{ c.label }}'" size="10" autocomplete="off">
+                {# Revocation rebuilds the CRL from this clock, so it is gated like issuance. The
+                   typed label confirms the DESTRUCTION; this confirms the CLOCK. #}
+                <label class="muted" title="Only if this box's clock is not synchronised — the CRL
+                  will be dated from it"><input type="checkbox" name="accept_unverified_clock"
+                  value="1"> unverified clock</label>
+                <button type="submit">Revoke</button>
+              </form>
+              {% if c.export and loopback %}
+                <a href="{{ url_for('webserver_cert_download', label=c.label) }}">Download .p12</a>
+              {% endif %}
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">(no client certificates)</td></tr>
+        {% endfor %}
+      </table>
+    </section>
+  </details>

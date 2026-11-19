@@ -1,0 +1,27 @@
+{% from "_macros.html" import cmdbox -%}
+{#- UI-REORG s7 (L78): Certificates › PKI: initialize / recreate the PKI; the CA (fetch command, Download ca.crt). -#}
+<details class="advcfg" id="webserver-row--certificates--pki">
+    <summary>PKI</summary>
+    <section class="cfgsec">
+      <form method="post" action="{{ url_for('webserver_init') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+        <p class="setting"><label for="ws-init-confirm">Initialize PKI</label>
+          <input id="ws-init-confirm" name="confirm_phrase" autocomplete="off">
+          <span class="muted">To RE-create existing CAs (destructive) type <code>recreate</code></span></p>
+          <p class="muted">Needs no clock: if this box's clock is not yet verified, the certificates get a fixed provisional validity (not dates from the clock); such a server certificate is over the Apple 825-day cap while it is provisional.</p>
+        <button type="submit">Initialize / recreate PKI</button>
+      </form>
+      {% if ws_fetch and ws_fetch.ca and mon.pki.server_ca.present %}
+        {# Fetch the SERVER TRUST to a Linux PC — the address is the one THIS session reached
+           the console at (10.42.0.1 in AP mode), so the command works as pasted. #}
+        <p class="muted">Fetch the server trust (CA) to your PC, then import it as a trusted
+          certificate:</p>
+        {{ cmdbox('ws-fetch-ca', ws_fetch.ca) }}
+      {% endif %}
+      {% if mon.pki.server_ca.present %}
+        {# Public material, so a plain download is safe — and it is the path a PHONE can use. #}
+        <p class="muted"><a href="{{ url_for('webserver_ca_download') }}" download>Download
+          ca.crt</a> — for browsers and phones (public certificate, contains no key).</p>
+      {% endif %}
+    </section>
+  </details>

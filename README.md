@@ -303,9 +303,9 @@ include `10.42.0.0/24` and `10.42.0.1` throughout. Set the date first (`timedate
 wrong: `sudo date -u -s 'YYYY-MM-DD HH:MM' && sudo fake-hwclock save`); while the clock is
 unsynchronised, tick **Accept unverified clock** ([clock gate](docs/webserver.md#the-clock-gate)).
 
-1. **Apps → LoRaHAM Pi Control → Webserver and mTLS proxy → Certificates → Issue client cert**
+1. **Apps → LoRaHAM Pi Control → Webserver and mTLS proxy → Certificates → Client certificate → Issue client cert**
    — copy the one-time passphrase shown.
-2. **… → Stacks Web Proxies** — one policy for every stack UI (Access `lan`, Scheme `https`, Access
+2. **… → Web Proxies All Stacks** — one policy for every stack UI (Access `lan`, Scheme `https`, Access
    mode `local-open-remote-auth`, Allowed CIDRs, Confirm `enable-remote`); it stays empty until the
    stacks are installed (step 9).
 3. **… → LHPC Webserver** — the same values, with **Bind** `0.0.0.0`; last, because it is the page you

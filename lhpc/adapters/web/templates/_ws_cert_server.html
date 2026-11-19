@@ -1,0 +1,13 @@
+{#- UI-REORG s7 (L78): Certificates › Server certificate: renew it. -#}
+<details class="advcfg" id="webserver-row--certificates--server">
+    <summary>Server certificate</summary>
+    <section class="cfgsec">
+      <form method="post" action="{{ url_for('webserver_tls_renew') }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
+          <p class="setting"><label for="ws-tls-clock">Accept unverified clock</label>
+            <input id="ws-tls-clock" type="checkbox" name="accept_unverified_clock" value="1">
+            <span class="muted">Only if this box's clock is not synchronised. Certificates will be dated from it. Not the same as confirming a destructive change.</span></p>
+        <button type="submit">Renew server certificate</button>
+      </form>
+    </section>
+  </details>

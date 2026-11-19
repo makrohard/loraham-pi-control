@@ -29,11 +29,6 @@
           {% include "_ctl_sysdeps.html" %}
           {{ page_actions('controller', 'controller-system-deps') }}
           </div>
-          {# ----- Backup secrets: two copy commands, nothing executed here (A5) ----- #}
-          <div class="stackrow-wrap">
-          {% include "_ctl_secrets.html" %}
-          {{ page_actions('controller', 'controller-backup-secrets') }}
-          </div>
           {# ----- Global operator callsign — the OPTIONAL base-callsign fallback ----- #}
           <div class="stackrow-wrap">
           {% include "_ctl_callsign.html" %}
@@ -67,6 +62,11 @@
           {{ page_actions('controller', 'gps-row') }}
           </div>
           {% endif %}
+          {# ----- Backup secrets: two copy commands, nothing executed here (A5); UI-REORG s7: just before Logs ----- #}
+          <div class="stackrow-wrap">
+          {% include "_ctl_secrets.html" %}
+          {{ page_actions('controller', 'controller-backup-secrets') }}
+          </div>
           {# LOGS-IN-TREE: the controller's own logs (web | self-update | boot-restore), the row's last entry #}
           <div class="stackrow-wrap">
           {% with lp = log_panels['controller-logs'] %}{% include "_log_panel.html" %}{% endwith %}

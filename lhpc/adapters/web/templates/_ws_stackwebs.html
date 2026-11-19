@@ -1,7 +1,7 @@
 {% from "_macros.html" import panel_banner -%}
 {% set wsg_results = panel_results('ws-stackwebs') -%}
 <details class="advcfg" id="ws-stackwebs"{% if wsg_open or wsg_results %} open{% endif %}>
-    <summary>Stacks Web Proxies</summary>
+    <summary>Web Proxies All Stacks</summary>
     {{ panel_banner(wsg_results) }}
     <section class="cfgsec">
       <p class="muted">Applies the selected policy to <strong>every</strong> stack web proxy below.

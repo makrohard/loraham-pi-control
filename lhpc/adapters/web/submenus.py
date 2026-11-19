@@ -172,7 +172,6 @@ def controller_menus(ctx: dict) -> list[Submenu]:
 
     add("controller-update", "controller-row", "Update", "_ctl_update.html")
     add("controller-system-deps", "controller-row", "System dependencies", "_ctl_sysdeps.html")
-    add("controller-backup-secrets", "controller-row", "Backup secrets", "_ctl_secrets.html")
     add("operator-callsign", "controller-row", "Global operator callsign", "_ctl_callsign.html")
     if ctx.get("network_view"):
         add("controller-network", "controller-row", "Network", "_network.html")
@@ -181,9 +180,11 @@ def controller_menus(ctx: dict) -> list[Submenu]:
               "loopback": ctx["ws_loopback"]}
         add("webserver-row", "controller-row", "Webserver and mTLS proxy", "_webserver.html", **ws)
         add("webserver-row--lhpc-webgui", "webserver-row", "LHPC Webserver", "_ws_console.html", **ws)
-        add("ws-stackwebs", "webserver-row", "Stacks Web Proxies", "_ws_stackwebs.html", **ws)
+        add("ws-stackwebs", "webserver-row", "Web Proxies All Stacks", "_ws_stackwebs.html", **ws)
         add("webserver-row--monitor", "webserver-row", "Monitor", "_ws_monitor.html", **ws)
         add("webserver-row--certificates", "webserver-row", "Certificates", "_ws_certs.html", **ws)
+        for part, label in (("pki", "PKI"), ("server", "Server certificate"), ("client", "Client certificate")):   # L78
+            add(f"webserver-row--certificates--{part}", "webserver-row--certificates", label, f"_ws_cert_{part}.html", **ws)
     if ctx.get("firewall_view"):
         add("firewall-row", "controller-row", "Firewall", "_firewall.html")
         add("firewall-row--policy", "firewall-row", "Policy", "_fw_policy.html")
@@ -199,6 +200,8 @@ def controller_menus(ctx: dict) -> list[Submenu]:
         add("webserver-row--logs", "webserver-row", "Logs", "_log_panel.html", lp=LOG_PANELS["webserver-row--logs"])
     if ctx.get("firewall_view"):
         add("firewall-row--log", "firewall-row", "Log", "_log_panel.html", lp=LOG_PANELS["firewall-row--log"])
+    # UI-REORG s7: Backup secrets just before the controller's Logs
+    add("controller-backup-secrets", "controller-row", "Backup secrets", "_ctl_secrets.html")
     add("controller-logs", "controller-row", "Logs", "_log_panel.html", lp=LOG_PANELS["controller-logs"])
     return out
 

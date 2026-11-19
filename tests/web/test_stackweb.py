@@ -2112,7 +2112,7 @@ def test_bulk_saved_but_gated_apply_stays_truthfully_pending(tmp_path, monkeypat
 def test_webserver_panel_renders_both_webgui_subpanels(tmp_path, web):
     c, _svc_ = _app(web, tmp_path)
     doc = parse(c.get("/stacks").get_data(as_text=True))
-    assert "LHPC Webserver" in doc.text and "Stacks Web Proxies" in doc.text
+    assert "LHPC Webserver" in doc.text and "Web Proxies All Stacks" in doc.text
     assert "Apply to all stack web proxies" in doc.text
     # target-policy form: the bulk form carries NO port input
     bulk = doc.within(doc.by_id("ws-stackwebs"))

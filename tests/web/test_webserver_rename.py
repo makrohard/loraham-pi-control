@@ -71,14 +71,15 @@ def _levels(c) -> dict:
 
 def test_lhpcs_own_webserver_entries_carry_their_new_names(tmp_path, web):
     # "Webserver (HTTPS / mTLS)" is "Webserver and mTLS proxy"; its children "LHPC Webserver" (was LHPC WebGUI),
-    # "Stacks Web Proxies" (was Stacks WebGUIs, not moved), "Monitor", "Certificates". red on c968c785: the old names
+    # "Web Proxies All Stacks" (#77, was Stacks Web Proxies, before that Stacks WebGUIs; not moved), "Monitor",
+    # "Certificates". red on c968c785: the old names
     c, _svc = _client(web, tmp_path)
     ctl = {mid: path for (owner, mid), path in _levels(c).items() if owner == "controller"}
     top = ctl["webserver-row"]
     assert top[1:] == ("Webserver and mTLS proxy",), top
     kids = ("webserver-row--lhpc-webgui", "ws-stackwebs", "webserver-row--monitor", "webserver-row--certificates")
     assert [ctl[k] for k in kids] == [top + (name,) for name in
-                                      ("LHPC Webserver", "Stacks Web Proxies", "Monitor", "Certificates")]
+                                      ("LHPC Webserver", "Web Proxies All Stacks", "Monitor", "Certificates")]
 
 
 _HEADINGS = {"graywolf@r1": "Proxy · Graywolf UI · r1", "meshtastic@r2": "Proxy · Meshtastic UI · r2",
@@ -172,3 +173,14 @@ def test_every_bold_menu_path_in_the_readmes_and_docs_names_entries_that_exist(t
                 if k < (2 if anchored else 1) or not set(parts[k:]) <= controls:  # Apps: the row + one entry at least
                     bad.append(f"{f.relative_to(repo_paths.REPO)}:{n}: {span}")
     assert bad == []
+
+
+def test_web_proxies_all_stacks_is_a_display_name_only(tmp_path, web):
+    # #77 (his word 11-19): "Stacks Web Proxies" shows as "Web Proxies All Stacks"; its id and URL stay
+    c, _svc = _client(web, tmp_path)
+    r = c.get("/stacks/controller/menu/ws-stackwebs")
+    assert r.status_code == 200
+    html = r.get_data(as_text=True)
+    assert "Stacks Web Proxies" not in html and '<summary>Web Proxies All Stacks</summary>' in html
+    assert re.search(r'<h2 class="here">\s*Web Proxies All Stacks\s*</h2>', html)
+    assert 'id="ws-stackwebs"' in html

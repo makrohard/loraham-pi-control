@@ -2584,7 +2584,10 @@ def test_certificates_section_renders_the_fetch_boxes(tmp_path, monkeypatch, web
     issue = next(lb for lb in doc.find("label") if lb.text == "Issue client cert")
     ca_box = doc.find("button", **{"data-copy": "ws-fetch-ca"})[0]
     p12_box = doc.find("button", **{"data-copy": "ws-fetch-p12-handy"})[0]
-    assert doc.index(renew) < doc.index(ca_box) < doc.index(issue) < doc.index(p12_box)
+    init = next(b for b in doc.find("button") if b.text == "Initialize / recreate PKI")
+    # UI-REORG c8 (L78): the CA box sits under Certificates › PKI, below the init form that creates the CA (was:
+    # below the renew form, which is Server certificate now); the .p12 box under Client certificate, below Issue
+    assert doc.index(init) < doc.index(ca_box) < doc.index(renew) < doc.index(issue) < doc.index(p12_box)
 
     # A cert with NO stored export explains itself rather than rendering nothing — live-found,
     # because an empty space is indistinguishable from a broken feature.
