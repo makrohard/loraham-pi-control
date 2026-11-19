@@ -160,3 +160,17 @@ def test_a_per_radio_page_has_the_switch_to_the_same_level_and_the_pill(web, tmp
     assert [b["data-rid"] for b in doc.within(head).find("span", class_="dbadge")] == ["r1"]
     assert doc.find("div", class_="menupage")[0]["data-fullpage"] == "1"
     assert not _doc(c, "/stacks/daemon/menu/stack-settings-daemon?radio=r1").find("div", class_="pagehead")
+
+
+def test_the_monitor_and_live_header_pins_are_rendered_hidden_and_the_page_pills_are_not(web, tmp_path):
+    # F11: a closed node never shows the load-time state: the Monitor / Live header pin is rendered hidden (dash.js
+    # shows it on a live answer while its node is open); the page pills that share the macro show from the load
+    c, _svc, _fs = _box(web, tmp_path)
+    doc = _doc(c, "/stacks/daemon/body?radio=r1")
+    for lvl in ("monitor", "live"):
+        node = doc.by_id(f"stack-settings-daemon--r1-{lvl}")
+        [pin] = doc.within(doc.within(node).find("summary")[0]).find("span", class_="dbadge")
+        assert pin.has_attr("hidden"), lvl
+    doc = _doc(c, "/stacks/daemon/menu/stack-settings-daemon--r1-status?radio=r1")
+    pills = doc.find("span", class_="dbadge")
+    assert len(pills) == 2 and not any(p.has_attr("hidden") for p in pills)        # the page pill + the view's own

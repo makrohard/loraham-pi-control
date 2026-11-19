@@ -21,12 +21,13 @@
     }
   }
 
-  // A badge shows the answer `d` (UI-REORG s9: the server's ONE readiness -> label mapping), or, with no `d`, a neutral
-  // "–" and no state class: a block pill that is not shown (its block closed, s13) never keeps a stale state.
+  // A badge shows the answer `d` (UI-REORG s9: the server's ONE readiness -> label mapping); with no `d` it is hidden
+  // (F11): a block pill that is not shown (its block closed, s13) never shows a stale or load-time state.
   function paint(badge, d) {
-    var text = d ? d.label : "–";
-    if (badge.textContent !== text) badge.textContent = text;   // aria-live: announce changes only
-    badge.className = "badge" + (d ? " badge-" + (d.ready ? "running" : (d.reachable ? "degraded" : "stopped")) : "")
+    badge.hidden = !d;
+    if (!d) return;
+    if (badge.textContent !== d.label) badge.textContent = d.label;   // aria-live: announce changes only
+    badge.className = "badge badge-" + (d.ready ? "running" : (d.reachable ? "degraded" : "stopped"))
       + (badge.classList.contains("dbadge") ? " dbadge" : "");
   }
 
@@ -49,7 +50,7 @@
           if (b) badges.push(b);
         });
         badges.forEach(function (badge) {
-          // neutral only in a closed block (not for a hidden tab: a full page's pill keeps the answer)
+          // hidden only in a closed block (not for a hidden tab: a full page's pill keeps the answer)
           paint(badge, !badge.classList.contains("dbadge") || !badge.closest("details:not([open])") ? d : null);
         });
         if (!d.reachable) return;
@@ -161,7 +162,7 @@
     });
   }
   listBadges(document);
-  recheck();                                    // the pills of closed blocks: neutral from the start
+  recheck();                                    // the pills of closed blocks: hidden from the start
   // A Stacks body loaded on first expand (stacklazy.js) may hold the hardware list or a Monitor/Live block.
   document.addEventListener("lhpc:bodyloaded", function (e) {
     listBadges((e.detail && e.detail.root) || document);

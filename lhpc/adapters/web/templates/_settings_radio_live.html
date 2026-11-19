@@ -3,7 +3,7 @@
     from the badge's poll (dash.js) when the daemon is up, and greys them again when it goes down. -#}
 {% from "_macros.html" import daemon_badge -%}
 <details class="advcfg dblock dlive" id="stack-settings-{{ stack.id }}--{{ radio.rid }}-live" data-rid="{{ radio.rid }}" data-up="{{ '1' if radio.reachable else '0' }}">
-              <summary>Live radio settings · {{ radio.rid }} {{ daemon_badge(radio, live=True, rid=radio.rid) }}</summary>
+              <summary>Live radio settings · {{ radio.rid }} {{ daemon_badge(radio, live=True, rid=radio.rid, hidden=True) }}</summary>
               <p class="muted">Applied immediately to the running daemon via its config socket
                 (non-RF tuning; enabling a TX mode does not itself transmit). Live RSSI / CAD /
                 RX-TX monitoring is on the <a href="{{ url_for('dashboard') }}">dashboard</a>.</p>

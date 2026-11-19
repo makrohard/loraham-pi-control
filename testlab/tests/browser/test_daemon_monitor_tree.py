@@ -430,16 +430,21 @@ def _pill(page, block):
                          " return [p.textContent, p.className]; }", block)
 
 
-def test_a_closed_blocks_pill_is_neutral_and_its_radio_polls_only_while_a_pill_is_shown(flask_page):
+def _hidden(page, block):
+    """F11: a header pin without a live answer (its block closed) is hidden (was: a neutral "–")."""
+    return page.evaluate("b => document.querySelector(b + ' > summary .dbadge').hidden", block)
+
+
+def test_a_closed_blocks_pill_is_hidden_and_its_radio_polls_only_while_a_pill_is_shown(flask_page):
     """s13 P3: one radio, two pills (the summaries of Monitor · r3 and Live · r3). A closed block never polls and its
-    pill reads a neutral "–", never a stale state (the daemon going down meanwhile included); one block shown -> its
-    radio polls, the closed one's pill stays neutral; opened -> one request at once (also a quick close/reopen); a
-    later body with a shown pill -> one request at once. One poll, one cache per radio."""
+    pill is hidden (F11; was a neutral "–"), never a stale state (the daemon going down meanwhile included); one block
+    shown -> its radio polls, the closed one's pill stays hidden; opened -> one request at once (also a quick
+    close/reopen); a later body with a shown pill -> one request at once. One poll, one cache per radio."""
     page, _posts = flask_page(path=TREE, unix_replies=_READY)
     state = {"up": True}
     seen, settled, _held = _serve(page, state)
-    live, neutral = _sel("live"), ["–", "badge dbadge"]
-    assert _pill(page, live) == neutral                                      # closed at load: neutral from the start
+    live = _sel("live")
+    assert _hidden(page, live)                                               # closed at load: hidden from the start
     _loaded(page, settled, seen)
     page.clock.pause_at(page.evaluate("() => Date.now()") + 1)               # no real-time flow: "at once" is at once
 
@@ -457,28 +462,30 @@ def test_a_closed_blocks_pill_is_neutral_and_its_radio_polls_only_while_a_pill_i
     settled()
     assert state["polls"] == polls + 1                                       # Monitor shown: its radio polls
     answered()
-    assert _pill(page, live) == neutral                                      # Live closed: neutral, not READY
+    assert _hidden(page, live)                                               # Live closed: hidden, not READY
     toggle(True)                                                             # Live opened within the poll: the
-    assert _pill(page, live) == ["daemon READY", "badge badge-running dbadge"]   # fresh answer at once,
+    assert _pill(page, live) == ["daemon READY", "badge badge-running dbadge"] and not _hidden(page, live)  # fresh
+                                                                             # answer at once,
     assert state["polls"] == polls + 1                                       # no second request
     toggle(False)
     _toggle_monitor(page, False)                                             # both closed
     settled()
-    assert _pill(page, _MON) == neutral
+    assert _hidden(page, _MON)
     polls = state["polls"]
     state["up"] = False                                                      # the daemon goes down
     page.clock.run_for(9000)
     settled()
     assert state["polls"] == polls                                           # no request ...
-    assert _pill(page, _MON) == neutral                                      # ... and never a stale "daemon READY"
+    assert _hidden(page, _MON)                                               # ... and never a stale "daemon READY"
     with page.expect_request(_is_badge_poll, timeout=15000):
         toggle(True)                                                         # Live opened: at once
     settled()
     assert state["polls"] == polls + 1
     page.wait_for_function("l => document.querySelector(l + ' > summary .dbadge').textContent === 'daemon offline'",
                            arg=live, timeout=15000)                          # its answer
+    assert not _hidden(page, live)
     toggle(False)                                                            # its timer goes ...
-    assert _pill(page, live) == neutral
+    assert _hidden(page, live)
     with page.expect_request(_is_badge_poll, timeout=15000):
         toggle(True)                                                         # ... so a quick reopen asks at once
     settled()
@@ -495,8 +502,8 @@ def test_a_closed_blocks_pill_is_neutral_and_its_radio_polls_only_while_a_pill_i
 
 
 def test_a_full_pages_pill_keeps_an_answer_that_lands_in_a_hidden_tab(flask_page):
-    """A badge answer that lands while the tab is hidden paints the full page's pill with its state, not "–" (only a
-    closed block's pill is neutral); back in front after the cache went stale, the pill still reads that state while
+    """A badge answer that lands while the tab is hidden paints the full page's pill with its state, not hidden (only
+    a closed block's pill is hidden, F11); back in front after the cache went stale, the pill still reads that state while
     the next request is out."""
     page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
     state = {"up": True}
@@ -520,3 +527,35 @@ def test_a_full_pages_pill_keeps_an_answer_that_lands_in_a_hidden_tab(flask_page
     assert len(state["hold"]) == 1
     assert read() == ready                                                   # the pill kept the answer
 
+
+
+def test_a_header_pin_shows_only_a_live_answer_while_its_node_is_open(flask_page):
+    """F11 (+ N2): with nothing shown the cache goes stale; opening Live sends a request and its pin stays hidden while
+    the answer is out (no load-time state), then shows that answer; closing hides it on the toggle itself (the clock
+    is paused: no poll can do it)."""
+    page, _posts = flask_page(path=TREE, unix_replies=_READY)
+    state = {"up": True}
+    seen, settled, _held = _serve(page, state)
+    live = _sel("live")
+    _loaded(page, settled, seen)
+    page.clock.pause_at(page.evaluate("() => Date.now()") + 1)
+    _toggle_monitor(page, False)
+    settled()
+    assert _hidden(page, _MON) and _hidden(page, live)
+    page.clock.run_for(4000)                                                 # the cache goes stale
+    settled()
+    state["hold"] = []
+
+    def toggle(want):
+        page.click(live + " > summary")
+        page.wait_for_function("([s, w]) => document.querySelector(s).open === w", arg=[live, want], timeout=15000)
+        page.evaluate("() => new Promise(r => { const c = new MessageChannel(); c.port1.onmessage = () => r();"
+                      " c.port2.postMessage(0); })")                         # one task later: its toggle was handled
+    toggle(True)
+    settled()
+    assert len(state["hold"]) == 1 and _hidden(page, live)                   # the request is out: still hidden
+    _badge_answer(state["hold"].pop(), False)
+    page.wait_for_function("l => !document.querySelector(l + ' > summary .dbadge').hidden", arg=live, timeout=15000)
+    assert _pill(page, live) == ["daemon offline", "badge badge-stopped dbadge"]
+    toggle(False)
+    assert _hidden(page, live) and state["hold"] == []
