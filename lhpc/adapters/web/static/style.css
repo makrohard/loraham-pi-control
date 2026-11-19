@@ -833,6 +833,8 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .stackrow-wrap > details > summary, .ws-sub-wrap > details > summary { padding-right: 7.5rem; }
 .pagelink { font-size: .82rem; white-space: nowrap; }
 .pagebar { font-size: .9rem; margin: 0 0 .8rem; }
+.pagehead { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0 0 .8rem; }
+.pagehead > .pagepill { margin-left: auto; }
 .navtree { list-style: none; margin: 0; padding-left: 1.1rem; }
 .card .body > .navtree { padding-left: 0; }
 .navtree li { margin: .15rem 0; }

@@ -147,3 +147,16 @@ def test_the_daemon_radio_parameters_take_the_settings_radio_without_a_page_radi
     sel = [a.text.strip() for a in s.within(s.find("nav", class_="rswitch")[0]).find("a", class_="sel")]
     dp = doc.by_id("stack-daemon-params-daemon")
     assert sel == ["r2 · 433"] and _hidden(s.within(dp), "daemon-params") == ["r2"], sel
+@pytest.mark.parametrize("kind", ["monitor", "status", "stats", "socket", "rxtx", "live"])
+def test_a_per_radio_page_has_the_switch_to_the_same_level_and_the_pill(web, tmp_path, kind):
+    # UI-REORG c5 (s4, his round-3 N1 = a): on Get STATUS of r1, r2 opens Get STATUS of r2; the pill upper right;
+    # the Monitor and its views run in the full-page mode (data-fullpage)
+    c, _svc, _fs = _box(web, tmp_path)
+    doc = _doc(c, f"/stacks/daemon/menu/stack-settings-daemon--r1-{kind}?radio=r1")
+    [head] = doc.find("div", class_="pagehead")
+    links = {a.text.strip(): (a["href"], a.has_class("sel")) for a in doc.within(head).find("a")}
+    assert links == {"r1 · 433": (f"/stacks/daemon/menu/stack-settings-daemon--r1-{kind}?radio=r1", True),
+                     "r2 · 868": (f"/stacks/daemon/menu/stack-settings-daemon--r2-{kind}?radio=r2", False)}, links
+    assert [b["data-rid"] for b in doc.within(head).find("span", class_="dbadge")] == ["r1"]
+    assert doc.find("div", class_="menupage")[0]["data-fullpage"] == "1"
+    assert not _doc(c, "/stacks/daemon/menu/stack-settings-daemon?radio=r1").find("div", class_="pagehead")

@@ -1,7 +1,7 @@
 """DAEMON-MONITOR-TREE (0.14.0, maintainer's word 11-18) + UI-REORG c4 (plan v7 s3/s4), in a real browser: a radio's
 four live daemon views under its Monitor are always open and ask only while SHOWN (every <details> around them open):
-Get STATUS / Get STATS one read per show and per Reload; View Socket a poll each second, RX/TX View one every 3 s, both
-stopped by hiding; a view's own page asks from load; a reply to a run that was hidden meanwhile is dropped; one request
+in the tree (the Settings page) Get STATUS / Get STATS one read per show and per Reload; View Socket a poll each
+second, RX/TX View one every 3 s, both stopped by hiding; on a Monitor's own page (c5) every view repeats every 3 s; a view's own page asks from load; a reply to a run that was hidden meanwhile is dropped; one request
 out per view, and a show while one is out asks once more when it settles. Daemon down: paused ("Daemon not running",
 Reload off) until the badge's poll (dash.js, the same /api/daemon/<rid>) sees it up; Live greys and re-enables the
 same way; a block inserted later takes the cached state at once. The daemon APIs are answered by the test (counted at
@@ -13,7 +13,8 @@ import re
 
 RID = "r3"                                           # flask_page's USB radio (its daemon answers: unix_replies)
 _READY = {"/tmp/loraconf-r3.sock": b"STATUS RADIO=READY ID=r3 BOUND=- TXMODE=MANAGED\n"}
-MONITOR = f"/stacks/daemon/menu/stack-settings-daemon--{RID}-monitor?radio={RID}"
+MONITOR = f"/stacks/daemon/menu/stack-settings-daemon--{RID}-monitor?radio={RID}"        # a full page (c5): 3 s
+TREE = f"/stacks/daemon/menu/stack-settings-daemon?radio={RID}"           # the tree's modes (its Monitor opened here)
 LIVE = f"/stacks/daemon/menu/stack-settings-daemon--{RID}-live?radio={RID}"
 _REPLY = {"": {"reachable": True, "status": {"RADIO": "READY"}, "stats": {"RX": "7"}},
           "/socket": {"reachable": True, "line": "STATUS RADIO=READY"},
@@ -93,8 +94,8 @@ def _wait_text(page, kind, want):
 
 
 def _loaded(page, settled, seen):
-    """The Monitor page at load: every shown view asked once; let those settle, then count afresh."""
-    _running(page, True)
+    """The Settings page (TREE) with its Monitor opened: every view asked once; let those settle, then count afresh."""
+    _toggle_monitor(page, True)
     for kind in _KINDS:
         page.wait_for_function("s => !document.querySelector(s).dvBusy", arg=_sel(kind), timeout=15000)
     settled()
@@ -110,7 +111,7 @@ def _paused(page):
 
 
 def test_status_and_stats_ask_once_per_show_and_per_reload_and_never_while_hidden(flask_page):
-    page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
+    page, _posts = flask_page(path=TREE, unix_replies=_READY)
     seen, settled, _held = _serve(page)
     _loaded(page, settled, seen)
     _toggle_monitor(page, False)                                             # hidden: nothing
@@ -130,7 +131,7 @@ def test_status_and_stats_ask_once_per_show_and_per_reload_and_never_while_hidde
 
 
 def test_the_socket_view_polls_each_second_only_while_shown(flask_page):
-    page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
+    page, _posts = flask_page(path=TREE, unix_replies=_READY)
     seen, settled, _held = _serve(page)
     _loaded(page, settled, seen)
     _ticks(page, "socket", 3, settled)
@@ -148,7 +149,7 @@ def test_the_socket_view_polls_each_second_only_while_shown(flask_page):
 
 def test_a_second_toggle_while_shown_starts_no_second_run(flask_page):
     # the accordion or a restore may announce an open Monitor again: still one poll per view
-    page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
+    page, _posts = flask_page(path=TREE, unix_replies=_READY)
     seen, settled, _held = _serve(page)
     _loaded(page, settled, seen)
     page.evaluate("m => document.querySelector(m).dispatchEvent(new Event('toggle'))", _MON)
@@ -158,7 +159,7 @@ def test_a_second_toggle_while_shown_starts_no_second_run(flask_page):
 
 def test_a_scripted_close_stops_the_socket_poll(flask_page):
     # the accordion or a restore closes a panel by setting open=false, no click
-    page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
+    page, _posts = flask_page(path=TREE, unix_replies=_READY)
     seen, settled, _held = _serve(page)
     _loaded(page, settled, seen)
     page.evaluate("m => { document.querySelector(m).open = false; }", _MON)
@@ -171,7 +172,7 @@ def test_a_scripted_close_stops_the_socket_poll(flask_page):
 
 
 def test_the_rxtx_view_polls_every_3_s_only_while_shown(flask_page):
-    page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
+    page, _posts = flask_page(path=TREE, unix_replies=_READY)
     seen, settled, _held = _serve(page)
     _loaded(page, settled, seen)
     _ticks(page, "rxtx", 2, settled)
@@ -191,7 +192,7 @@ def test_a_views_own_page_asks_from_load(flask_page):
 
 
 def test_a_reply_to_a_hidden_run_is_dropped(flask_page):
-    page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
+    page, _posts = flask_page(path=TREE, unix_replies=_READY)
     seen, settled, hold = _serve(page)
     _loaded(page, settled, seen)
     hold["path"], held = "/socket", hold["routes"]
@@ -209,7 +210,7 @@ def test_a_reply_to_a_hidden_run_is_dropped(flask_page):
 
 def test_a_slow_reply_is_never_overtaken_one_request_at_a_time(flask_page):
     # G2-RELUI B2: while a poll is out no next one is sent, so an older reply cannot land after a newer one
-    page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
+    page, _posts = flask_page(path=TREE, unix_replies=_READY)
     seen, settled, hold = _serve(page)
     _loaded(page, settled, seen)
     hold["path"], held = "/feed", hold["routes"]
@@ -228,7 +229,7 @@ def test_a_slow_reply_is_never_overtaken_one_request_at_a_time(flask_page):
 
 def test_a_hide_and_show_during_a_slow_status_asks_once_more_when_it_settles(flask_page):
     # UI-REORG s4: never two requests out per view, AND fresh STATUS content after the old reply settles
-    page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
+    page, _posts = flask_page(path=TREE, unix_replies=_READY)
     seen, settled, hold = _serve(page)
     _loaded(page, settled, seen)
     hold["path"], held = "", hold["routes"]
@@ -326,3 +327,43 @@ def test_a_stopped_monitor_inserted_later_pauses_at_once(flask_page):
     state["up"] = True
     page.clock.run_for(3000)
     _running(page, True)
+
+
+def test_a_monitor_page_repeats_every_view_every_3_s_status_and_stats_included(flask_page):
+    # UI-REORG c5 (s4): the Monitor's own page works like a log page: every view repeats every 3 s
+    page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
+    seen, settled, _held = _serve(page)
+    _running(page, True)
+    for kind in _KINDS:
+        page.wait_for_function("s => !document.querySelector(s).dvBusy", arg=_sel(kind), timeout=15000)
+    settled()
+    seen.clear()
+    for _ in range(2):
+        page.clock.run_for(3000)
+        settled()
+        page.wait_for_function("() => [...document.querySelectorAll('.daemonview')].every(v => !v.dvBusy)", timeout=15000)
+    assert sorted(seen) == sorted(["", "", "/socket", "/feed"] * 2), seen   # 3 s each, STATUS/STATS included
+    assert page.locator(".pagehead .pagepill .dbadge").count() == 1        # the pill upper right
+
+
+def test_a_status_page_without_the_hardware_list_follows_the_daemon_stopped_started_stopped(flask_page):
+    page, _posts = flask_page(path=f"/stacks/daemon/menu/stack-settings-daemon--{RID}-status?radio={RID}")
+    state = {"up": False}
+    seen, settled, _held = _serve(page, state=state)
+    _paused(page)
+    page.clock.run_for(9000)
+    settled()
+    assert seen == []                                                         # polling off
+    state["up"] = True
+    page.clock.run_for(3000)
+    _running(page, True)
+    _wait_text(page, "status", "RADIO=READY")
+    assert not page.locator(_sel("status") + " .daemonview-reload").is_disabled()
+    settled()
+    n = seen.count("")
+    page.clock.run_for(3000)
+    settled()
+    assert seen.count("") == n + 1                                            # polling on: every 3 s
+    state["up"] = False
+    page.clock.run_for(3000)
+    _paused(page)

@@ -7,7 +7,17 @@
     <a href="{{ url_for('stacks_overview') }}">Apps</a> ›
     {% for label, url in crumbs[:-1] %}<a href="{{ url }}">{{ label }}</a> › {% endfor %}<h2 class="here">{{ crumbs[-1][0] }}</h2></nav></div>
   <p class="pagebar"><a href="{{ show_url }}">‹ show in Stacks</a></p>
-  <div class="card"><div class="body stacklist menupage">
+  {% if page_rid %}
+    {#- UI-REORG s4: a Monitor/Live level of one radio, like a log page: the radio switch (the same level of the other
+        radio) and the daemon status pill upper right; its views repeat every 3 s (data-fullpage, daemoncfg.js). -#}
+    {% from "_radio_switch.html" import radio_switch %}{% from "_macros.html" import daemon_badge %}
+    {% set _ch = [] %}
+    {% for rid, _name, band in here.vars.view.live_radios %}{% set _ = _ch.append({'label': rid ~ ' · ' ~ band, 'selected': rid == page_rid,
+         'href': url_for('menu_page', owner=here.vars.stack.id, mid=with_radio(here.id, rid), radio=rid)}) %}{% endfor %}
+    <div class="pagehead">{% if _ch | length > 1 %}{{ radio_switch(_ch) }}{% endif %}
+      <span class="pagepill">{{ daemon_badge(here.vars.radio, live=True, rid=page_rid) }}</span></div>
+  {% endif %}
+  <div class="card"><div class="body stacklist menupage"{% if page_rid %} data-fullpage="1"{% endif %}>
     {{ body }}
   </div></div>
 {% endblock %}

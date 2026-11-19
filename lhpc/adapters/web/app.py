@@ -1540,6 +1540,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             show = url_for("stacks_overview", open=owner, radio=request.args.get("radio") or None) + "#" + mid
         # `body` is the output of Jinja's own autoescaped render of the level's partial, not request text
         return render_template("menu_page.html", body=Markup(_open_first_details(body)), here=here,  # noqa: S704
+                               page_rid=_submenus.id_radio(mid),          # UI-REORG s4: a Monitor/Live full page
                                crumbs=[(m.label, _level_url(owner, m.id, request.args.get("radio"))) for m in path],
                                show_url=show, **ctx)
 
