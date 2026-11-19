@@ -3,8 +3,8 @@
 <details class="advcfg" id="firewall-apply"{% if request.args.get('fw') == 'apply' %} open data-force-open="1"{% endif %}>
         <summary>Apply &amp; commands</summary>
         <section class="cfgsec">
-          <p class="muted">Set up / update — run the root command first. It installs or refreshes the
-            firewall and verifies it; the status above turns green after the next refresh:</p>
+          <p class="muted">First run this command as root. It installs or updates the firewall and
+            checks it; the status above turns green on the next refresh:</p>
           {{ cmdbox('fw-apply-cmd', firewall_view.apply_cmd) }}
           <p class="muted">Then activate the listeners the firewall was gating (a Webserver Apply the
             gate deferred also completes on its own; running it again is harmless):</p>
