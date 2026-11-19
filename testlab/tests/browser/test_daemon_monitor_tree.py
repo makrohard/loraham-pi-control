@@ -24,6 +24,14 @@ _MON = f"#stack-settings-daemon--{RID}-monitor"
 _KINDS = ("status", "stats", "socket", "rxtx")
 
 
+def _badge_answer(route, up):
+    route.fulfill(status=200, content_type="application/json", body=json.dumps(
+        {"rid": RID, "reachable": up, "ready": up, "radio_state": "READY" if up else "",
+         "label": "daemon READY" if up else "daemon offline",
+         "status": {"RADIO": "READY", "TXMODE": "DIRECT", "CADWAIT": "1234"} if up else {},
+         "channel": {}, "stats": {}, "feed": []}))
+
+
 def _serve(page, state=None):
     """Answer the daemon APIs, counting the views' requests by path ("", "/socket", "/feed"); `state` {"up": bool}: the
     badge poll's (dash.js) answer, read at each poll (default up). The clock and the route are installed, then the page
@@ -35,13 +43,11 @@ def _serve(page, state=None):
     def handler(route):
         tail = API.match(route.request.url).group(1) or ""
         if tail == "" and route.request.headers.get("accept") != "application/json":       # dash.js's badge poll
-            up = state["up"]
             state["polls"] = state.get("polls", 0) + 1                                    # counted for c11
-            route.fulfill(status=200, content_type="application/json", body=json.dumps(
-                {"rid": RID, "reachable": up, "ready": up, "radio_state": "READY" if up else "",
-                 "label": "daemon READY" if up else "daemon offline",
-                 "status": {"RADIO": "READY", "TXMODE": "DIRECT", "CADWAIT": "1234"} if up else {},
-                 "channel": {}, "stats": {}, "feed": []}))
+            if state.get("hold") is not None:                                             # answered by the test
+                state["hold"].append(route)
+                return
+            _badge_answer(route, state["up"])
             return
         seen.append(tail)
         if tail == held["path"]:
@@ -486,3 +492,31 @@ def test_a_closed_blocks_pill_is_neutral_and_its_radio_polls_only_while_a_pill_i
                       " document.dispatchEvent(new CustomEvent('lhpc:bodyloaded', {detail: {root: p}})); }", RID)
     settled()
     assert state["polls"] == polls + 3
+
+
+def test_a_full_pages_pill_keeps_an_answer_that_lands_in_a_hidden_tab(flask_page):
+    """A badge answer that lands while the tab is hidden paints the full page's pill with its state, not "–" (only a
+    closed block's pill is neutral); back in front after the cache went stale, the pill still reads that state while
+    the next request is out."""
+    page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
+    state = {"up": True}
+    _seen, settled, _held = _serve(page, state)
+    pill, ready = ".pagehead .pagepill .dbadge", ["daemon READY", "badge badge-running dbadge"]
+
+    def read():
+        return page.evaluate("p => { const b = document.querySelector(p); return [b.textContent, b.className]; }", pill)
+    page.wait_for_function("p => document.querySelector(p).textContent === 'daemon READY'", arg=pill, timeout=15000)
+    state["hold"] = []
+    page.clock.run_for(3000)                                                 # the next poll, held out
+    settled()
+    assert len(state["hold"]) == 1
+    _set_hidden(page, True)                                                  # the tab goes to the background
+    _badge_answer(state["hold"].pop(), True)                                 # ... and the answer lands there
+    page.wait_for_function(f"() => window.lhpcDaemonState('{RID}') !== null", timeout=15000)
+    assert read() == ready
+    page.clock.run_for(4000)                                                 # the cache goes stale
+    _set_hidden(page, False)                                                 # in front: a request goes out
+    settled()
+    assert len(state["hold"]) == 1
+    assert read() == ready                                                   # the pill kept the answer
+

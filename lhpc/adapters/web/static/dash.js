@@ -49,7 +49,8 @@
           if (b) badges.push(b);
         });
         badges.forEach(function (badge) {
-          paint(badge, !badge.classList.contains("dbadge") || window.lhpcShown(badge) ? d : null);
+          // neutral only in a closed block (not for a hidden tab: a full page's pill keeps the answer)
+          paint(badge, !badge.classList.contains("dbadge") || !badge.closest("details:not([open])") ? d : null);
         });
         if (!d.reachable) return;
         var rssi = (d.channel && d.channel.LIVERSSI) || "";
