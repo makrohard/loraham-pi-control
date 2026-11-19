@@ -1,4 +1,5 @@
-/* GPS Monitor pane: /api/gps while #gps-monitor is open; skyview (inline SVG) and the NMEA pane.
+/* GPS Monitor pane: /api/gps while #gps-monitor is shown (shown.js: it and every <details> around it open, the tab
+   visible); skyview (inline SVG) and the NMEA pane.
    Polling is scheduled ONLY after the previous request settled (the taskbanner.js pattern), with an
    in-flight guard, so a slow gpsd never stacks requests or pins a server worker. Late responses
    carry a generation number and are discarded when the pane state moved on. */
@@ -20,7 +21,7 @@
     var kind = d.alt_kind === "msl" ? "m MSL" : d.alt_kind === "hae" ? "m HAE" : "m (legacy alt)";
     return d.alt.toFixed(1) + " " + kind;
   }
-  function paneOpen() { return mon.open && (!outer || outer.open) && !document.hidden; }
+  function paneOpen() { return window.lhpcShown(mon); }   // s13 P2: every <details> around it open, tab visible
   function nmeaOpen() { var w = $("gps-nmea-wrap"); return paneOpen() && w && !w.hidden; }
 
   function render(d) {

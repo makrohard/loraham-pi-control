@@ -85,47 +85,57 @@
       .then(function () { return true; }, function () { return false; });
   }
 
-  // The discipline of taskbanner.js, per radio: no timer while the page is hidden, never a second
-  // request while one is still out (a slow daemon answer is not overlapped), and after a failure a
-  // fixed slow interval instead of the normal one. Visible again: one immediate refresh.
-  var POLL_MS = 3000, ERROR_MS = 15000, started = {}, cache = {};
+  // The discipline of taskbanner.js, per radio: no timer while the radio is not eligible, never a second request while
+  // one is still out (a slow daemon answer is not overlapped), and after a failure a fixed slow interval instead of the
+  // normal one. UI-REORG s13: a radio is eligible while the tab is visible AND a Home radio card shows it (its
+  // page-level poll) or at least one of its badges is shown (shown.js: every <details> around it open; a full
+  // page's pill has none). Rechecked on any toggle, visibilitychange or lhpc:bodyloaded: eligible again -> one request at once.
+  var POLL_MS = 3000, ERROR_MS = 15000, radios = {}, cache = {}, cards = {};
   window.lhpcDaemonState = function (rid) {
     var c = cache[rid];
     return c && Date.now() - c.at < POLL_MS ? c : null;
   };
+  function eligible(rid) {
+    if (document.hidden) return false;
+    if (cards[rid]) return true;
+    var hosts = Array.prototype.filter.call(document.querySelectorAll(".dbadge[data-rid]"),
+                                            function (b) { return b.getAttribute("data-rid") === rid; });
+    var hw = document.getElementById("hw-badge-" + rid);
+    if (hw) hosts.push(hw);
+    return hosts.some(window.lhpcShown);
+  }
   function start(rid) {
-    if (!rid || started[rid]) return;           // one poller per radio, however many badges show it
-    started[rid] = true;
-    var timer = null, polling = false;
+    if (!rid || radios[rid]) return;           // one poller per radio, however many badges show it
+    var r = radios[rid] = { timer: null, polling: false };
 
     function clearTimer() {
-      if (timer !== null) { clearTimeout(timer); timer = null; }
+      if (r.timer !== null) { clearTimeout(r.timer); r.timer = null; }
     }
-
     function schedule(ms) {
       clearTimer();
-      if (document.hidden) return;
-      timer = setTimeout(tick, ms);
+      if (eligible(rid)) r.timer = setTimeout(r.tick, ms);
     }
-
-    function tick() {
+    r.tick = function () {
       clearTimer();
-      if (polling || document.hidden) return;   // hidden: the visibilitychange handler refreshes
-      polling = true;
+      if (r.polling || !eligible(rid)) return;
+      r.polling = true;
       poll(rid).then(function (ok) {
-        polling = false;
+        r.polling = false;
         schedule(ok ? POLL_MS : ERROR_MS);
       });
-    }
-
-    document.addEventListener("visibilitychange", function () {
-      if (document.hidden) { clearTimer(); return; }
-      tick();
-    });
-
-    tick();
+    };
+    r.recheck = function () {
+      if (!eligible(rid)) clearTimer();
+      else if (r.timer === null && !r.polling) r.tick();
+    };
+    r.tick();
   }
-  cols.forEach(function (col) { start(col.getAttribute("data-radio-rid") || ""); });
+  function recheck() { Object.keys(radios).forEach(function (rid) { radios[rid].recheck(); }); }
+  cols.forEach(function (col) {
+    var rid = col.getAttribute("data-radio-rid") || "";
+    cards[rid] = true;
+    start(rid);
+  });
   function listBadges(root) {
     Array.prototype.forEach.call(root.querySelectorAll('[id^="hw-badge-"]'), function (el) {
       start(el.id.slice("hw-badge-".length));
@@ -135,10 +145,13 @@
     });
   }
   listBadges(document);
-  // A Stacks body loaded on first expand (stacklazy.js) may hold the hardware list.
+  // A Stacks body loaded on first expand (stacklazy.js) may hold the hardware list or a Monitor/Live block.
   document.addEventListener("lhpc:bodyloaded", function (e) {
     listBadges((e.detail && e.detail.root) || document);
+    recheck();
   });
+  document.addEventListener("toggle", recheck, true);   // toggle does not bubble: caught on the way down
+  document.addEventListener("visibilitychange", recheck);
 
   // Auto-refresh the dashboard ONLY when its structural state changes (a stack
   // starts/stops, the daemon comes up/down, an interactive app is launched). We

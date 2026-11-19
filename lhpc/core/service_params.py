@@ -697,9 +697,8 @@ class ParamsConfigMixin:
                 cfg = self._daemon_param_applies("daemon", rid)
                 view["radios"] = [{"band": live_band, "rid": rid, "reachable": dv.reachable, "ready": dv.ready,
                                    "radio_state": dv.radio_state, "error": dv.error, "status": actual, "config": cfg}]
-                # The shown radio's +20 dBm permission (daemon 1.2.0 `--high-power`, W311): an explicit small control,
-                # because this page renders none of the daemon's run params. The grant beside the running daemon's
-                # report, from the same passive read (UI-REORG s3: the selected radio only, one daemon read per page).
+                # The shown radio's +20 dBm permission (daemon 1.2.0 `--high-power`, W311; this page renders no run
+                # param): the grant beside the daemon's report, same passive read (UI-REORG s3: the selected radio).
                 view["high_power"] = [self.high_power_state(live_band, view=dv, rid=rid)] if rid else []
                 # Order the live per-parameter controls the same as the daemon-params panel
                 # below (shared keys in that order; any daemon-only extras after).

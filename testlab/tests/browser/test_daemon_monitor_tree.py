@@ -36,8 +36,10 @@ def _serve(page, state=None):
         tail = API.match(route.request.url).group(1) or ""
         if tail == "" and route.request.headers.get("accept") != "application/json":       # dash.js's badge poll
             up = state["up"]
+            state["polls"] = state.get("polls", 0) + 1                                    # counted for c11
             route.fulfill(status=200, content_type="application/json", body=json.dumps(
                 {"rid": RID, "reachable": up, "ready": up, "radio_state": "READY" if up else "",
+                 "label": "daemon READY" if up else "daemon offline",
                  "status": {"RADIO": "READY", "TXMODE": "DIRECT", "CADWAIT": "1234"} if up else {},
                  "channel": {}, "stats": {}, "feed": []}))
             return
@@ -367,3 +369,95 @@ def test_a_status_page_without_the_hardware_list_follows_the_daemon_stopped_star
     state["up"] = False
     page.clock.run_for(3000)
     _paused(page)
+
+
+# --- UI-REORG c11 (plan v7 s13, L85): the in-tree poll rule — a poller asks only while its element and every
+#     <details> around it are open AND the tab is visible (shown.js) ---------------------------------------------
+
+def _set_hidden(page, hidden):
+    page.evaluate(
+        "h => { Object.defineProperty(document, 'hidden', {configurable: true, get: () => h});"
+        " Object.defineProperty(document, 'visibilityState', {configurable: true,"
+        "   get: () => h ? 'hidden' : 'visible'});"
+        " document.dispatchEvent(new Event('visibilitychange')); }", hidden)
+
+
+def _is_badge_poll(request):
+    return request.url.endswith("/api/daemon/" + RID) and request.headers.get("accept") != "application/json"
+
+
+def test_a_hidden_tab_stops_the_views_and_visible_again_asks_each_view_once(flask_page):
+    """s13 P1: the Socket (1 s) and RX/TX (3 s) views stop in a background tab, the radio's badge poll too; back in
+    front, each view asks once at once (STATUS/STATS one read: a new show)."""
+    page, _posts = flask_page(path=TREE, unix_replies=_READY)
+    state = {"up": True}
+    seen, settled, _held = _serve(page, state)
+    _loaded(page, settled, seen)
+    _set_hidden(page, True)
+    _running(page, False)
+    settled()
+    seen.clear()
+    polls = state["polls"]
+    page.clock.run_for(9000)
+    settled()
+    assert (seen, state["polls"]) == ([], polls)
+    _set_hidden(page, False)
+    _running(page, True)
+    for kind in _KINDS:
+        page.wait_for_function("s => !document.querySelector(s).dvBusy", arg=_sel(kind), timeout=15000)
+    settled()
+    assert sorted(seen) == ["", "", "/feed", "/socket"], seen
+    assert state["polls"] == polls + 1                                       # the badge poll: one at once
+
+
+def test_a_radios_badge_poll_runs_while_one_of_its_pills_is_shown_and_stops_when_none_is(flask_page):
+    """s13 P3 (+ a25 c11 B1): one radio, two badge hosts, the pills in the summaries of Monitor · r3 and Live · r3. A
+    closed block's pill is still on screen, so it keeps polling and follows the daemon down; Settings closed (no pill
+    shown) -> no request; shown again -> one request at once (also a quick close/reopen); a later body with a shown
+    host -> one request at once. One poll, one cache per radio."""
+    page, _posts = flask_page(path=TREE, unix_replies=_READY)
+    state = {"up": True}
+    seen, settled, _held = _serve(page, state)
+    _loaded(page, settled, seen)
+    page.clock.pause_at(page.evaluate("() => Date.now()") + 1)               # no real-time flow: "at once" is at once
+    _toggle_monitor(page, False)                                             # both blocks closed, both pills shown
+    settled()
+    polls = state["polls"]
+    state["up"] = False
+    page.clock.run_for(3000)
+    settled()
+    assert state["polls"] == polls + 1
+    page.wait_for_function("m => document.querySelector(m + ' > summary .dbadge').textContent === 'daemon offline'",
+                           arg=_MON, timeout=15000)                          # the closed block's pill follows
+    settings = "#stack-settings-daemon"
+
+    def toggle(want):
+        page.click(settings + " > summary")
+        page.wait_for_function("([s, w]) => document.querySelector(s).open === w", arg=[settings, want], timeout=15000)
+        page.evaluate("() => new Promise(r => { const c = new MessageChannel(); c.port1.onmessage = () => r();"
+                      " c.port2.postMessage(0); })")                         # one task later: its toggle was handled
+    toggle(False)                                                            # no pill shown
+    settled()
+    polls = state["polls"]
+    page.clock.run_for(9000)
+    settled()
+    assert state["polls"] == polls
+    with page.expect_request(_is_badge_poll, timeout=15000):
+        toggle(True)                                                         # shown again: at once
+    settled()
+    assert state["polls"] == polls + 1
+    page.wait_for_function(f"() => window.lhpcDaemonState('{RID}') !== null", timeout=15000)   # that answer is in
+    toggle(False)                                                            # its timer goes ...
+    with page.expect_request(_is_badge_poll, timeout=15000):
+        toggle(True)                                                         # ... so a quick reopen asks at once
+    settled()
+    assert state["polls"] == polls + 2
+    page.wait_for_function(f"() => window.lhpcDaemonState('{RID}') !== null", timeout=15000)
+    toggle(False)
+    with page.expect_request(_is_badge_poll, timeout=15000):                 # a body inserted later with a shown
+        page.evaluate("rid => { const p = document.createElement('p');"   # host of the radio: one request at once
+                      " p.innerHTML = '<span class=\"badge dbadge\" data-rid=\"' + rid + '\">daemon READY</span>';"
+                      " document.querySelector('.menupage').appendChild(p);"
+                      " document.dispatchEvent(new CustomEvent('lhpc:bodyloaded', {detail: {root: p}})); }", RID)
+    settled()
+    assert state["polls"] == polls + 3

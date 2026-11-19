@@ -1,6 +1,7 @@
 // DAEMON-MONITOR-TREE: a radio's live daemon views (_daemon_view.html) under its Monitor, read-only over the
 // /api/daemon endpoints. UI-REORG s4: a view has no own show/hide; it asks only while it is SHOWN (every <details>
-// around it open, in the page): "Get STATUS"/"Get STATS" one read of /api/daemon/<rid> per show and per Reload;
+// around it open, in the page, the tab visible: shown.js): "Get STATUS"/"Get STATS" one read of /api/daemon/<rid>
+// per show and per Reload;
 // "View Socket" a rolling 22-line window polled from the config socket each second; "RX/TX View" the dashboard's
 // RX/TX feed every 3 s; on a Monitor's own page (data-fullpage) every view repeats every 3 s. Hiding stops the
 // polling; Reload starts the view afresh. A reply to an earlier run of the
@@ -112,14 +113,8 @@
     panel.dvTimer = setInterval(tick, ms);
   }
 
-  // Shown: in the page and every <details> around it open (the view itself is no <details>).
-  function shown(panel) {
-    if (!panel.isConnected) return false;
-    for (var d = panel.closest("details"); d; d = d.parentElement ? d.parentElement.closest("details") : null) {
-      if (!d.open) return false;
-    }
-    return true;
-  }
+  // Shown (shown.js, s13): in the page, every <details> around it open, the tab visible.
+  function shown(panel) { return window.lhpcShown(panel); }
   // The ONE activation path: start a shown view of a running daemon, else stop it.
   function sync(panel) { if (shown(panel) && up(panel)) start(panel); else stop(panel); }
   function syncAll(root) { if (root && root.querySelectorAll) root.querySelectorAll(".daemonview").forEach(sync); }
@@ -164,6 +159,7 @@
     var el = e.target;
     if (el && el.querySelectorAll) syncAll(el);      // a Monitor, Settings or row around views opened or closed
   }, true);                                          // toggle does not bubble: caught on the way down
+  document.addEventListener("visibilitychange", function () { syncAll(document); });   // s13 P1: hidden tab -> quiet
   document.addEventListener("click", function (e) {
     var btn = e.target && e.target.closest ? e.target.closest(".daemonview-reload") : null;
     var panel = btn ? btn.closest(".daemonview") : null;

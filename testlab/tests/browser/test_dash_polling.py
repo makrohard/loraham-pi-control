@@ -131,7 +131,7 @@ def test_a_failed_poll_is_retried_after_the_slow_interval_not_the_normal_one(pag
     assert seen == dict.fromkeys(RIDS, 2), seen
 
 
-def test_a_reachable_daemon_whose_radio_failed_reads_occupied_not_usable(page):
+def test_a_reachable_daemon_whose_radio_failed_reads_its_state_not_ready(page):
     """G1-C28 N1 / UI-REORG s9: the badge shows the server's label (its ONE readiness -> label mapping), not reachability."""
     failed = dict(LIVE, ready=False, radio_state="FAILED", label="daemon (FAILED)")
     _open(page, lambda route, band: route.fulfill(
@@ -199,6 +199,8 @@ def test_a_daemon_body_loaded_on_first_expand_polls_its_list_badges(page):
     page.goto(page.lab_base + "/stacks", wait_until="load")
     assert page.locator("[id^='hw-badge-']").count() == 0          # the daemon's body is not loaded yet
     page.click("#stackrow-daemon > summary")
+    page.wait_for_selector("#stack-hardware-daemon > summary")
+    page.click("#stack-hardware-daemon > summary")                 # c11 (s13 P3): its badges poll once shown
     _wait_list_rendered(page)
 
 
