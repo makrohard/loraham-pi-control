@@ -127,7 +127,7 @@ def _menus(c, owner):
 
 
 def _slot(doc, block):
-    """UI-REORG c9 (a25 B1): the result banners IN the node's own slot: directly after the .row-actions that directly
+    """UI-REORG c9: the result banners IN the node's own slot: directly after the .row-actions that directly
     follows the node (page_actions: </details><div class="row-actions">…</div><banner>), or, with no such overlay (a
     level's own page), directly after the node. A banner under an ancestor's slot does not count."""
     node = doc.by_id(block)

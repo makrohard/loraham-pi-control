@@ -1,4 +1,4 @@
-"""DAEMON-MONITOR-TREE (0.14.0, maintainer's word 11-18) + UI-REORG c4 (plan v7 s3/s4), in a real browser: a radio's
+"""DAEMON-MONITOR-TREE (0.14.0, 11-18) + UI-REORG c4 (plan v7 s3/s4), in a real browser: a radio's
 four live daemon views under its Monitor are always open and ask only while SHOWN (every <details> around them open):
 in the tree (the Settings page) Get STATUS / Get STATS one read per show and per Reload; View Socket a poll each
 second, RX/TX View one every 3 s, both stopped by hiding; on a Monitor's own page (c5) every view repeats every 3 s; a view's own page asks from load; a reply to a run that was hidden meanwhile is dropped; one request
@@ -411,7 +411,7 @@ def test_a_hidden_tab_stops_the_views_and_visible_again_asks_each_view_once(flas
 
 
 def test_a_radios_badge_poll_runs_while_one_of_its_pills_is_shown_and_stops_when_none_is(flask_page):
-    """s13 P3 (+ a25 c11 B1): one radio, two badge hosts, the pills in the summaries of Monitor · r3 and Live · r3. A
+    """s13 P3: one radio, two badge hosts, the pills in the summaries of Monitor · r3 and Live · r3. A
     closed block's pill is still on screen, so it keeps polling and follows the daemon down; Settings closed (no pill
     shown) -> no request; shown again -> one request at once (also a quick close/reopen); a later body with a shown
     host -> one request at once. One poll, one cache per radio."""

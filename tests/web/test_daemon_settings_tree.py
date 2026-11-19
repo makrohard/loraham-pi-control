@@ -80,7 +80,7 @@ def test_the_switch_shows_one_radio_and_every_radio_level_stays_addressable(web,
 
 
 def test_a_page_reads_only_the_selected_radios_daemon(web, tmp_path):
-    # a25 v5 N1: the other radios' levels carry only their rid: one passive read of the shown radio (red before c4:
+    # UI-REORG s3: the other radios' levels carry only their rid: one passive read of the shown radio (red before c4:
     # every radio's high-power state read its own daemon)
     _c, svc, fs = _box(web, tmp_path)
     paths = []
@@ -133,7 +133,7 @@ def test_no_duplicate_badge_ids_on_the_daemon_body(web, tmp_path):
 
 @pytest.mark.parametrize("path", ["/stacks/daemon/body", "/stacks/daemon/menu/stack-settings-daemon"])
 def test_the_daemon_radio_parameters_take_the_settings_radio_without_a_page_radio(web, tmp_path, path):
-    # a25 RED c4 B1: the lowest rid on the higher band (r1 868, r2 433): Settings shows the first active band's radio
+    # UI-REORG c4: the lowest rid on the higher band (r1 868, r2 433): Settings shows the first active band's radio
     # (r2); the panel inside it shows and saves THAT radio (was: view_radios[0] = r1, a radio the page did not name)
     import radios_fixture
 
@@ -149,7 +149,7 @@ def test_the_daemon_radio_parameters_take_the_settings_radio_without_a_page_radi
     assert sel == ["r2 · 433"] and _hidden(s.within(dp), "daemon-params") == ["r2"], sel
 @pytest.mark.parametrize("kind", ["monitor", "status", "stats", "socket", "rxtx", "live"])
 def test_a_per_radio_page_has_the_switch_to_the_same_level_and_the_pill(web, tmp_path, kind):
-    # UI-REORG c5 (s4, his round-3 N1 = a): on Get STATUS of r1, r2 opens Get STATUS of r2; the pill upper right;
+    # UI-REORG c5 (s4, round-3 N1 = a): on Get STATUS of r1, r2 opens Get STATUS of r2; the pill upper right;
     # the Monitor and its views run in the full-page mode (data-fullpage)
     c, _svc, _fs = _box(web, tmp_path)
     doc = _doc(c, f"/stacks/daemon/menu/stack-settings-daemon--r1-{kind}?radio=r1")

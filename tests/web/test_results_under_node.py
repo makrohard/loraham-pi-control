@@ -1,4 +1,4 @@
-"""UI-REORG c9 (plan v7 s8, his OPEN-22): an action result shows under the node that holds its button (page_actions'
+"""UI-REORG c9 (plan v7 s8, OPEN-22): an action result shows under the node that holds its button (page_actions'
 slot, outside the <details>), not at the top; the acted level comes from the Apps page's `_level` field (checked by
 the server against the owner's levels) or from a level page's form; unknown, absent or not rendered -> the top, as
 before. Box-wide notices stay on top. Through the public pages."""
@@ -16,7 +16,7 @@ def _results(c, path="/stacks"):
 
 
 def _slot(doc, node_id):
-    """UI-REORG c9 (a25 B1): the result banners IN the node's own slot: directly after the .row-actions that directly
+    """UI-REORG c9: the result banners IN the node's own slot: directly after the .row-actions that directly
     follows the node (page_actions: </details><div class="row-actions">…</div><banner>), or, with no such overlay (a
     level's own page), directly after the node. A banner under an ancestor's slot does not count."""
     node = doc.by_id(node_id)

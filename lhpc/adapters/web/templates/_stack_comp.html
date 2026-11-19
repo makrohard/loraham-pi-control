@@ -14,8 +14,8 @@
                     {{ freshness_pill(g.update_states[comp.id]) }}{% endif %}</summary>
                 <div class="body">
                   <div class="actbar">
-                    {# UI-REORG s6: the "logs" link goes where the component's log is under the stack's Logs (his yes); it
-                       stays where it is not (a build dependency: radiolib, …), no removal without his yes. In the
+                    {# UI-REORG s6: the "logs" link goes where the component's log is under the stack's Logs (approved); it
+                       stays where it is not (a build dependency: radiolib, …), no removal without approval. In the
                        body, not the summary: no interactive element inside the summary toggle (a11y). #}
                     {% if not log_in_tree(comp) %}<a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}" aria-label="{{ comp.id }} logs">logs</a>{% endif %}
                     {% if comp.kind.value == 'service' %}

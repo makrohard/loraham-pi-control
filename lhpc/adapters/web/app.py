@@ -1604,7 +1604,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     @app.after_request
     def _address_results(response):
-        """UI-REORG s8 (his OPEN-22): every result a POST flashed WITHOUT an address (`@<panel>`, K4) is addressed to
+        """UI-REORG s8 (OPEN-22): every result a POST flashed WITHOUT an address (`@<panel>`, K4) is addressed to
         the acted level, so it shows under that node (page_actions' slot) when the next page renders it; else on
         top. An addressed result keeps its address."""
         if request.method != "POST" or "lhpc.flash_n" not in request.environ:

@@ -76,7 +76,7 @@ def with_radio(mid: str, rid: str) -> str:
     return f"{m.group(1)}{rid}-{m.group(3)}" if m else mid
 
 
-# DAEMON-PARAMS-INTO-SETTINGS (#70, his word 11-18): the stacks whose "Daemon radio parameters" level stands under
+# DAEMON-PARAMS-INTO-SETTINGS (#70, 11-18): the stacks whose "Daemon radio parameters" level stands under
 # their Settings (after its per-radio levels), following the Settings radio switch; the template reads the same rule
 PARAMS_IN_SETTINGS = ("daemon",)
 

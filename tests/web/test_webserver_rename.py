@@ -176,7 +176,7 @@ def test_every_bold_menu_path_in_the_readmes_and_docs_names_entries_that_exist(t
 
 
 def test_web_proxies_all_stacks_is_a_display_name_only(tmp_path, web):
-    # #77 (his word 11-19): "Stacks Web Proxies" shows as "Web Proxies All Stacks"; its id and URL stay
+    # #77 (11-19): "Stacks Web Proxies" shows as "Web Proxies All Stacks"; its id and URL stay
     c, _svc = _client(web, tmp_path)
     r = c.get("/stacks/controller/menu/ws-stackwebs")
     assert r.status_code == 200

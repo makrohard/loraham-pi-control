@@ -89,7 +89,7 @@ def test_the_stacks_body_holds_the_views_closed_and_no_button_row(tmp_path, web)
 
 
 def test_an_offline_radio_has_its_monitor_paused(tmp_path, web):
-    # UI-REORG c4 (his OPEN-M3 = b): the Monitor is always present; daemon not running: "Daemon not running", Reload
+    # UI-REORG c4 (OPEN-M3 = b): the Monitor is always present; daemon not running: "Daemon not running", Reload
     # off (was: no Monitor, its view pages 404). The other radio's blocks are not rendered (the switch shows one).
     c, _svc = _client(web, tmp_path, live=("r1",))
     body = _html(c, "/stacks/daemon/body?radio=r1")

@@ -1,4 +1,4 @@
-"""UI-REORG c8 (plan v7 s7, L78 = PLAN-CERTS-TREE-v1, his word 11-19): Webserver › Certificates holds three nodes, PKI,
+"""UI-REORG c8 (plan v7 s7, L78 = PLAN-CERTS-TREE-v1, 11-19): Webserver › Certificates holds three nodes, PKI,
 Server certificate and Client certificate, each a closed panel with its own page; the contents are split, nothing is
 dropped: every form and field id of today sits on exactly one child. Also s7's controller order."""
 from __future__ import annotations

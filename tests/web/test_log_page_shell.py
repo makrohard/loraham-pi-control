@@ -1,5 +1,5 @@
 """UI-REORG c6 (plan v7 s5): the static full log pages (controller, webserver, firewall) share the log page shell:
-breadcrumb · header (pill + tabs, no "reload" pill: his yes) · the path on its own line · the log, refreshed by logs.js
+breadcrumb · header (pill + tabs, no "reload" pill: approved removal) · the path on its own line · the log, refreshed by logs.js
 from /api/logpreview/<source> with the page's history depth (?lines=300; the tree's preview stays 30)."""
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def test_each_static_log_page_has_the_shell(web, url, source):
     body = doc.within(card)
     [path] = body.find("p", class_="logpath")
     assert path.text.strip() and body.find("pre", class_="logbox")
-    assert ">reload<" not in html                                            # the reload pill is gone (his yes)
+    assert ">reload<" not in html                                            # the reload pill is gone (approved removal)
     assert '<script src="/static/logs.js" defer></script>' in html
     if source == "firewall":                                                 # its tmpfs note under the path
         assert "tmpfs" in body.text and html.index("logpath") < html.index("tmpfs")

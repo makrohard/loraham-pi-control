@@ -1,4 +1,4 @@
-"""#76 (0.14.0, maintainer's word 11-19), in a real browser: a stack's Settings buttons "Save configuration" and "Reset
+"""#76 (0.14.0, 11-19), in a real browser: a stack's Settings buttons "Save configuration" and "Reset
 to defaults" stand side by side on a large screen and wrap without sideways scroll on a narrow one; Enter in a config
 field still saves (Save, outside the form by `form=`, stays its default button): one POST, to the config route."""
 from __future__ import annotations

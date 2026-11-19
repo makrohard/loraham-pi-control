@@ -304,8 +304,8 @@ def test_the_firewall_log_has_no_back_link(tmp_path, web):
 # ---- the Apps page's "logs" links go; Home keeps its (plan §2b, v4 B1) ----------------------------------------------
 
 def test_the_apps_page_has_no_logs_link_but_the_dependencies_rows_whose_log_is_not_in_logs(tmp_path, web):
-    # UI-REORG c7 (his yes + the handler's fold): a Dependencies row's "logs" link goes where the log is under the
-    # stack's Logs, and stays where it is not (radiolib, …: B1)
+    # UI-REORG c7 (approved removal): a Dependencies row's "logs" link goes where the log is under the
+    # stack's Logs, and stays where it is not (radiolib, …)
     c, svc = _client(web, tmp_path)
     pages = ["/stacks", "/stacks/controller/menu/controller-row", "/stacks/meshcore/menu/stack-install-meshcore"]
     pages += [f"/stacks/{s.id}/body" for s in svc.stacks()]

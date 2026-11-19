@@ -1,4 +1,4 @@
-"""#76 (0.14.0, maintainer's word 11-19): a stack's Settings buttons "Save configuration / Reset to defaults" stand in
+"""#76 (0.14.0, 11-19): a stack's Settings buttons "Save configuration / Reset to defaults" stand in
 one button row like the other rows (.actrow, wrapping), on every page that shows a stack's Settings: the Stacks body,
 the Settings' own page, and the daemon's Settings page (UI-REORG c3: no longer under Repositories). Save still submits the config form (its
 `form=`; the browser lane pins Enter in a field); Reset posts its own form. Through the console's routes."""
