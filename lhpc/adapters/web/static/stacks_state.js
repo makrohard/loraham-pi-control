@@ -93,13 +93,23 @@
   }
 
   // Programmatic opens (load restore, hashchange) also fire the native <details> `toggle` event, which
-  // would trip the accordion below and undo them. `openTarget` marks such opens so the accordion ignores
-  // them; the load path is additionally protected by deferred binding (see setTimeout(attachAccordion)).
-  var programmaticOpen = false;
-  function openTarget(el) {
-    programmaticOpen = true;
-    try { openWithAncestors(el); }
-    finally { setTimeout(function () { programmaticOpen = false; }, 0); }
+  // would trip the accordion below and undo them. So the accordions act only on the toggle of the <details>
+  // whose <summary> the user just clicked (a keyboard Enter/Space on a summary is a click too); its toggle
+  // consumes that click. Only a click that toggles marks (not cancelled, not on a control inside the summary),
+  // so no mark outlives its toggle. Stated limit: a non-click open (find-in-page auto-expand) is no user open.
+  // (A guard flag cleared by setTimeout(0) raced the async toggles: when the timer ran first, a hashchange's row
+  // open counted as a user open and closed the target's own panels.)
+  var clicked = null;
+  document.addEventListener("click", function (e) {
+    var s = e.target.closest("summary");
+    if (s && !e.defaultPrevented && !e.target.closest("a, button, input, select, textarea, label")) {
+      clicked = s.parentElement;
+    }
+  });
+  function userToggled(d) {
+    if (clicked !== d) { return false; }
+    clicked = null;
+    return true;
   }
 
   // ACCORDION: opening one MAIN header (a direct .stacklist child row, incl. the controller row)
@@ -111,8 +121,7 @@
   function attachAccordion() {
     document.querySelectorAll(".stacklist .stackrow").forEach(function (row) {
       row.addEventListener("toggle", function () {
-        if (!row.open) { return; }                 // react to USER OPEN only; close-toggles ignored
-        if (programmaticOpen) { return; }           // a scripted open (restore/hashchange) — leave it be
+        if (!userToggled(row) || !row.open) { return; }   // react to USER OPEN only; close-toggles ignored
         // Pinned: closing rows ABOVE this one must not move its header away from the cursor.
         pinDuring(row, function () {
           document.querySelectorAll(".stacklist .stackrow").forEach(function (o) {
@@ -134,8 +143,7 @@
   function attachSubAccordion(root) {
     (root || document).querySelectorAll(".stackrow-body .advcfg").forEach(function (sub) {
       sub.addEventListener("toggle", function () {
-        if (!sub.open) { return; }                 // react to USER OPEN only
-        if (programmaticOpen) { return; }           // scripted open (restore/hashchange) — leave it be
+        if (!userToggled(sub) || !sub.open) { return; }   // react to USER OPEN only
         // Scope by the owning stack BODY and use the ancestor chain — not parentElement.children.
         // Install / Info / Settings are NOT siblings (they sit at different depths in
         // _stack_body.html), so a sibling scan closed nothing and all three could stand open.
@@ -267,7 +275,7 @@
     var d = detailsForHash();
     if (!d) { return; }
     document.querySelectorAll("details").forEach(function (x) { x.open = false; });
-    openTarget(d);     // guarded: the accordion is already bound here, so mark this as a scripted open
+    openWithAncestors(d);     // no click: the accordion leaves these opens be
     requestAnimationFrame(function () { d.scrollIntoView(); });
   });
 })();
