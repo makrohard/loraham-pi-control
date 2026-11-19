@@ -65,10 +65,33 @@ def _read_back(f) -> bytes:
     return os.pread(f.fileno(), os.fstat(f.fileno()).st_size, 0)
 
 
+def _lab_at_timeout(keeper: int) -> str:
+    """Where the lab command waits when its time runs out, one line from /proc: its State, its wait channel and its
+    kernel stack (that one needs root; a file /proc does not give names its error). A lab hung after its Python code
+    ended (in its exit) has no frame for the stack dump: this still names where it waits. The lab is the keeper's
+    oldest descendant: all else below the keeper the lab started after its own start."""
+    kids = reaper.descendants(keeper)
+    if not kids:
+        return "lab at the timeout: no lab process left under the keeper"
+    pid = min(kids, key=lambda k: k[1])[0]
+
+    def read(name: str) -> str:
+        try:
+            return Path(f"/proc/{pid}/{name}").read_text(errors="replace").strip()
+        except OSError as exc:
+            return f"unreadable ({type(exc).__name__})"
+
+    status = read("status")
+    state = next((ln.split(":", 1)[1].strip() for ln in status.splitlines() if ln.startswith("State:")), status)
+    stack = " | ".join(read("stack").splitlines()) or "empty"
+    return f"lab at the timeout: pid {pid} State: {state}; wchan: {read('wchan') or 'empty'}; stack: {stack}"
+
+
 def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
     """Run `lhpc-testlab <args>`. A run past `timeout` is diagnosed, never only killed: the child
     runs with PYTHONFAULTHANDLER=1 and gets SIGABRT, and what it prints then (every thread's Python
-    stack) is waited for up to 5 s and kept in the error with the rest of its output; then it and
+    stack) is waited for up to 5 s and kept in the error with the rest of its output, after the line of
+    `_lab_at_timeout` (where the lab waited in the kernel, read before the abort); then it and
     all it had started are killed: a child holding the output or not, one started with setsid, a
     grandchild whose parent has ended. The command runs under a keeper (`reaper`, a child subreaper)
     that keeps all of these its descendants while the command runs and kills them itself (after the
@@ -89,6 +112,7 @@ def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
         try:
             proc.wait(timeout=timeout)                      # the keeper's end is the command's end
         except subprocess.TimeoutExpired:
+            at = _lab_at_timeout(proc.pid)                      # before the abort changes where the lab waits
             proc.send_signal(signal.SIGABRT)                    # the keeper passes it on to the lab: its stack dump
             try:
                 proc.wait(timeout=5)                            # the lab's end: the keeper kills all it keeps, then ends
@@ -100,7 +124,7 @@ def run_lab(env: dict, *args: str, timeout: float = 300.0, check: bool = False):
                     proc.kill()                                 # a keeper that does not end (its stderr names what lives)
                     proc.wait()
             out, err = _read_back(out_f), _read_back(err_f)
-            raise RuntimeError(f"lhpc-testlab {' '.join(args)} timed out after {timeout:g} s\n"
+            raise RuntimeError(f"lhpc-testlab {' '.join(args)} timed out after {timeout:g} s\n{at}\n"
                                f"stdout: {_text(out)[-2000:]}\nstderr: {_text(err)[-6000:]}") from None
         out, err = _read_back(out_f), _read_back(err_f)
     r = subprocess.CompletedProcess(argv, proc.returncode, _text(out), _text(err))
