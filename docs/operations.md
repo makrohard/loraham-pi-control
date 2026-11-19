@@ -275,7 +275,7 @@ exposure: [webserver.md](webserver.md).
   Every row and every submenu in it, at any depth, also opens on its own page: **page ›** at the
   right of its header, same browser tab, with the breadcrumb on top
   (`/stacks/<stack or controller>/menu/<id>`). A form sent there comes back to that page.
-  **All menus (tree) ›** (`/stacks/menus`) lists every level.
+  **All menus** at the start of the breadcrumb (`/stacks/menus`) lists every level.
   Each row ends with **Logs**: one entry per program that writes a log, then the stack's **RF log**
   (the Webserver and the Firewall end with theirs). A stack with a per-radio log groups them under a
   radio switch: **Per radio** (the selected radio's program logs and RF log) and **Single** (logs
