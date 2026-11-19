@@ -18,3 +18,5 @@ def test_a_build_log_panel_asks_its_job_log_once_on_open_and_a_no_log_entry_asks
     page.wait_for_function("() => document.getElementById('build-libch341').open", timeout=15000)
     assert "no log yet" in page.inner_text("#build-libch341")
     assert asked == ["radiolib?job=build-radiolib.log"]
+    assert page.locator("a.pagelink[href='/logs/radiolib?job=build-radiolib.log']").count() == 1
+    assert page.locator("a.pagelink[href$='/menu/build-libch341']").count() == 1       # no log yet: its menu page

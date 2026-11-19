@@ -418,6 +418,10 @@ def test_an_entry_shows_the_newest_clone_build_or_test_log_and_no_log_yet_before
     assert doc.by_id("build-radiolib")["data-src"] == f"/api/logs/radiolib?job={ai}"
     lib = doc.by_id("build-libch341")
     assert "no log yet" in lib.text and lib["data-src"] is None
+    pages = [a["href"] for a in doc.find("a", class_="pagelink")]
+    assert f"/logs/radiolib?job={ai}" in pages                          # a logged entry: "page ›" to its log
+    assert "/stacks/daemon/menu/build-libch341" in pages                # no log yet: its menu page (plan v4: one
+    #                                                                     "page ›" per level, test_u4_menu_pages)
     r = c.get("/stacks/daemon/menu/build-radiolib")                     # its own page: the job log
     assert r.status_code == 302 and r.headers["Location"].endswith(f"/logs/radiolib?job={ai}")
     assert "no log yet" in _html(c, "/stacks/daemon/menu/build-libch341")   # none: its menu page says so
@@ -447,3 +451,12 @@ def test_a_components_newest_job_log_is_its_own_and_keeps_its_numbered_and_radio
     assert life.start_log(comp) is None                                 # red at the base: meshtastic-web's
     _log(svc, "start-meshtastic-433-r1.log", 3500)
     assert life.start_log(comp).name == "start-meshtastic-433-r1.log"
+
+
+def test_a_component_with_only_a_host_test_gets_a_build_log_entry():
+    # G2-UXJ N1 (plan v4): a host test writes an install log too (test-<cid>.log); no shipped component has one
+    # without a source or build steps, so a stand-in stack shows the rule
+    from types import SimpleNamespace as NS
+    comps = [NS(id="t-only", name="T", source=None, build_steps=(), test_argv=("pytest",)),
+             NS(id="nothing", name="N", source=None, build_steps=(), test_argv=())]
+    assert [e["id"] for e in submenus.stack_build_logs(NS(id="x", components=comps))] == ["build-t-only"]

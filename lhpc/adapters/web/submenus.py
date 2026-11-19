@@ -153,11 +153,11 @@ _GPS_ENTRIES = False
 
 def stack_build_logs(stack) -> list[dict]:
     """UI-REORG c13 (his OPEN-UX2-2 = A): Install › Build logs: one "build" entry per component of the stack, its
-    dependencies included, in manifest order, for a component that can have an install log (a source or build
-    steps; no component has a host test without either, measured); each shows that component's newest clone/build/test log (app: install_log)."""
+    dependencies included, in manifest order, for a component that can have an install log (a source, build steps
+    or a host test); each shows that component's newest clone/build/test log (app: install_log)."""
     return [{"id": _BUILD_LOG + c.id, "owner": stack.id, "label": c.name, "kind": "build"}
             for c in stack.components
-            if c.source or c.build_steps or (_GPS_ENTRIES and c.id.endswith("-gps"))]
+            if c.source or c.build_steps or c.test_argv or (_GPS_ENTRIES and c.id.endswith("-gps"))]
 
 
 def log_groups(entries) -> list[tuple]:
