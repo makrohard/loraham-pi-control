@@ -7,6 +7,8 @@ slept through. What is asserted is the number of requests in a window.
 """
 from __future__ import annotations
 
+import pytest
+
 
 def _settle(page):
     """Every request the page issued before this call has reached its route handler."""
@@ -106,3 +108,31 @@ def test_an_rf_log_asks_for_new_records_every_3_s(page, seeded_rf_logs):
     page.clock.run_for(200)
     _settle(page)
     assert seen["n"] == 2
+
+
+_HIDE = ("h => { Object.defineProperty(document, 'hidden', {configurable: true, get: () => h});"
+         " document.dispatchEvent(new Event('visibilitychange')); }")
+
+
+@pytest.mark.parametrize("path, pattern", [("/logs/loraham-kiss-tnc", "**/api/logs/**"),
+                                           ("/logs/loraham-kiss-tnc?job=rf-kiss.log", "**/api/rflog/**")])
+def test_a_log_page_asks_nothing_while_its_tab_is_hidden_and_once_at_once_when_shown(page, seeded_rf_logs,
+                                                                                    path, pattern):
+    # G2-UXM B1 (plan s13): a page-level poller stops while the tab is hidden; shown, it resumes its 3 s cadence
+    # from the request it makes at once (a25 c17 B1: never a shorter gap). Hidden at +1 s, shown at +10 s: off the
+    # load's 3 s grid, so an interval kept from the load would tick 2 s after the show (a25 c17 r2 B1)
+    seen = _open_log(page, path, pattern)
+    page.clock.run_for(1000)
+    page.evaluate(_HIDE, True)                                          # a background tab
+    page.clock.run_for(9000)
+    _settle(page)
+    assert seen["n"] == 1                                               # nothing while hidden
+    page.evaluate(_HIDE, False)                                         # in front again: one request at once
+    _settle(page)
+    assert seen["n"] == 2
+    page.clock.run_for(2900)                                            # then the 3 s cadence from that request
+    _settle(page)
+    assert seen["n"] == 2
+    page.clock.run_for(200)
+    _settle(page)
+    assert seen["n"] == 3

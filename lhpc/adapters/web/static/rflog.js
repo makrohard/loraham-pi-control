@@ -137,6 +137,14 @@
   });
 
   render();
-  setInterval(poll, 3000);
-  poll();
+  // UI-REORG s13 (G2-UXM B1): a page-level poller asks nothing while the tab is hidden; shown (or loaded) it asks once at
+  // once and then every 3 s from that request on (a fresh interval: no shorter gap after the first one)
+  var timer = null;
+  function run() {
+    clearInterval(timer);
+    timer = null;
+    if (!document.hidden) { poll(); timer = setInterval(poll, 3000); }
+  }
+  document.addEventListener("visibilitychange", run);
+  run();
 })();
