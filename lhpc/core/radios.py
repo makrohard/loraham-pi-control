@@ -287,12 +287,18 @@ def _ocp_error(ocp, chip):
     return ""
 
 
+def pick_variant(m, band, key):
+    """Of the model's variants that fit `band`: the one `key` names when it is set, else the only one, else None.
+    The one rule for a list row, Add and Detect (F4)."""
+    fit = [v for v in m.variants if v.band in ("", band)]
+    if key:
+        return next((v for v in fit if v.key == key), None)
+    return fit[0] if len(fit) == 1 else None
+
+
 def variant(r, m):
     """The model variant a row selects: by `ce` when the model has several for its band, else the only one."""
-    fit = [v for v in m.variants if v.band in ("", r.band)]
-    if r.ce:
-        return next((v for v in fit if v.key == r.ce), None)
-    return fit[0] if len(fit) == 1 else None
+    return pick_variant(m, r.band, r.ce)
 
 
 def _claims(radios, models):

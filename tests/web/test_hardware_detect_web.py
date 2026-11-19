@@ -183,3 +183,32 @@ def test_a_console_without_a_usable_gpiod_shows_a_refusal_not_a_500(web, tmp_pat
     assert where.endswith("/hardware/radio/r1#detect-r1")
     outcome, css, text = _result(page, "r1")
     assert (outcome, css) == ("refused", "bad") and why in text, text
+
+
+def test_every_rendered_board_and_band_is_probed_on_the_variant_add_stores(web, tmp_path, monkeypatch, csrf):
+    # F4: Detect picks the variant the way Add does (radios.pick_variant): no rendered board option × band is refused
+    # "no variant", and each probes the pins of the row Add would write.
+    from lhpc.core import radio_models
+    from lhpc.core.radio_detect import DetectRefused
+    c = _box(web, tmp_path, monkeypatch)
+    opened = []
+
+    def spi_bus(pins, chip, lock):
+        opened.append(dict(pins))
+        raise DetectRefused("faked bus")
+    monkeypatch.setattr(run, "spi_bus", spi_bus)
+    page = c.get("/hardware/add").get_data(as_text=True)
+    form = page[page.index('<select name="board" id="detect-board">'):]
+    form = form[:form.index("</form>")]
+    boards = re.findall(r'<option value="([^"]*)"', form[:form.index("</select>")])
+    bands = re.findall(r'<option value="([^"]*)"', form[form.index('<select name="band">'):])
+    assert len(boards) == 4 and bands == ["433", "868"], (boards, bands)
+    models = radio_models.load()
+    for board in boards:
+        for band in bands:
+            opened.clear()
+            _where, shown = _detect(c, csrf, page="/hardware/add", kind="board", board=board, band=band)
+            mid, _, key = board.partition(":")
+            assert _result(shown, "board") == ("refused", "bad", f"Detect refused: {mid} {band} MHz: faked bus"), \
+                (board, band, _result(shown, "board"))
+            assert opened == [dict(radios.pick_variant(models[mid], band, key).pins)], (board, band)

@@ -220,8 +220,11 @@ def detect_board(svc, model_id: str, variant_key: str, band: str) -> Detected:
     rows = state.radios if state.kind == radios.VALID else ()
     if rid := _running(svc, [r for r in rows if r.band == band], rows, band):   # FIRST: the band's radios' daemons
         return _daemon_line(rid, model.chip)
-    variant = next((v for v in model.variants if v.key == variant_key), None)
-    if variant is None or band not in model.bands or (variant.band and variant.band != band):
+    variant = radios.pick_variant(model, band, variant_key) if band in model.bands else None   # F4: Add's pick
+    if variant is None:
+        fit = [v.key for v in model.variants if v.band in ("", band)]
+        if band in model.bands and not variant_key and len(fit) > 1:
+            return _refused(who, f"{model_id} needs a variant ({', '.join(fit)})", model.chip)
         return _refused(who, f"{model_id} has no variant {variant_key!r} on {band} MHz", model.chip)
     if owner := _direct_owner(svc, band):
         return _refused(who, f"{owner} drives the {band} MHz radio itself; stop it first", model.chip)

@@ -297,3 +297,65 @@ def test_a_daemon_of_a_radio_not_in_the_list_refuses_a_board_and_a_stick_detect(
     assert run.detect_board(box.svc, "uputronics", "ce0", "433").line == "Detect refused: r9's daemon is running. Stop it first."
     assert run.detect_stick(box.svc, "meshstick-1262", "1-1.3").line == "Detect refused: r9's daemon is running. Stop it first."
     assert box.opened == [] and box.selected == []
+
+
+# ---- F4: Detect picks the variant Add stores (radios.pick_variant, the one rule) -------------------------------
+
+def _probed(box, monkeypatch):
+    """Fake the SPI open: record the pins, then refuse (no chip needed); the list `box.pins` gets each probe."""
+    box.pins = []
+
+    def spi_bus(pins, chip, lock):
+        box.pins.append(dict(pins))
+        raise DetectRefused("faked bus")
+    monkeypatch.setattr(run, "spi_bus", spi_bus)
+
+
+def test_detect_probes_the_variant_add_stores_for_every_board_band_and_key(tmp_path, monkeypatch):
+    # Property: every SPI model × band (incl. one no model has) × key ("" and each key): Detect's probed pins ==
+    # the pins of the row Add writes for the same input, or both refuse.
+    from lhpc.core import radio_models
+    box = _Box(tmp_path, monkeypatch)
+    _probed(box, monkeypatch)
+    spi = [m for m in radio_models.load().values() if m.transport == "spi"]
+    assert {m.id for m in spi} == {"loraham", "uputronics", "waveshare-sx1262"}
+    for m in spi:
+        for band in ("433", "868", "915"):
+            for key in ("", *(v.key for v in m.variants)):
+                radios_fixture.write(tmp_path, ROWS[1:])           # no SPI row: no claimed pin refuses an Add
+                box.pins.clear()
+                res = run.detect_board(box.svc, m.id, key, band)
+                ok, msg = radio_start.add_hat(box.svc, m.id, band, key)
+                added = [r for r in radios.load(box.svc._paths).radios if r.model == m.id]
+                want = [dict(radios.variant(added[0], m).pins)] if ok else []
+                assert box.pins == want, (m.id, band, key, res.line, msg)
+                assert (res.line.endswith(": faked bus")) == ok, (m.id, band, key, res.line, msg)
+                if band not in m.bands:                            # the unsupported band's refusals (G1 N1/N3)
+                    assert msg == f"Not added: {m.id} has no variant for {band} MHz", msg
+                    assert res.line == f"Detect refused: {m.id} {band} MHz: {m.id} has no variant {key!r} on {band} MHz"
+
+
+def test_a_board_without_a_key_probes_its_bands_variant_or_names_the_fitting_keys(tmp_path, monkeypatch):
+    import dataclasses
+
+    from lhpc.core import radio_models
+    box = _Box(tmp_path, monkeypatch)
+    _probed(box, monkeypatch)
+    models = radio_models.load()
+    for band in ("433", "868"):                                    # loraham: the band picks the variant
+        box.pins.clear()
+        assert run.detect_board(box.svc, "loraham", "", band).line == f"Detect refused: loraham {band} MHz: faked bus"
+        assert box.pins == [dict(models["loraham"].variant(band).pins)]
+    box.pins.clear()
+    assert run.detect_board(box.svc, "uputronics", "", "868").line == \
+        "Detect refused: uputronics 868 MHz: uputronics needs a variant (ce0, ce1)"
+    # the line names only the keys that fit the band: a third variant bound to 868 is not offered on 433
+    up = models["uputronics"]
+    extra = dataclasses.replace(up.variants[0], key="x868", band="868")
+    fake = {**models, "uputronics": dataclasses.replace(up, variants=(*up.variants, extra))}
+    monkeypatch.setattr(radio_models, "load", lambda: fake)
+    assert run.detect_board(box.svc, "uputronics", "", "433").line == \
+        "Detect refused: uputronics 433 MHz: uputronics needs a variant (ce0, ce1)"
+    assert run.detect_board(box.svc, "uputronics", "", "868").line == \
+        "Detect refused: uputronics 868 MHz: uputronics needs a variant (ce0, ce1, x868)"
+    assert box.pins == []

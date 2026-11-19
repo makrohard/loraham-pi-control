@@ -522,7 +522,7 @@ def _add_hat(svc, model_id: str, band: str, variant: str) -> tuple:
         return False, f"Not added: {m.id} has no variant for {band} MHz"
     if not variant and len(fits) > 1:
         return False, f"Not added: {m.id} needs a variant ({', '.join(v.key for v in fits)})"
-    v = next((x for x in fits if x.key == variant), None) if variant else fits[0]
+    v = radios.pick_variant(m, band, variant)          # F4: the one pick Detect uses too
     if v is None:
         return False, f"Not added: {m.id} has no variant {variant!r} for {band} MHz"
     several = bool(variant)                           # G1-C19: an explicit variant is always kept as `ce`
