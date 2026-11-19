@@ -224,7 +224,7 @@ sudo usermod -aG spi,gpio "$USER"                        # → greift mit dem Ne
 <!-- test:deps-manual:end -->
 
 Die polkit-Regeln (Neustart/Herunterfahren, Netzwerk-Panel) und die Uhr-Pakete stehen nicht in
-dieser Liste: `lhpc doctor` (oder Apps → LoRaHAM Pi Control → System dependencies) gibt ihre Befehle
+dieser Liste: `lhpc doctor` (oder Apps → LoRaHAM Pi Control → Install → System dependencies) gibt ihre Befehle
 aus, solange sie fehlen.
 </details>
 
@@ -448,7 +448,7 @@ liefen, kommen zurück ([boot restore](docs/operations.md#not-a-supervisor)); Sc
 
 ### Aktualisieren
 
-**Apps → LoRaHAM Pi Control → Update → Check for updates → Update now**, oder
+**Apps → LoRaHAM Pi Control → Install → Update → Check for updates → Update now**, oder
 `lhpc self-update --apply`. Sicherung und Mechanik: [self-update](docs/deployment.md#self-update) (englisch).
 
 ## Fehlerbehebung
