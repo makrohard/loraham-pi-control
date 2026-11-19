@@ -19,6 +19,8 @@
   {% endif %}
   <div class="card"><div class="body stacklist menupage"{% if page_rid %} data-fullpage="1"{% endif %}>
     {{ body }}
+    {#- UI-REORG s8: an action result of this page's level, under it -#}
+    {% from "_macros.html" import panel_banner %}{{ panel_banner(panel_results(here.id)) }}
   </div></div>
 {% endblock %}
 {% block scripts %}

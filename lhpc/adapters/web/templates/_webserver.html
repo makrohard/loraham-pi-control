@@ -19,7 +19,7 @@
   <div class="ws-sub-wrap">
   {% include "_ws_console.html" %}
   {# logs link OUTSIDE the summary (a11y) but overlaid on the header — identical to the main stack rows. #}
-  <div class="row-actions">{{ page_link('controller', 'webserver-row--lhpc-webgui') }}</div>
+  {{ page_actions('controller', 'webserver-row--lhpc-webgui') }}
   </div>
 
   {# ===== Stacks Web Proxies: ONE common policy for every eligible stack web-UI proxy.
@@ -33,18 +33,18 @@
   {# ===== Monitor ===== #}
   <div class="ws-sub-wrap">
   {% include "_ws_monitor.html" %}
-  <div class="row-actions">{{ page_link('controller', 'webserver-row--monitor') }}</div>
+  {{ page_actions('controller', 'webserver-row--monitor') }}
   </div>
 
   {# ===== Certificates (controller-only; unchanged) ===== #}
   <div class="ws-sub-wrap">
   {% include "_ws_certs.html" %}
-  <div class="row-actions">{{ page_link('controller', 'webserver-row--certificates') }}</div>
+  {{ page_actions('controller', 'webserver-row--certificates') }}
   </div>
 
   {# ===== Logs (LOGS-IN-TREE): the nginx front-end's error | access log, last ===== #}
   <div class="ws-sub-wrap">
   {% with lp = log_panels['webserver-row--logs'] %}{% include "_log_panel.html" %}{% endwith %}
-  <div class="row-actions">{{ page_link('controller', 'webserver-row--logs') }}</div>
+  {{ page_actions('controller', 'webserver-row--logs') }}
   </div>
 </details>

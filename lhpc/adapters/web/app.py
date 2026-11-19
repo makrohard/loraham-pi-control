@@ -1585,6 +1585,42 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 request.environ["lhpc.menu_block"] = _menu_block_of(ret)
             except Exception:                                              # never break the POST
                 request.environ["lhpc.menu_block"] = None
+        if request.method == "POST":
+            request.environ["lhpc.flash_n"] = len(session.get("_flashes", []))
+
+    def _acted_level() -> str:
+        """UI-REORG s8: the level a POST acted on: on a level page the level that holds the form (menu_block);
+        from the Apps page the `_level` field stacks_state.js adds ("<owner>/<level id>"), checked against that
+        owner's levels. "" when unknown (the result shows on top, as before)."""
+        block = request.environ.get("lhpc.menu_block")
+        if block:
+            return block[1]
+        owner, _sep, mid = request.form.get("_level", "").partition("/")
+        if not owner or not mid:
+            return ""
+        with _flashes_untouched():
+            return mid if _submenus.chain(_owner_menus(owner)[1], mid) else ""
+
+    @app.after_request
+    def _address_results(response):
+        """UI-REORG s8 (his OPEN-22): every result a POST flashed WITHOUT an address (`@<panel>`, K4) is addressed to
+        the acted level, so it shows under that node (page_actions' slot) when the next page renders it; else on
+        top. An addressed result keeps its address."""
+        if request.method != "POST" or "lhpc.flash_n" not in request.environ:
+            return response
+        flashes = session.get("_flashes") or []
+        new = flashes[request.environ["lhpc.flash_n"]:]
+        if not any("@" not in str(cat) for cat, _msg in new):
+            return response
+        try:
+            level = _acted_level()
+        except Exception:                                                  # never break the POST's answer
+            level = ""
+        if level:
+            n = request.environ["lhpc.flash_n"]
+            session["_flashes"] = flashes[:n] + [(cat if "@" in str(cat) else f"{cat} @{level}", msg)
+                                                 for cat, msg in new]
+        return response
 
     @app.after_request
     def _menu_return(response):

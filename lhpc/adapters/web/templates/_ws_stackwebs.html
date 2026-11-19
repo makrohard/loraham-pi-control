@@ -1,8 +1,7 @@
-{% from "_macros.html" import panel_banner -%}
+{#- UI-REORG s8: its results show under its row (page_actions in _webserver.html); a result still opens it -#}
 {% set wsg_results = panel_results('ws-stackwebs') -%}
 <details class="advcfg" id="ws-stackwebs"{% if wsg_open or wsg_results %} open{% endif %}>
     <summary>Web Proxies All Stacks</summary>
-    {{ panel_banner(wsg_results) }}
     <section class="cfgsec">
       <p class="muted">Applies the selected policy to <strong>every</strong> stack web proxy below.
         Ports remain individual per-stack settings: existing ports are kept, a stack without one

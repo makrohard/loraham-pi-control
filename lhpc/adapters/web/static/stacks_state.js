@@ -162,6 +162,21 @@
     var d = btn && btn.closest ? btn.closest("details") : null;
     if (!d && e.target && e.target.closest) { d = e.target.closest("details"); }
     if (!d) { return; }                                    // not inside a section -> nothing to remember
+    // UI-REORG s8: the acted LEVEL (the nearest ancestor <details> that is a level of the page's menu: its
+    // wrapper holds its "page ›" overlay, page_actions) and its owner (the row it sits in) go along, so the server
+    // ties the action's result to that node; the server checks the id (unknown -> the result shows on top).
+    var form = e.target;
+    var lvl = d, top = d;
+    while (lvl && !(lvl.parentElement && lvl.parentElement.querySelector(":scope > .row-actions"))) {
+      lvl = lvl.parentElement ? lvl.parentElement.closest("details") : null;
+    }
+    while (top.parentElement && top.parentElement.closest("details")) { top = top.parentElement.closest("details"); }
+    var owner = top.id === "controller-row" ? "controller" : (top.id.indexOf("stackrow-") === 0 ? top.id.slice(9) : "");
+    if (lvl && lvl.id && owner && form && form.tagName === "FORM" && !form.querySelector('input[name="_level"]')) {
+      var f = document.createElement("input");
+      f.type = "hidden"; f.name = "_level"; f.value = owner + "/" + lvl.id;
+      form.appendChild(f);
+    }
     try {
       sessionStorage.setItem(AKEY, JSON.stringify({ k: keyFor(d),
         y: window.scrollY || window.pageYOffset || 0 }));
@@ -197,8 +212,10 @@
     for (var j = 0; j < all.length; j++) { if (keyFor(all[j]) === act.k) { actEl = all[j]; break; } }
   }
 
-  // A new flash on top means "a message appeared" -> stay at the top instead of scrolling to the spot.
+  // A new flash on top means "a message appeared" -> stay at the top instead of scrolling to the spot. A result
+  // under its node (UI-REORG s8: .panel-result) is an action return too, but keeps the place.
   var flash = document.querySelector(".wrap > p.flash");
+  var result = flash || document.querySelector(".panel-result");
 
   // Resolve ONE section to open. An ACTION return (a form POST that redirected back, evidenced by a flash
   // or a server anchor) reopens exactly the section the button sat in (actEl) — more precise than the
@@ -206,7 +223,7 @@
   // but the button lived in #stack-webserver-<id>). A plain nav carrying a STALE post memory (no flash,
   // no anchor — e.g. after install/build/test diverted to the log page) is ignored. Otherwise a link/
   // server-directed focus wins. Failing everything, the saved open set is restored (plain reload).
-  var actionReturn = !!(act && (flash || forcedTarget || hashDetails));
+  var actionReturn = !!(act && (result || forcedTarget || hashDetails));
   var target = (actEl && actionReturn) ? actEl : (forcedTarget || hashDetails);
 
   // Precedence that preserves the single-main-row model: an EXPLICIT target (action-return / link / hash)

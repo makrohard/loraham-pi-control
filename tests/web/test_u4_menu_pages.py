@@ -127,8 +127,13 @@ def _menus(c, owner):
 
 
 def _slot(doc, block):
-    """The result banners U1's slot renders inside the level `block` (E3-1: the block holding the form)."""
-    return doc.within(doc.by_id(block)).find("div", class_="panel-result")
+    """UI-REORG c9 (a25 B1): the result banners IN the node's own slot: directly after the .row-actions that directly
+    follows the node (page_actions: </details><div class="row-actions">…</div><banner>), or, with no such overlay (a
+    level's own page), directly after the node. A banner under an ancestor's slot does not count."""
+    node = doc.by_id(block)
+    overlay = [e for e in doc.find("div", class_="row-actions") if e.index == node.end + 1]
+    anchor = overlay[0] if overlay else node
+    return [b for b in doc.find("div", class_="panel-result") if b.index == anchor.end + 1]
 
 
 def _crumbs(doc):
@@ -593,7 +598,8 @@ def test_a_successful_revoke_returns_to_certificates_though_its_form_is_gone(tmp
     after = parse(_html(c, page))
     assert not [f for f in after.find("form") if after.within(f).find("input", name="label")
                 and after.within(f).find("input", name="label")[0]["value"] == "u4rev"], "still revocable"
-    assert after.find("p", class_="flash"), "the result shows on the page"
+    assert after.find("div", class_="panel-result") and not after.find("p", class_="flash"), \
+        "the result shows on the page, under its level (c9; was: on top)"
 
 
 

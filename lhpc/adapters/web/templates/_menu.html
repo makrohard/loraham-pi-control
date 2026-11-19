@@ -5,7 +5,9 @@
 {% macro page_link(owner, id) -%}
 <a class="pagelink" href="{{ level_url(owner, id, request.args.get('radio')) }}" title="Open on its own page">page ›</a>
 {%- endmacro %}
-{# The overlay for a level that has no other row action. #}
+{# The overlay for a level that has no other row action. UI-REORG s8: then the results of an action on this level
+   (panel_results(id), K4), under its row and OUTSIDE its <details>: seen while the panel is closed. #}
 {% macro page_actions(owner, id) -%}
-<div class="row-actions">{{ page_link(owner, id) }}</div>
+{%- from "_macros.html" import panel_banner %}{# at call time: _macros imports this file #}
+<div class="row-actions">{{ page_link(owner, id) }}</div>{{ panel_banner(panel_results(id)) }}
 {%- endmacro %}

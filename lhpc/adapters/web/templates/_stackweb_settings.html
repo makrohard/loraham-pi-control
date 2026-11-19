@@ -1,8 +1,8 @@
-{% from "_macros.html" import panel_banner %}{% from "_stackweb_port.html" import live_port_of %}{% set sw = stack_web %}{% set live_port = live_port_of(sw) %}{% set sw_results = panel_results('stack-webserver-' ~ sw.page_id ~ '--settings') -%}
-<details class="advcfg" id="stack-webserver-{{ sw.page_id }}--settings" open>
+{% from "_stackweb_port.html" import live_port_of %}{% set sw = stack_web %}{% set live_port = live_port_of(sw) -%}
+{#- UI-REORG s8: its results show under its row (page_actions); no hard `open` -#}
+<details class="advcfg" id="stack-webserver-{{ sw.page_id }}--settings">
       <summary>Settings</summary>
       <div class="body">
-        {{ panel_banner(sw_results) }}
         {% if sw.cfg.scheme == 'http' %}
           <p class="depnote depnote-warn"><strong>Unencrypted listener.</strong> Client certificates are
             presented during the TLS handshake, so <code>http</code> cannot authenticate anyone —
