@@ -303,25 +303,18 @@ def test_the_firewall_log_has_no_back_link(tmp_path, web):
 
 # ---- the Apps page's "logs" links go; Home keeps its (plan §2b, v4 B1) ----------------------------------------------
 
-def test_the_apps_page_has_no_logs_link_but_the_dependencies_rows_whose_log_is_not_in_logs(tmp_path, web):
-    # UI-REORG c7 (approved removal): a Dependencies row's "logs" link goes where the log is under the
-    # stack's Logs, and stays where it is not (radiolib, …)
+def test_the_apps_page_has_no_logs_link_not_even_on_a_dependencies_row(tmp_path, web):
+    # UI-REORG c13 (his OPEN-20 "link be removed" + OPEN-UX2-2 = A): old (c7) -> new: the Dependencies rows' "logs"
+    # links whose log was under no Logs (radiolib, ...) go too; those logs are under Install › Build logs now
     c, svc = _client(web, tmp_path)
     pages = ["/stacks", "/stacks/controller/menu/controller-row", "/stacks/meshcore/menu/stack-install-meshcore"]
     pages += [f"/stacks/{s.id}/body" for s in svc.stacks()]
     for url in pages:
-        body = _html(c, url)
-        doc = parse(body)
-        deps = [d for d in doc.find("details") if d["id"] and d["id"].endswith("--dependencies")]
-        kept = {id(a) for d in deps for a in doc.within(d).find("a", class_="logslink")}
-        assert [a["href"] for a in doc.find("a", class_="logslink") if id(a) not in kept] == [], url
-        in_logs = {f"/logs/{lp['id'][4:]}" for s in svc.stacks() for lp in submenus.stack_logs(s) if lp["kind"] == "program"}
-        assert not [a["href"] for d in deps for a in doc.within(d).find("a", class_="logslink")
-                    if a["href"] in in_logs], url                                   # moved: no second link
+        doc = parse(_html(c, url))
+        assert [a["href"] for a in doc.find("a", class_="logslink")] == [], url
         assert not [a for a in doc.find("a", class_="pill") if a.text.strip() == "RF log"], url
     doc = parse(_html(c, "/stacks/daemon/body"))
-    dep = doc.by_id("stack-install-daemon--dependencies")
-    assert "/logs/radiolib" in [a["href"] for a in doc.within(dep).find("a", class_="logslink")]   # B1: kept
+    assert doc.by_id("build-radiolib") is not None                     # its install log: Install › Build logs
 
 
 def test_home_keeps_its_log_links(tmp_path, web):
@@ -364,3 +357,93 @@ def test_single_logs_link_without_the_radio_and_per_radio_logs_with_it(tmp_path,
     assert per and all(_q(h)[1].get("radio") == "r2" for h in per), per
     for gid in ("logs-kiss--per-radio", "logs-kiss--single"):                           # the new levels' pages
         assert c.get(f"/stacks/kiss/menu/{gid}").status_code == 200
+
+
+# ---- UI-REORG c13 (his OPEN-UX2-2 = A): Install › Build logs ----------------------------------------------------
+# an independent inventory, by hand: per stack, its components with an install log entry (a source or build steps;
+# the three lhpc-built-in GPS components and meshtastic-cli have none: OPEN-UX2-3 / his flag)
+_BUILD_LOGS = {
+    "daemon": ["loraham-daemon", "radiolib", "libch341"], "chat": ["loraham-chat"],
+    "voice": ["loraham-voice", "loraham-voice-cli"], "kiss": ["loraham-kiss-tnc", "loraham-kiss-serial"],
+    "graywolf": ["graywolf"], "meshtastic": ["meshtastic", "meshtastic-web"],
+    "meshcom": ["meshcom-bridge", "meshcom-gps-relay", "meshcom-qemu", "meshcom-firmware"],
+    "meshcore": ["meshcore-node", "meshcore-webui", "meshcore-cli", "openhop-repeater-src"],
+    "reticulum": ["rns-lora-interface", "rns", "nomadnet", "lxmd", "sideband", "meshchat"],
+}
+
+
+def _log(svc, name, mtime):
+    import os
+    p = svc._paths.under("logs", name)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"{name} line\n")
+    os.utime(p, (mtime, mtime))
+
+
+def test_every_stack_has_a_build_log_entry_per_component_with_an_install_log_in_manifest_order(tmp_path, web):
+    c, svc = _client(web, tmp_path)
+    # Stack › Logs unchanged (a22 N3 pin, a fresh client: no remembered rows): chat still has no program log
+    assert f"No program of {svc.stack('chat').name} writes a log." in _html(c, "/stacks/chat/menu/logs-chat")
+    assert {s.id: [e["id"][len("build-"):] for e in submenus.stack_build_logs(s)] for s in svc.stacks()} == _BUILD_LOGS
+    for sid, cids in _BUILD_LOGS.items():
+        doc = parse(_html(c, f"/stacks/{sid}/body"))
+        node = doc.by_id(f"stack-install-{sid}--build-logs")
+        assert [d["id"] for d in doc.within(node).find("details") if d["id"].startswith("build-")] == [f"build-{cid}" for cid in cids], sid
+    # a shared component only in its owner stack: chat/graywolf list no loraham-daemon / loraham-kiss-tnc
+    assert "loraham-daemon" not in _BUILD_LOGS["chat"] and "loraham-kiss-tnc" not in _BUILD_LOGS["graywolf"]
+
+
+def test_an_entry_shows_the_newest_clone_build_or_test_log_and_no_log_yet_before_one(tmp_path, web):
+    from lhpc.core import auto_install
+    c, svc = _client(web, tmp_path)
+    _log(svc, "adopt-radiolib.log", 1000)
+    _log(svc, "build-radiolib.log", 2000)
+    _log(svc, "start-radiolib.log", 3000)                               # a start log is no install log
+    assert svc.install_log("radiolib") == "build-radiolib.log"
+    run = "0123456789abcdef0123456789abcdef"
+    assert auto_install.RUN_ID_RE.match(run)
+    ai = auto_install.component_log_name(run, "test-radiolib")          # the real builder's name
+    _log(svc, ai, 4000)
+    assert svc.install_log("radiolib") == ai                            # an auto-install run's test log: newer
+    step = auto_install.component_log_base(run, "build-radiolib") + "-2.log"   # a multi-step build's step name
+    _log(svc, step, 4500)                                               # (service_build.py:216 base + run_job -<i>)
+    assert svc.install_log("radiolib") == step
+    ai = step
+    _log(svc, "build-meshtastic-web.log", 5000)
+    assert svc.install_log("meshtastic") == ""                          # another component's log, never this one's
+    _log(svc, "build-radiolib-configure.log", 6000)
+    assert svc.install_log("radiolib") == ai                            # B3: an alphabetic tail is no install log
+    assert svc.install_log("libch341") == ""
+    doc = parse(_html(c, "/stacks/daemon/body"))
+    assert doc.by_id("build-radiolib")["data-src"] == f"/api/logs/radiolib?job={ai}"
+    lib = doc.by_id("build-libch341")
+    assert "no log yet" in lib.text and lib["data-src"] is None
+    r = c.get("/stacks/daemon/menu/build-radiolib")                     # its own page: the job log
+    assert r.status_code == 302 and r.headers["Location"].endswith(f"/logs/radiolib?job={ai}")
+    assert "no log yet" in _html(c, "/stacks/daemon/menu/build-libch341")   # none: its menu page says so
+    got = c.get(f"/api/logs/radiolib?job={ai}").get_json()
+    assert got["lines"] == [f"{ai} line"]
+    crumbs = " ".join(parse(_html(c, f"/logs/radiolib?job={ai}")).find("nav", class_="crumbs")[0].text.split())
+    assert crumbs.endswith("Install › Actions › Job log"), crumbs     # N5: today's job-log crumbs
+
+
+def test_a_components_newest_job_log_is_its_own_and_keeps_its_numbered_and_radio_siblings(tmp_path, web):
+    # found while measuring c13 (pre-existing): `<kind>-<cid>-*` by prefix took another component's log
+    _c, svc = _client(web, tmp_path)
+    life = svc._lifecycle()
+    _log(svc, "build-loraham-voice-cli.log", 3000)
+    assert life._newest_job_log("loraham-voice") is None                # red at the base: the -cli log
+    _log(svc, "start-loraham-voice-r1.log", 1000)
+    assert life._newest_job_log("loraham-voice").name == "start-loraham-voice-r1.log"   # a rid-only start log
+    _log(svc, "start-loraham-voice-433-r2.log", 2000)
+    assert life._newest_job_log("loraham-voice").name == "start-loraham-voice-433-r2.log"
+    _log(svc, "build-loraham-voice-2.log", 2500)
+    assert life._newest_job_log("loraham-voice").name == "build-loraham-voice-2.log"   # a numbered build step
+    _log(svc, "post-loraham-voice-4242-17000000.log", 2700)
+    assert life._newest_job_log("loraham-voice").name == "post-loraham-voice-4242-17000000.log"   # a post runner
+    # the start-log scan (no band: the GUI's logs link): two ids sharing a prefix, no exact log of the shorter
+    comp = svc.stack("meshtastic").component("meshtastic")
+    _log(svc, "start-meshtastic-web-r1.log", 4000)
+    assert life.start_log(comp) is None                                 # red at the base: meshtastic-web's
+    _log(svc, "start-meshtastic-433-r1.log", 3500)
+    assert life.start_log(comp).name == "start-meshtastic-433-r1.log"

@@ -29,5 +29,12 @@
       {% include "_stack_sysdeps.html" %}
       {{ page_actions(g.stack.id, 'stack-install-' ~ g.stack.id ~ '--system-dependencies') }}
       </div>
+
+      {% if stack_build_logs(g.stack) %}
+        <div class="stackrow-wrap">
+        {% include "_stack_build_logs.html" %}
+        {{ page_actions(g.stack.id, 'stack-install-' ~ g.stack.id ~ '--build-logs') }}
+        </div>
+      {% endif %}
     </div>
   </details>

@@ -22,6 +22,7 @@ import dataclasses
 import json
 import os
 import platform
+import re
 import secrets
 import shutil
 import signal
@@ -1566,7 +1567,8 @@ class Lifecycle:
             entries = []
         for name, is_symlink in entries:
             if (is_symlink or not name.startswith(prefix) or not name.endswith(".log")
-                    or name.endswith(".prev.log")):      # the cap's older half, never the live log
+                    or name.endswith(".prev.log")      # the cap's older half, never the live log
+                    or not self._owns(comp.id, name[len("start-"):-len(".log")])):   # not another component's
                 continue
             p = d / name
             try:
@@ -1579,6 +1581,35 @@ class Lifecycle:
             return newest
         plain = d / f"start-{comp.id}.log"
         return plain if plain.is_file() else None
+
+    def _owns(self, comp_id: str, tail: str) -> bool:
+        """Whether a job log whose name after `<kind>-` is `tail` (no .log) is `comp_id`'s: the LONGEST known
+        component id that is `tail` or starts it at a "-" boundary owns it (start-<c>-433-r1, post-<c>-<pid>-<ns>,
+        build-<c>-2 are <c>'s; build-meshtastic-web is meshtastic-web's, never meshtastic's)."""
+        ids = {comp_id} | {c.id for s in self.stacks for c in s.components}
+        return max((i for i in ids if tail == i or tail.startswith(i + "-")), key=len, default="") == comp_id
+
+    _INSTALL_LOG = r"(auto-install-[0-9a-f]{32}-)?(adopt|build|test)-%s(-[0-9]+)?\.log"
+
+    def install_log(self, comp_id: str) -> str:
+        """UI-REORG c13 (his OPEN-UX2-2 = A): the file name of `comp_id`'s NEWEST (mtime) install log -- its clone
+        (`adopt-`), build or host-test log, an auto-install run's included -- or "" (start/post logs never)."""
+        pat = re.compile(self._INSTALL_LOG % re.escape(comp_id))
+        try:
+            entries = runtime_fs.scandir_nofollow(self.paths, self.logs_dir())
+        except (OSError, PathContainmentError):
+            return ""
+        newest, newest_mtime = "", -1.0
+        for name, is_symlink in entries:
+            if is_symlink or not pat.fullmatch(name):
+                continue
+            try:
+                mtime = (self.logs_dir() / name).stat().st_mtime
+            except OSError:
+                continue
+            if mtime > newest_mtime:
+                newest, newest_mtime = name, mtime
+        return newest
 
     def _newest_job_log(self, comp_id: str,
                         kinds=("start", "build", "test", "post", "adopt")) -> Path | None:
@@ -1593,13 +1624,12 @@ class Lifecycle:
             entries = runtime_fs.scandir_nofollow(self.paths, d)
         except (OSError, PathContainmentError):
             return None
-        bases = [f"{k}-{comp_id}" for k in kinds]
         newest, newest_mtime = None, -1.0
         for name, is_symlink in entries:
             if is_symlink or not name.endswith(".log") or name.endswith(".prev.log"):
                 continue                          # (the cap's older half is never the newest job log)
             stem = name[:-4]                      # drop ".log"
-            if not any(stem == b or stem.startswith(b + "-") for b in bases):
+            if not any(stem.startswith(k + "-") and self._owns(comp_id, stem[len(k) + 1:]) for k in kinds):
                 continue
             p = d / name
             try:

@@ -14,10 +14,8 @@
                     {{ freshness_pill(g.update_states[comp.id]) }}{% endif %}</summary>
                 <div class="body">
                   <div class="actbar">
-                    {# UI-REORG s6: the "logs" link goes where the component's log is under the stack's Logs (approved); it
-                       stays where it is not (a build dependency: radiolib, …), no removal without approval. In the
-                       body, not the summary: no interactive element inside the summary toggle (a11y). #}
-                    {% if not log_in_tree(comp) %}<a class="logslink" href="{{ url_for('logs_view', target=comp.id) }}" aria-label="{{ comp.id }} logs">logs</a>{% endif %}
+                    {# UI-REORG c13 (his OPEN-20 + OPEN-UX2-2 = A): no "logs" link on a Dependencies row: a component's
+                       install logs are under Install › Build logs, its program log under the stack's Logs. #}
                     {% if comp.kind.value == 'service' %}
                       {{ instance_btn('start', comp.id, 'Start', g.run_on, "", page_radio) }}{{ instance_btn('stop', comp.id, 'Stop', g.run_on, "", page_radio) }}
                       {# The operator's hard stop of this component only (A §2.12): a confirm page

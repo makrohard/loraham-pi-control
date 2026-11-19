@@ -22,11 +22,13 @@ CONTROLLER = "controller"
 class Dest:
     """An existing route a level opens as its page (U5 rule 21): its endpoint and fixed, whitelisted arguments.
     `radio`: the page's validated ?radio= goes along (a stack's program log); `rf`: an RF log, the stack that owns
-    the registry entry (its writer and job come from the registry, never from the URL)."""
+    the registry entry (its writer and job come from the registry, never from the URL); `build`: a component's
+    install log (its newest clone/build/test job, from the service; none: no own page)."""
     endpoint: str
     args: tuple = ()
     radio: bool = False
     rf: str = ""
+    build: bool = False
 
 
 # U5 (rule 21): a level whose page is an existing route: its "page ›" and tree entry link that route, and its
@@ -36,7 +38,7 @@ OWN_PAGES = {"stack-hardware-daemon": Dest("hardware_view"),
              "controller-logs": Dest("controller_logs"),
              "webserver-row--logs": Dest("webserver_logs"),
              "firewall-row--log": Dest("firewall_logs")}
-_PROGRAM_LOG, _RF_LOG = "log-", "rflog-"
+_PROGRAM_LOG, _RF_LOG, _BUILD_LOG = "log-", "rflog-", "build-"
 
 
 def daemon_label(ready, reachable, radio_state) -> str:
@@ -99,6 +101,8 @@ def own_page(mid: str, stack=None) -> Dest | None:
         cid = mid[len(_PROGRAM_LOG):]
         comp = next((c for c in stack.components if c.id == cid), None) if stack is not None else None
         return Dest("logs_view", (("target", cid),), radio=comp is None or log_group(comp) == "per-radio")
+    if mid.startswith(_BUILD_LOG):
+        return Dest("logs_view", (("target", mid[len(_BUILD_LOG):]),), build=True)
     if mid.startswith(_RF_LOG) and rf_entry(mid[len(_RF_LOG):]) is not None:
         return Dest("logs_view", radio=True, rf=mid[len(_RF_LOG):])
     return None
@@ -140,6 +144,20 @@ def stack_logs(stack) -> list[dict]:
         out.append({"id": _RF_LOG + sid, "owner": sid, "label": "RF log", "kind": "note", "rf_owner": other.owner,
                     "group": _rf_group(other)})
     return out
+
+
+# UI-REORG c13 (OPEN-UX2-3, waits his word): the lhpc-built-in GPS components (meshtastic-gps, meshcom-gps,
+# meshcore-gps) have no source, build or test, so no install log and no entry; True gives them one ("no log yet").
+_GPS_ENTRIES = False
+
+
+def stack_build_logs(stack) -> list[dict]:
+    """UI-REORG c13 (his OPEN-UX2-2 = A): Install › Build logs: one "build" entry per component of the stack, its
+    dependencies included, in manifest order, for a component that can have an install log (a source or build
+    steps; no component has a host test without either, measured); each shows that component's newest clone/build/test log (app: install_log)."""
+    return [{"id": _BUILD_LOG + c.id, "owner": stack.id, "label": c.name, "kind": "build"}
+            for c in stack.components
+            if c.source or c.build_steps or (_GPS_ENTRIES and c.id.endswith("-gps"))]
 
 
 def log_groups(entries) -> list[tuple]:
@@ -253,6 +271,11 @@ def stack_menus(g: dict) -> list[Submenu]:
             add(f"{cid}--info", cid, "Info", "_comp_info.html", comp=comp, st=st)
             evidence(f"{cid}--info", st)
     add(f"{inst}--system-dependencies", inst, "System dependencies", "_stack_sysdeps.html")
+    builds = stack_build_logs(g["stack"])
+    if builds:
+        add(f"{inst}--build-logs", inst, "Build logs", "_stack_build_logs.html")
+        for lp in builds:
+            add(lp["id"], f"{inst}--build-logs", lp["label"], "_log_panel.html", lp=lp)
     if sid == "daemon":
         add("stack-hardware-daemon", top, "Hardware", "_stack_hardware.html")
 

@@ -68,6 +68,7 @@ SNAPSHOT_NEUTRAL: dict[str, str] = {
     "rflog_tail": "neutral writer: through log_tail; see SNAPSHOT_NEUTRAL_WRITERS",
     # reads (views, predicates, plans, log tails, status)
     "radio_bands": "read-only",
+    "install_log": "read-only",
     "active_config_consumer": "read-only",
     "allowed_channels": "read-only",
     "ap_cidr": "read-only",

@@ -1468,6 +1468,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if d is None:
             return None
         args = dict(d.args)
+        if d.build:                          # UI-REORG c13: the newest clone/build/test log; none yet: no own page
+            job = service.install_log(args["target"])
+            return (d.endpoint, dict(args, job=job)) if job else None
         stack = service.stack(owner) if d.radio else None
         rids = _instances.can_run_on(service, stack) if stack is not None else []
         rid = radio if radio in rids else ""
@@ -1497,8 +1500,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         firewall's), else its own page's data: a program's /api/logs/<target>, an RF log's /api/rflog/<target>."""
         if source:
             return url_for("log_preview_api", source=source)
-        _endpoint, args = _own_page(owner, mid, radio)
-        if "job" in args:
+        dest = _own_page(owner, mid, radio)
+        if dest is None:
+            return ""                        # a build-log entry with no log yet
+        _endpoint, args = dest
+        if mid.startswith("rflog-"):
             return url_for("rflog_records_api", target=args["target"], job=args["job"])
         return url_for("logs_api", **args)
 
@@ -1507,7 +1513,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     app.jinja_env.globals["log_preview_url"] = _log_preview_url
     app.jinja_env.globals["stack_logs"] = _submenus.stack_logs
     app.jinja_env.globals["log_groups"] = _submenus.log_groups
-    app.jinja_env.globals["log_in_tree"] = _submenus.log_in_tree
+    app.jinja_env.globals["stack_build_logs"] = _submenus.stack_build_logs
     app.jinja_env.globals["daemon_views"] = _submenus.daemon_views
     app.jinja_env.globals["daemon_label"] = _submenus.daemon_label
     app.jinja_env.globals["params_in_settings"] = _submenus.params_in_settings

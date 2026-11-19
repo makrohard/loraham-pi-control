@@ -1065,6 +1065,10 @@ class MaintenanceOpsMixin:
             return ("running", None) if live else ("unsafe", self._JOB_HINT.get(("*", "unsafe")))
         return ("running", None) if live else ("failed", self._JOB_HINT.get(("*", "incomplete")))
 
+    def install_log(self, comp_id: str) -> str:
+        """UI-REORG c13: the file name of a component's newest clone/build/test log, or "" (Lifecycle.install_log)."""
+        return self._lifecycle().install_log(comp_id)
+
     def running_tasks(self) -> list:
         """STRICTLY READ-ONLY banner feed (auto-install + HMAC + detached build/test/install jobs). RUNNING
         never expires; `done` drops after the server-side expiry; `failed`/`unsafe` STAY (failed is

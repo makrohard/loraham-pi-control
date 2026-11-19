@@ -5,8 +5,15 @@
     ("program" | "rf"; none for the controller's), sources: ((name, preview source), …) for the controller's}. -#}
 {%- set _radio = request.args.get('radio') %}
 {%- set _srcs = lp.sources or () %}
+{%- set _src = log_preview_url('', '', source=_srcs[0][1]) if _srcs else log_preview_url(lp.owner, lp.id, _radio) %}
+{%- if not _src %}{# UI-REORG c13: a build-log entry before its first clone/build/test: nothing to fetch #}
+<details class="advcfg" id="{{ lp.id }}">
+  <summary>{{ lp.label }}</summary>
+  <div class="body"><p class="muted">no log yet</p></div>
+</details>
+{%- else %}
 <details class="advcfg logpanel" id="{{ lp.id }}" data-kind="{{ 'records' if lp.kind == 'rf' else 'lines' }}"
-         data-src="{{ log_preview_url('', '', source=_srcs[0][1]) if _srcs else log_preview_url(lp.owner, lp.id, _radio) }}">
+         data-src="{{ _src }}">
   <summary>{{ lp.label }}</summary>
   <div class="body">
     {% if _srcs|length > 1 %}<label class="logpanel-pick">Log <select class="logpanel-src">
@@ -18,3 +25,4 @@
     <noscript><p class="muted">The last 30 lines need JavaScript; "page ›" opens the full log.</p></noscript>
   </div>
 </details>
+{%- endif %}

@@ -1,0 +1,14 @@
+{#- UI-REORG c13 (his OPEN-UX2-2 = A): Install › Build logs: a panel per component of the stack, its dependencies
+    included (submenus.stack_build_logs), each its newest clone/build/test log, or "no log yet". -#}
+{% from "_menu.html" import page_actions -%}
+<details class="advcfg" id="stack-install-{{ g.stack.id }}--build-logs">
+  <summary>Build logs</summary>
+  <div class="body">
+    {% for lp in stack_build_logs(g.stack) %}
+      <div class="stackrow-wrap">
+      {% include "_log_panel.html" %}
+      {{ page_actions(g.stack.id, lp.id) }}
+      </div>
+    {% endfor %}
+  </div>
+</details>
