@@ -410,8 +410,10 @@ ordkeys() {   # stdin: a status text; args: instance keys -> the keys in status 
 # must = X, and a non-zero exit is a STOP. peer/peerpin: one peer.py action under the peer lock (BG=1: in the background, the
 # pid in SPAWN; `reap <pid>` waits for it). Dry prints each command ([dry]) and runs nothing on a box or a peer: the fake box
 # answers from the dry inventory and prints the FRAME lines of a send, the fake peer is fake_peer.py.
-redact() {   # the passwords, the PIN, the tracker call and the operator's call (any SSID or none, any case) -> masked
+redact() {   # the passwords, the PIN, the tracker call, the operator's call (any SSID or none, any case) and an LXMF address -> masked
   local t s c=${OPERATOR_CALL:-} m=(); t=$(cat; echo x); t=${t%x}
+  if [ -s "${SCRATCH:-/nonexistent}/lxmf.list" ]; then while IFS= read -r s; do [ -z "$s" ] || m+=("$s"); done < "$SCRATCH/lxmf.list"; fi   # read by row 5
+  t=$(printf '%s' "$t" | sed -E 's/^LXMF [0-9a-f]{32}$/LXMF <LXMF>/'; echo x); t=${t%x}
   pweq H || m+=("${PW_H:-}"); pweq Z || m+=("${PW_Z:-}")   # a password equal to its login name stays (masking it = the login)
   local j1=${MCSET_J1:-}; j1=${j1#global}
   for s in "${m[@]}" "${MC_PIN:-}" "${TRACKER_CALL:-}" "$j1"; do [ -n "$s" ] || continue
@@ -420,7 +422,10 @@ redact() {   # the passwords, the PIN, the tracker call and the operator's call 
 capture() {   # capture <file> <cmd...>: THE one writer of an evidence file and its .rc: the command's output, redacted
   local f=$1 o=${OUT:-$EVD} s; shift
   { : > "$o/$f" && : > "$o/$f.rc"; } 2>/dev/null || stop "$f: the evidence file cannot be written: the command did not run"
-  "$@" 2>&1 | redact > "$o/$f"; s=("${PIPESTATUS[@]}"); XRC=${s[0]}
+  if [ -n "${XRAW:-}" ]; then   # XRAW=<file>: also the raw output, into the private scratch only (never the evidence)
+    case "$XRAW" in "${SCRATCH:-/nonexistent}"/*) ;; *) stop "$f: XRAW '$XRAW' is not in the private scratch";; esac
+    "$@" 2>&1 | tee "$XRAW" | redact > "$o/$f"; s=("${PIPESTATUS[@]}"); XRC=${s[0]}; [ "${s[1]}" = 0 ] || stop "$f: the raw copy failed"; s[1]=${s[2]}
+  else "$@" 2>&1 | redact > "$o/$f"; s=("${PIPESTATUS[@]}"); XRC=${s[0]}; fi
   [ "${s[1]}" = 0 ] || stop "$f: the redactor failed"; echo "$XRC" > "$o/$f.rc" || stop "$f.rc: not written"; }
 boxvar() { local v="BOX_${1}_$2" d=; case $2 in USER) d=lhpc;; RUNTIME) d='~/loraham-pi-control';; esac; printf '%s' "${!v:-$d}"; }
 # pweq <H|Z>: box <b>'s password is EXACTLY its login name (a lab box): allowed, not masked, not scanned; pwnote: the header lines
@@ -1056,10 +1061,12 @@ row_5() {   # Reticulum + MeshChat box radio 868.5 SF8 <-> the RNode through the
   leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   # 1. launch: the exchange announces now, waits for the box's announce, and holds its message until the release file exists;
   # it listens BEFORE the MeshChat start, whose own announce (the product's start step) it must hear
-  must "$b" 5-lxmf.txt "cd {RT} && src/meshchat/.venv/bin/python -c '$MCHASH_PY' state/meshchat/identity"   # read only
-  local bh; bh=$(body 5-lxmf.txt | sed -n 's/^LXMF //p' | tail -n 1)
+  local bh raw=$SCRATCH/5-lxmf.raw   # the address goes to the evidence masked (redact), raw only to the private scratch
+  XRAW=$raw must "$b" 5-lxmf.txt "cd {RT} && src/meshchat/.venv/bin/python -c '$MCHASH_PY' state/meshchat/identity"   # read only
+  [ "$MODE" = live ] || cp "$OUT/5-lxmf.txt" "$raw" || stop "row 5: the dry raw copy"
+  bh=$(sed -n 's/^LXMF //p' "$raw" 2>/dev/null | tail -n 1)
   [[ "$bh" =~ ^[0-9a-f]{32}$ ]] || stop "row 5: no LXMF address of the box's MeshChat (5-lxmf.txt): the PC cannot tell its announce"
-  data "row 5: the box's MeshChat LXMF address $bh"
+  printf '%s\n' "$bh" >> "$SCRATCH/lxmf.list" || stop "row 5: lxmf.list not written"; data "row 5: the box's MeshChat LXMF address read (masked in the evidence)"
   BG=1 tx R5-rnode 1 control -- peer 5-peer.txt "$VRNS" rns-exchange "$n2" "$bh" 420 "$pcd" "$n1" "$go"; pr=$SPAWN
   [ "$MODE" = dry ] || sleep 10
   # 3. the box's announce: MeshChat announces once inside its own start (no request from the kit): the start is that send
@@ -1220,6 +1227,7 @@ secret_scan() {
   [ -z "${MC_PIN:-}" ] || scan "PIN" -F -- "$MC_PIN"
   scan "the operator's call (any SSID)" -iE -- "\\b$OPERATOR_CALL(-[0-9]{1,2})?\\b"; [ -z "${TRACKER_CALL:-}" ] || scan "tracker call" -iF -- "$TRACKER_CALL"
   local j1=${MCSET_J1:-}; j1=${j1#global}; [ -z "$j1" ] || scan "the J1 callsign" -iF -- "$j1"
+  if [ -s "${SCRATCH:-/nonexistent}/lxmf.list" ]; then local a; while IFS= read -r a; do [ -z "$a" ] || scan "the box's LXMF address" -F -- "$a"; done < "$SCRATCH/lxmf.list"; fi
   scan "full node id" -E -- '![0-9a-f]{8}'; coords; }
 coords() {   # a coordinate-shaped number in the evidence = FAIL, except a 'FREQ=' value (the daemon status line)
   local o rc c; o=$(grep -rhoE -- '(FREQ=)?-?[0-9]{1,3}\.[0-9]{5,}' "$EVD"); rc=$?; [ $rc -le 1 ] || stop "RE: the coordinate scan failed (rc $rc)"

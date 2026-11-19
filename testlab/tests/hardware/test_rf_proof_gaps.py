@@ -323,7 +323,7 @@ def test_row_5_reads_the_boxs_lxmf_address_before_the_exchange_and_passes_it(tmp
 
 
 ROW5H = ('MODE=live; SCRATCH=$EVD; needs() { return 0; }; undo_push() { :; }; undo_mark() { echo 0; }; nonce() { echo rfkit 0a1b2c3d; }; '
-         'must() { case $2 in 5-framing0.txt) echo yes > "$OUT/$2";; 5-lxmf.txt) printf "%s\\n" "$H" > "$OUT/$2";; esac; XRC=0; }; '
+         'must() { case $2 in 5-framing0.txt) echo yes > "$OUT/$2";; 5-lxmf.txt) printf "%s\\n" "$H" > "${XRAW:-$OUT/$2}"; echo masked > "$OUT/$2";; esac; XRC=0; }; '
          'spower() { :; }; hpower() { :; }; tx() { echo "TX-REACHED $*"; exit 0; }; keep KZ r2; row_5 Z:KZ')
 
 
@@ -337,3 +337,35 @@ def test_row_5_without_a_valid_lxmf_address_stops_before_any_tx(tmp_path, h, sto
     else:
         assert r.returncode == 0 and "TX-REACHED R5-rnode 1 control -- peer 5-peer.txt" in r.stdout, r.stdout + r.stderr
         assert " rns-exchange rfkit 0a1b2c3d 6326b7e6a36b7912ba02bfc8260bfc77 420 " in r.stdout
+
+
+# ---- the box's LXMF address stays out of the evidence (a24 N3, handler DEC 11-19) ---------------------------------------------
+
+ADDR = "6326b7e6a36b7912ba02bfc8260bfc77"
+
+
+def test_row_5_keeps_the_address_in_the_private_scratch_only(tmp_path):
+    # red-before (63d7ee7a): the address was in 5-lxmf.txt (the evidence) and on the console data line
+    r, evd = source_only(tmp_path, ROW5H, H=f"LXMF {ADDR}")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert ADDR not in "".join(ln for ln in r.stdout.splitlines() if ln.startswith("data: "))
+    assert (evd / "lxmf.list").read_text() == ADDR + "\n" and (evd / "5-lxmf.raw").read_text() == f"LXMF {ADDR}\n"
+
+
+def test_the_redactor_masks_an_lxmf_line_and_every_address_read(tmp_path):
+    r, _ = source_only(tmp_path, f'SCRATCH=$EVD; printf "LXMF {ADDR}\\nheard {"ab" * 16} from {ADDR}\\n" | redact; echo; '
+                                 f'echo {"ab" * 16} > "$SCRATCH/lxmf.list"; printf "heard {"ab" * 16}\\n" | redact')
+    assert r.stdout.splitlines() == ["LXMF <LXMF>", f"heard {'ab' * 16} from {ADDR}", "", "heard <REDACTED>"], r.stdout
+
+
+def test_capture_writes_the_raw_output_only_to_the_scratch(tmp_path):
+    r, evd = source_only(tmp_path, f'SCRATCH=$EVD/s; mkdir -p "$SCRATCH"; XRAW=$SCRATCH/raw capture f.txt echo "LXMF {ADDR}"; '
+                                   'echo "rc=$XRC"; XRAW=/elsewhere capture g.txt echo x')
+    assert (evd / "f.txt").read_text() == "LXMF <LXMF>\n" and (evd / "s" / "raw").read_text() == f"LXMF {ADDR}\n"
+    assert "rc=0" in r.stdout and stop_lines(r) == ["STOP: g.txt: XRAW '/elsewhere' is not in the private scratch"]
+
+
+def test_the_end_scan_fails_on_an_address_read_in_the_run(tmp_path):
+    r, _ = source_only(tmp_path, f'SCRATCH=$EVD/s; mkdir -p "$SCRATCH"; echo {ADDR} > "$SCRATCH/lxmf.list"; OPERATOR_CALL=ZZ9ZZZ; '
+                                 f'echo "x {ADDR}" > "$EVD/y.txt"; secret_scan; echo AFTER')
+    assert "FAIL: RE: the box's LXMF address in the evidence" in r.stderr and "AFTER" not in r.stdout

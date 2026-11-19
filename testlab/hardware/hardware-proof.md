@@ -41,7 +41,7 @@ A frame row first reads FREQ and SF of both ends from the daemon's STATUS line; 
 present but incompatible). BW, coding rate and sync word are not in STATUS: a mismatch there shows as a frame not heard.
 Row 5 has no on-air PASS yet.
 Row 5 tells the box's announce by its LXMF address, read only from MeshChat's identity before the row (its display name
-is only logged). Row 5 proves the shipped defaults: it reads `rnode_framing` (it must be `yes`, else STOP; the kit sets nothing), and the PC
+is only logged; the address is masked in the evidence like the passwords, and the end scan checks it). Row 5 proves the shipped defaults: it reads `rnode_framing` (it must be `yes`, else STOP; the kit sets nothing), and the PC
 listens before the MeshChat start, whose own announce it must hear (the kit asks for none; the start is counted as that send).
 Rows 3 and 4, peer -> box: the word must also show up inside the app on the box, not only in its radio log: a Meshtastic
 listener on the box, connected before the G2 sends (Meshtastic keeps no history to read later), and MeshCore's own message
