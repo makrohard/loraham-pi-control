@@ -137,7 +137,7 @@ both lanes dry on every push (`testlab/tests/hardware`): the dry inventory, the 
 
 `testlab/hardware/fw-boxproof.sh dry|live` is the firewall box proof on box H, built the same way (the same local file,
 the password on stdin). It checks a Meshtastic stack's power cap before each start (and the units on its radios, r2 and r4, at its first read
-and before every restart; units on other radios stay untouched; `max_power` 0 is refused), needs the operator's call and never takes it as the lab identity, and on a STOP or a signal replays its recorded undos (exit 4 when one fails). Its LAN checks send the client cert named by `LAN_CERT` in the local file (a PEM file with the cert and its key, mode 600;
+and before every restart; units on other radios stay untouched; `max_power` 0 is refused), needs the operator's call and never takes it as the lab identity, and on a STOP or a signal replays its recorded undos (exit 4 when one fails). Its LAN checks send the client cert named by `LAN_CERT` in the local file (a PEM file with the cert and its unencrypted key, mode 600;
 the console's remote-auth answers 403 without one); the kit never reads a passphrase or a .p12.
 
 ## The evidence

@@ -52,7 +52,7 @@ for k in FWSHA FWFROM FWCI FWREF LANCIDR LABNAME LABSHORT; do
   [[ ${!k:-} =~ $g ]] || stop "$k: $(printf %q "${!k}") is not of its form ($g)"; done
 [ -n "${BOX_H_HOST:-}" ] && [ -n "${EVD_ROOT:-}" ] || { echo "STOP: $LAB sets no BOX_H_HOST or EVD_ROOT"; exit 2; }
 HOSTIP=$BOX_H_HOST; HH=${BOX_H_USER:-lhpc}@$HOSTIP; EVD=${EVD_ROOT/#\~/$HOME}/fw-boxproof-$(date -u +%Y%m%dT%H%M%SZ)
-# LAN_CERT (lab file, optional): a PEM file with a client cert + its key, for the console's remote-auth (a LAN request without a
+# LAN_CERT (lab file, optional): a PEM file with a client cert + its unencrypted key, for the console's remote-auth (a LAN request without a
 # client cert gets 403 by design); a plain absolute path (or ~/), a readable regular file of mode 600 (a symlink reads 777 here:
 # stat does not follow it); the kit reads no passphrase
 LANCERT=; if [ -n "${LAN_CERT:-}" ]; then LANCERT=${LAN_CERT/#\~/$HOME}
