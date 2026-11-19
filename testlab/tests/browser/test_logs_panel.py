@@ -132,7 +132,8 @@ def test_a_radio_switch_click_on_the_logs_page_lands_with_the_switch_shown(page)
     page.click("#logs-meshcom--per-radio > summary")
     links = page.locator("#logs-meshcom--per-radio nav.rswitch a")
     assert links.count() >= 1
-    links.last.click()
-    page.wait_for_load_state("load")
+    with page.expect_navigation():                                   # the new page, not the clicked one (N1)
+        links.last.click()
+    assert "/stacks/meshcom/menu/logs-meshcom--per-radio" in page.url, page.url
     assert page.evaluate("() => document.getElementById('logs-meshcom--per-radio').open")
     assert page.locator("#logs-meshcom--per-radio nav.rswitch").is_visible()
