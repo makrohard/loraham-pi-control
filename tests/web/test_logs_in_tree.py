@@ -460,3 +460,38 @@ def test_a_component_with_only_a_host_test_gets_a_build_log_entry():
     comps = [NS(id="t-only", name="T", source=None, build_steps=(), test_argv=("pytest",)),
              NS(id="nothing", name="N", source=None, build_steps=(), test_argv=())]
     assert [e["id"] for e in submenus.stack_build_logs(NS(id="x", components=comps))] == ["build-t-only"]
+
+
+# ---- F9 (Q4 = A): the radio switch stands in "Per radio", on every logs page --------------------------------------
+
+_PER_RADIO_STACKS = ("daemon", "kiss", "graywolf", "meshtastic", "meshcom", "meshcore")
+
+
+@pytest.mark.parametrize("sid", _PER_RADIO_STACKS)
+def test_the_radio_switch_is_inside_per_radio_inline_and_on_the_groups_page(tmp_path, web, sid):
+    c, _svc = _client(web, tmp_path, radios=True)
+    for url in (f"/stacks/{sid}/body?radio=r2",                                   # inline: the Stacks body
+                f"/stacks/{sid}/menu/logs-{sid}?radio=r2",                        # inline: the Logs level's page
+                f"/stacks/{sid}/menu/logs-{sid}--per-radio?radio=r2"):            # standalone: the group's page
+        doc = parse(_html(c, url))
+        per = doc.by_id(f"logs-{sid}--per-radio")
+        assert per is not None, url
+        inside = doc.within(per).find("nav", class_="rswitch")
+        logs = doc.by_id(f"logs-{sid}")                                           # absent on the group's page
+        assert len(inside) == 1, url
+        assert logs is None or len(doc.within(logs).find("nav", class_="rswitch")) == 1, url    # none above the groups
+        one = doc.by_id(f"logs-{sid}--single")
+        assert one is None or not doc.within(one).find("nav", class_="rswitch"), url
+        hrefs = [a["href"] for a in doc.within(inside[0]).find("a")]
+        assert hrefs, url
+        for h in hrefs:
+            path, query = _q(h)
+            assert h.endswith(f"#logs-{sid}--per-radio") and query.get("radio") in ("r1", "r2"), (url, h)
+        assert {_q(h)[1]["radio"] for h in hrefs} | {"r2"} == {"r1", "r2"}, (url, hrefs)
+
+
+def test_a_single_only_stack_has_no_logs_switch(tmp_path, web):
+    c, _svc = _client(web, tmp_path, radios=True)
+    doc = parse(_html(c, "/stacks/reticulum/body?radio=r1"))
+    assert doc.by_id("logs-reticulum--per-radio") is None
+    assert not doc.within(doc.by_id("logs-reticulum")).find("nav", class_="rswitch")
