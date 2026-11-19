@@ -33,11 +33,14 @@
   // "⏳ <op>" while running, "<op> failed|unsafe" until dismissed, gone when done; a running job also has its body
   // line in the stack's .jobruns. One reconcile per task, keyed by keyOf(t), from this one poll; an item without a
   // stack stays in the banner only. A mark carries data-task, never data-stack (it is never taken for a host).
-  var lastTasks = [];
-  function reconcile(host, want, make) {
+  // A lazy body's server-rendered job lines may be newer than a reply: its .jobruns is tagged with the number of the
+  // last GET sent when it arrived (data-since), and only a reply to a LATER GET prunes it (seq > since); the
+  // snapshot replayed for a body that just arrived (seq 0) and a dismiss never prune job lines.
+  var lastTasks = [], sent = 0;
+  function reconcile(host, want, make, prune) {
     var keep = {};
     want.forEach(function (t) { keep[keyOf(t)] = true; });
-    host.querySelectorAll(":scope > [data-task]").forEach(function (m) {
+    if (prune) host.querySelectorAll(":scope > [data-task]").forEach(function (m) {
       if (!keep[m.getAttribute("data-task")]) m.remove();
     });
     want.forEach(function (t) {
@@ -58,7 +61,7 @@
     p.appendChild(a);
     return p;
   }
-  function marks(tasks) {
+  function marks(tasks, seq) {
     lastTasks = tasks;
     var by = {};
     tasks.forEach(function (t) {
@@ -66,18 +69,22 @@
     });
     var of = function (sid) { return by[sid] || []; };
     document.querySelectorAll("[id^='stackrow-'] > summary .col-status").forEach(function (h) {
-      reconcile(h, of(h.closest("[id^='stackrow-']").id.slice("stackrow-".length)), mark);
+      reconcile(h, of(h.closest("[id^='stackrow-']").id.slice("stackrow-".length)), mark, true);
     });
     document.querySelectorAll("[data-stack]").forEach(function (h) {
-      reconcile(h, of(h.getAttribute("data-stack").split("@")[0]), mark);
+      reconcile(h, of(h.getAttribute("data-stack").split("@")[0]), mark, true);
     });
     document.querySelectorAll(".jobruns[data-jobs-for]").forEach(function (h) {
       reconcile(h, of(h.getAttribute("data-jobs-for")).filter(function (t) {
         return t.kind === "job" && t.state === "running";
-      }), jobLine);
+      }), jobLine, seq > Number(h.getAttribute("data-since") || 0));
     });
   }
-  document.addEventListener("lhpc:bodyloaded", function () { marks(lastTasks); });   // a lazy body gets its lines
+  document.addEventListener("lhpc:bodyloaded", function (e) {   // a lazy body gets its lines and keeps its own
+    var root = (e.detail || {}).root || document;
+    root.querySelectorAll(".jobruns").forEach(function (h) { h.setAttribute("data-since", String(sent)); });
+    marks(lastTasks, 0);
+  });
 
   // ONE reload per TERMINAL start/restart attempt this tab has not reloaded for yet — whether the
   // job turned terminal while we polled or had already finished before the first poll (the page
@@ -134,9 +141,9 @@
   // Recover (an unsafe JOB) with `hidden`. The ✕ only hides the item (X8).
   var template = document.getElementById("task-row-template");
 
-  function render(tasks) {
+  function render(tasks, seq) {
     tasks = tasks || [];
-    marks(tasks);
+    marks(tasks, seq);
     reloadOnFinish(tasks);
     var wanted = {};
     tasks.forEach(function (t) { wanted[keyOf(t)] = true; });
@@ -179,7 +186,14 @@
     var t = {kind: row.getAttribute("data-kind"), run_id: row.getAttribute("data-run"),
              attempt_id: row.getAttribute("data-attempt")};
     if (b.classList.contains("ti-recover")) post("/api/tasks/recover", t).then(tick);
-    else post("/api/tasks/dismiss", t).then(function (r) { if (r.ok) { row.remove(); tick(); } });   // its mark: at once
+    else post("/api/tasks/dismiss", t).then(function (r) {
+      if (!r.ok) return;
+      var key = row.getAttribute("data-key");
+      row.remove();
+      marks(lastTasks.filter(function (x) { return keyOf(x) !== key; }), 0);   // its mark: at once
+      if (polling) stale = true;      // a reply already on its way predates the dismiss: dropped, one fresh poll
+      else if (!document.hidden) tick();   // none out: one poll now (a job started elsewhere shows at once)
+    });
   });
 
   // Two speeds, because the feed is rarely interesting. FAST only while something is RUNNING;
@@ -189,7 +203,7 @@
   // single failure. A fixed slow interval, not escalating backoff: deterministic, and it caps how
   // late a job started from another device can appear.
   var FAST_MS = 2000, SLOW_MS = 15000;
-  var timer = null, polling = false;
+  var timer = null, polling = false, stale = false;
 
   function clearTimer() {
     if (timer !== null) { clearTimeout(timer); timer = null; }
@@ -212,17 +226,19 @@
     // nothing — the in-flight request finishes and schedules normally.
     if (polling) return;
     polling = true;
+    var seq = ++sent;
     fetch("/api/tasks", {cache: "no-store"})
       .then(function (r) { return r.json(); })
       .then(function (d) {
+        if (stale) { stale = false; polling = false; schedule(0); return; }   // not while hidden (schedule)
         var tasks = (d && d.tasks) || [];
-        render(tasks);
+        render(tasks, seq);
         var running = tasks.some(function (t) { return t.state === "running"; });
         polling = false;
         schedule(running ? FAST_MS : SLOW_MS);
       })
       .catch(function () {            // transient: keep the slow cadence, never spin on failure
-        polling = false;
+        polling = false; stale = false;
         schedule(SLOW_MS);
       });
   }

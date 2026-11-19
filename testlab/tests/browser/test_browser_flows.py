@@ -326,7 +326,9 @@ def test_a_start_marks_its_stack_and_reloads_the_page_once_when_it_finishes(page
 
     page.goto(page.lab_base + "/stacks", wait_until="networkidle")
     assert page.locator(".radiogrid").count() == 0, "this page must not be the reload owner"
-    page.wait_for_selector("#stackrow-kiss > summary .col-status > .badge[data-task]", timeout=15000)   # s14 mark
+    mark = page.locator("#stackrow-kiss > summary .col-status > .badge[data-task]")
+    mark.wait_for(timeout=15000)                                                       # s14 mark: running start
+    assert (mark.get_attribute("class"), mark.inner_text()) == ("badge badge-starting", "⏳ start")
     assert len(navigations) == 1, navigations
 
     # The job finishes -> exactly one reload. The navigation itself is the observable.
