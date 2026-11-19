@@ -20,7 +20,9 @@
   <tbody>
     <tr><th>Run state</th><td><span class="badge badge-{{ st.run_state.value }}">{{ st.run_state.value }}</span></td></tr>
     <tr><th>Source / profile</th><td>{{ g.source_words[comp.id]|join(' / ') }}</td></tr>
+    {% if comp.kind.value != 'library' %}{# F3: a library never transmits: no TX row #}
     <tr><th>TX</th><td class="tx-{{ st.tx_state.value }}">{{ st.tx_state.value }}{% if comp.tx_capable %} <span class="muted">(TX-capable)</span>{% endif %}</td></tr>
+    {% endif %}
     {% if st.pids %}<tr><th>PIDs</th><td class="mono">{{ st.pids|join(', ') }}</td></tr>{% endif %}
   </tbody>
 </table>
