@@ -3,9 +3,8 @@
  * + detached start/restart jobs). The SERVER owns visibility (done expires after 60 s; failed/unsafe
  * STAY) — the client renders whatever the server returns, keyed by kind+run_id. A `failed` item gets a
  * ✕ (dismiss); an `unsafe` JOB gets a Recover button — both POST (CSRF) to /api/tasks/{dismiss,recover}.
- * A running start/restart job also marks its stack ("starting…" badge on the Apps row / Dashboard card,
- * from the item's `stack`), and when such a job turns terminal the page reloads ONCE so the
- * server-rendered state becomes current. CSP-safe: template clones / textContent / setAttribute only. */
+ * Every task of a stack marks the stack's main node (UI-REORG s14, marks() below), and when a
+ * start/restart job turns terminal the page reloads ONCE so the server-rendered state becomes current. CSP-safe: template clones / textContent / setAttribute only. */
 (function () {
   "use strict";
   var banner = document.getElementById("task-banner");
@@ -29,31 +28,56 @@
 
   function isStartJob(t) { return t.kind === "job" && (t.op === "start" || t.op === "restart"); }
 
-  // Mark every element that represents stack `sid`: the Apps row (#stackrow-<sid>) and any element
-  // tagged data-stack="<sid>" (Dashboard cards). The badge sits beside the status badge.
-  function markStarting(tasks) {
-    var want = {};
-    tasks.forEach(function (t) {
-      if (isStartJob(t) && t.state === "running" && t.stack) want[t.stack] = t.op;
+  // UI-REORG s14: every task of a stack (an item with `stack` + `op`) marks that stack's main node -- the Apps row's
+  // summary status (#stackrow-<sid>), every element tagged data-stack="<sid>" or "<sid>@<rid>" (Home cards) --
+  // "⏳ <op>" while running, "<op> failed|unsafe" until dismissed, gone when done; a running job also has its body
+  // line in the stack's .jobruns. One reconcile per task, keyed by keyOf(t), from this one poll; an item without a
+  // stack stays in the banner only. A mark carries data-task, never data-stack (it is never taken for a host).
+  var lastTasks = [];
+  function reconcile(host, want, make) {
+    var keep = {};
+    want.forEach(function (t) { keep[keyOf(t)] = true; });
+    host.querySelectorAll(":scope > [data-task]").forEach(function (m) {
+      if (!keep[m.getAttribute("data-task")]) m.remove();
     });
-    document.querySelectorAll(".badge-starting").forEach(function (b) {
-      if (!want[b.getAttribute("data-starting-for")]) b.parentNode.removeChild(b);
-    });
-    Object.keys(want).forEach(function (sid) {
-      var hosts = [];
-      var row = document.getElementById("stackrow-" + sid);
-      if (row) { var st = row.querySelector(":scope > summary .col-status"); if (st) hosts.push(st); }
-      document.querySelectorAll("[data-stack=\"" + sid + "\"]").forEach(function (h) { hosts.push(h); });
-      hosts.forEach(function (h) {
-        if (h.querySelector(".badge-starting")) return;
-        // The badge's own marker is a DIFFERENT attribute than the hosts' `data-stack`, so the
-        // badge is never selected as a host on the next poll (it would nest a badge in a badge).
-        var b = el("span", "badge badge-starting", want[sid] === "restart" ? "restarting…" : "starting…");
-        b.setAttribute("data-starting-for", sid);
-        h.appendChild(b);
-      });
+    want.forEach(function (t) {
+      var m = make(t), old = host.querySelector(':scope > [data-task="' + keyOf(t) + '"]');
+      m.setAttribute("data-task", keyOf(t));
+      if (!old) host.appendChild(m);
+      else if (old.outerHTML !== m.outerHTML) host.replaceChild(m, old);   // a state change: new text
     });
   }
+  function mark(t) {
+    return el("span", "badge " + (t.state === "running" ? "badge-starting" : "badge-failed"),
+              t.state === "running" ? "⏳ " + t.op : t.op + " " + t.state);
+  }
+  function jobLine(t) {
+    var p = el("p", "jobrun", "⏳ " + t.op + " running (" + t.target + ") — ");
+    var a = el("a", "", "open log");
+    a.setAttribute("href", "/logs/" + encodeURIComponent(t.target) + "?job=" + encodeURIComponent(t.log));
+    p.appendChild(a);
+    return p;
+  }
+  function marks(tasks) {
+    lastTasks = tasks;
+    var by = {};
+    tasks.forEach(function (t) {
+      if (t.stack && t.op && t.state !== "done") (by[t.stack] = by[t.stack] || []).push(t);
+    });
+    var of = function (sid) { return by[sid] || []; };
+    document.querySelectorAll("[id^='stackrow-'] > summary .col-status").forEach(function (h) {
+      reconcile(h, of(h.closest("[id^='stackrow-']").id.slice("stackrow-".length)), mark);
+    });
+    document.querySelectorAll("[data-stack]").forEach(function (h) {
+      reconcile(h, of(h.getAttribute("data-stack").split("@")[0]), mark);
+    });
+    document.querySelectorAll(".jobruns[data-jobs-for]").forEach(function (h) {
+      reconcile(h, of(h.getAttribute("data-jobs-for")).filter(function (t) {
+        return t.kind === "job" && t.state === "running";
+      }), jobLine);
+    });
+  }
+  document.addEventListener("lhpc:bodyloaded", function () { marks(lastTasks); });   // a lazy body gets its lines
 
   // ONE reload per TERMINAL start/restart attempt this tab has not reloaded for yet — whether the
   // job turned terminal while we polled or had already finished before the first poll (the page
@@ -112,7 +136,7 @@
 
   function render(tasks) {
     tasks = tasks || [];
-    markStarting(tasks);
+    marks(tasks);
     reloadOnFinish(tasks);
     var wanted = {};
     tasks.forEach(function (t) { wanted[keyOf(t)] = true; });
@@ -155,7 +179,7 @@
     var t = {kind: row.getAttribute("data-kind"), run_id: row.getAttribute("data-run"),
              attempt_id: row.getAttribute("data-attempt")};
     if (b.classList.contains("ti-recover")) post("/api/tasks/recover", t).then(tick);
-    else post("/api/tasks/dismiss", t).then(function (r) { if (r.ok) row.remove(); });
+    else post("/api/tasks/dismiss", t).then(function (r) { if (r.ok) { row.remove(); tick(); } });   // its mark: at once
   });
 
   // Two speeds, because the feed is rarely interesting. FAST only while something is RUNNING;

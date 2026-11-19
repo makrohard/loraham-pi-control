@@ -1193,7 +1193,7 @@ class MaintenanceOpsMixin:
             rid, phase = hst.get("run_id", ""), hst.get("phase")
             sid, action = hst.get("sid", "meshcom"), hst.get("action", "enable")
             base = {"kind": "hmac", "run_id": rid, "label": f"HMAC {action} on {sid}",
-                    "href": f"/stacks/{sid}/hmac/{action}"}
+                    "href": f"/stacks/{sid}/hmac/{action}", "stack": sid, "op": f"HMAC {action}"}
             if phase == "running":
                 out.append({**base, "state": "running"})
             elif phase == "unsafe":
@@ -1223,7 +1223,7 @@ class MaintenanceOpsMixin:
                 extra = fin
             item = {"kind": "job", "run_id": log, "attempt_id": rec.get("attempt_id", ""),
                     "label": (f"{rec.get('op', '')} {target}").strip(),
-                    "op": rec.get("op", ""), "stack": rec.get("stack", ""),
+                    "op": rec.get("op", ""), "stack": rec.get("stack", ""), "target": target, "log": log,
                     # `admitted`: the child passed its pre-mutation boundary (mark_running) — a
                     # FAILED admitted start/restart may have changed lifecycle state (an owner or a
                     # dependent stopped, a restart's stop leg done), a non-admitted one changed nothing.

@@ -35,6 +35,7 @@ def test_running_hmac_task_is_yellow_with_href(tmp_path, monkeypatch):
     monkeypatch.setattr(ControllerService, "log_running", lambda self, *a, **k: True)
     t = next(t for t in svc.running_tasks() if t["kind"] == "hmac")
     assert t["state"] == "running" and t["href"] == "/stacks/meshcom/hmac/renew" and t["run_id"] == "a" * 32
+    assert (t["stack"], t["op"]) == ("meshcom", "HMAC renew")      # UI-REORG s14: a readable marker names its stack
 
 
 def test_terminal_task_included_only_within_expiry(tmp_path):
@@ -252,6 +253,7 @@ def test_malformed_hmac_status_is_surfaced_as_unsafe(tmp_path, monkeypatch):
                                       "sid": "meshcom", "action": "enable"})
     t = next(t for t in svc.running_tasks() if t["kind"] == "hmac")
     assert t["state"] == "unsafe" and "schema mismatch" in t["hint"]
+    assert "stack" not in t                                          # UI-REORG s14: an unsafe marker: banner only
 
 
 def test_a_finished_banner_dated_in_the_future_does_not_stay_forever(tmp_path, monkeypatch):
@@ -291,6 +293,7 @@ def test_job_items_carry_op_and_stack_and_start_hints_are_the_summary(tmp_path):
                                  detail="Run applied for 'meshcom'. the node boots in ~1 min")
     t = next(t for t in svc.running_tasks() if t["kind"] == "job")
     assert t["op"] == "start" and t["stack"] == "meshcom" and t["label"] == "start meshcom"
+    assert (t["target"], t["log"]) == ("meshcom", "web-start-meshcom.log")   # UI-REORG s14: mark + body line fields
     assert t["state"] == "done" and t["hint"] == "Run applied for 'meshcom'. the node boots in ~1 min"
     assert t["href"] == "/logs/meshcom?job=web-start-meshcom.log"
     # a build job keeps its fixed hint (never the detail)
