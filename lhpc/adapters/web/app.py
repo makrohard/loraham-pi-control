@@ -2950,6 +2950,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         src = "access" if request.args.get("src") == "access" else "error"
         path, lines = service.webserver_log_tail(src, 300)
         return render_template("webserver_logs.html", version=__version__, src=src, path=path, lines=lines,
+                               log_source="webserver-" + src,
                                log_crumbs=_log_crumbs(_submenus.CONTROLLER, "webserver-row--logs",
                                                       ("webserver-row", "Logs")))
 
@@ -2958,7 +2959,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # The managed firewall's per-check diagnostic log (/run/lhpc-firewall/firewall.log),
         # written by the root helper and read GET-safe (bounded no-follow). tmpfs — per boot.
         path, lines = service.firewall_log_tail(300)
-        return render_template("firewall_logs.html", version=__version__, path=path, lines=lines,
+        return render_template("firewall_logs.html", version=__version__, path=path, lines=lines, log_source="firewall",
                                log_crumbs=_log_crumbs(_submenus.CONTROLLER, "firewall-row--log", ("firewall-row", "Log")))
 
     @app.get("/controller/logs")
@@ -2975,27 +2976,29 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         unit = _SRC_UNITS[src]
         path, lines = service.controller_log_tail(src, 300)
         return render_template("controller_logs.html", version=__version__, src=src, unit=unit,
-                               path=path, lines=lines,
+                               path=path, lines=lines, log_source="controller-" + src,
                                log_crumbs=_log_crumbs(_submenus.CONTROLLER, "controller-logs", ("controller-row", "Logs")))
 
     # LOGS-IN-TREE B2 (G1-R2 N5): the Apps page's preview of the controller's, the webserver's and the firewall's logs.
     # A fixed whitelist, each source the bounded tail reader its full page uses; any other value is 404. The answer
     # is the source and its LAST 30 lines (no file path); never cached (every answer's no-store, _SECURITY_HEADERS).
+    # UI-REORG s5: `?lines=N` (1..300, the full pages' history depth) for a full log page's 3 s refresh.
     _PREVIEW = {"controller-web": lambda n: service.controller_log_tail("web", n),
                 "controller-selfupdate": lambda n: service.controller_log_tail("selfupdate", n),
                 "controller-boot-restore": lambda n: service.controller_log_tail("boot-restore", n),
                 "webserver-error": lambda n: service.webserver_log_tail("error", n),
                 "webserver-access": lambda n: service.webserver_log_tail("access", n),
                 "firewall": lambda n: service.firewall_log_tail(lines=n)}
-    _PREVIEW_LINES = 30
+    _PREVIEW_LINES, _PAGE_LINES = 30, 300
 
     @app.get("/api/logpreview/<source>")
     def log_preview_api(source: str):
         read = _PREVIEW.get(source)
         if read is None:
             abort(404)
-        _path, lines = read(_PREVIEW_LINES)
-        return jsonify(source=source, lines=list(lines)[-_PREVIEW_LINES:])
+        n = max(1, min(request.args.get("lines", _PREVIEW_LINES, type=int), _PAGE_LINES))
+        _path, lines = read(n)
+        return jsonify(source=source, lines=list(lines)[-n:])
 
     def _ws_back():
         return redirect(url_for("stacks_overview") + "#webserver-row")

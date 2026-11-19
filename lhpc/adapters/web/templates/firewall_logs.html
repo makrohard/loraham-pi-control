@@ -1,23 +1,11 @@
-{% extends "base.html" %}
+{% extends "_log_page.html" %}
+{# The managed firewall's own per-check diagnostic (firewall.log), written by the root helper to tmpfs. NOT the nginx
+   access/error logs (those live on the Webserver logs page). The shell: _log_page.html (3 s refresh). #}
 {% block title %}Firewall log — LoRaHAM Pi Control{% endblock %}
-{% block content %}
-  {# The managed firewall's own per-check diagnostic (firewall.log), written by the root helper to
-     tmpfs. Static tail — reload to refresh. NOT the nginx access/error logs (those live on the
-     Webserver logs page). #}
-  {% include "_log_crumbs.html" %}
-  <div class="card">
-    <header>
+{% block header %}
       <span class="pill">firewall.log</span>
-      <span class="tabs">
-        <a href="{{ url_for('firewall_logs') }}" class="pill">reload</a>
-      </span>
-    </header>
-    <div class="body">
-      <p class="muted">Per-check diagnostic written by the root helper to
-        <code>{{ path or '(no log file yet)' }}</code> (tmpfs — reset each boot; empty until the
+{% endblock %}
+{% block note %}
+      <p class="muted">Per-check diagnostic written by the root helper (tmpfs — reset each boot; empty until the
         firewall has been applied/checked).</p>
-      <pre class="logbox">{% for line in lines %}{{ line }}
-{% endfor %}{% if not lines %}(no output yet){% endif %}</pre>
-    </div>
-  </div>
 {% endblock %}

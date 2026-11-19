@@ -137,6 +137,6 @@
   });
 
   render();
-  setInterval(poll, 5000);
+  setInterval(poll, 3000);
   poll();
 })();

@@ -1,5 +1,7 @@
-// Live log tail — polls the read-only log API and keeps the box scrolled to the
-// bottom (unless the user has scrolled up to read history). Same-origin only.
+// Live log tail — polls the read-only log API every 3 s and keeps the box scrolled to the
+// bottom (unless the user has scrolled up to read history). Same-origin only. UI-REORG s5: one poller for every full
+// log page; the source adapter: a program's log (/api/logs/<target>, with its process state) or a static page's
+// preview source (data-preview: /api/logpreview/<source>?lines=300, no process state).
 (function () {
   "use strict";
   var card = document.getElementById("log-card");
@@ -7,10 +9,12 @@
   var target = card.getAttribute("data-target");
   var job = card.getAttribute("data-job");
   var radio = card.getAttribute("data-radio");
+  var preview = card.getAttribute("data-preview");
   var q = [];
   if (job) q.push("job=" + encodeURIComponent(job));
   if (radio) q.push("radio=" + encodeURIComponent(radio));
-  var url = "/api/logs/" + encodeURIComponent(target) + (q.length ? "?" + q.join("&") : "");
+  var url = preview ? "/api/logpreview/" + encodeURIComponent(preview) + "?lines=300"
+    : "/api/logs/" + encodeURIComponent(target) + (q.length ? "?" + q.join("&") : "");
   var box = document.getElementById("logbox");
   var status = document.getElementById("log-status");
 
@@ -32,7 +36,7 @@
         var stick = atBottom();
         box.textContent = (d.lines && d.lines.length) ? d.lines.join("\n") : "(no output yet)";
         if (stick) box.scrollTop = box.scrollHeight;
-        mark(d.running);
+        if (!preview) mark(d.running);
       })
       .catch(function () { if (status) status.textContent = "retrying…"; });
   }
@@ -47,6 +51,6 @@
   }
 
   box.scrollTop = box.scrollHeight;     // start at the newest line
-  setInterval(poll, 5000);
+  setInterval(poll, 3000);
   poll();
 })();

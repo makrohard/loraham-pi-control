@@ -1,12 +1,8 @@
-{% extends "base.html" %}
+{% extends "_log_page.html" %}
+{# LoRaHAM Pi Control's OWN process logs — the lhpc-web / lhpc-selfupdate / lhpc-boot-restore units append to on-disk
+   files under logs/, tailed at request time and then every 3 s (the shell: _log_page.html). #}
 {% block title %}controller logs ({{ src }}) — LoRaHAM Pi Control{% endblock %}
-{% block content %}
-  {# LoRaHAM Pi Control's OWN process logs — the lhpc-web / lhpc-selfupdate / lhpc-boot-restore
-     units append to on-disk files under logs/, tailed here at request time (same as the nginx
-     front-end logs). #}
-  {% include "_log_crumbs.html" %}
-  <div class="card">
-    <header>
+{% block header %}
       <span class="pill">{{ unit }}</span>
       <span class="tabs">
         <a href="{{ url_for('controller_logs', src='web') }}"
@@ -15,13 +11,5 @@
            class="pill{{ ' mono' if src == 'selfupdate' else '' }}">self-update</a>
         <a href="{{ url_for('controller_logs', src='boot-restore') }}"
            class="pill{{ ' mono' if src == 'boot-restore' else '' }}">boot-restore</a>
-        <a href="{{ url_for('controller_logs', src=src) }}" class="pill">reload</a>
       </span>
-    </header>
-    <div class="body">
-      <p class="muted">{{ path or '(no log file yet)' }}</p>
-      <pre class="logbox">{% for line in lines %}{{ line }}
-{% endfor %}{% if not lines %}(no output yet){% endif %}</pre>
-    </div>
-  </div>
 {% endblock %}

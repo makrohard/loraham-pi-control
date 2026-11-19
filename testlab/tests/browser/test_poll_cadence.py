@@ -1,6 +1,6 @@
 """The console's slow polls, in a real browser: the dashboard asks whether anything structural
 changed every 10 s (every 2 s while an interactive start is pending), and a log page asks for new
-lines every 5 s.
+lines every 3 s (UI-REORG c6; was 5 s).
 
 Each poll is counted at its route; time is Playwright's clock, advanced by the test and never
 slept through. What is asserted is the number of requests in a window.
@@ -80,9 +80,9 @@ def _open_log(page, path, pattern):
     return seen
 
 
-def test_a_process_log_asks_for_new_lines_every_5_s(page):
+def test_a_process_log_asks_for_new_lines_every3_s(page):
     seen = _open_log(page, "/logs/loraham-kiss-tnc", "**/api/logs/**")
-    page.clock.run_for(4900)
+    page.clock.run_for(2900)
     _settle(page)
     assert seen["n"] == 1
     page.clock.run_for(200)
@@ -90,9 +90,9 @@ def test_a_process_log_asks_for_new_lines_every_5_s(page):
     assert seen["n"] == 2
 
 
-def test_an_rf_log_asks_for_new_records_every_5_s(page, seeded_rf_logs):
+def test_an_rf_log_asks_for_new_records_every3_s(page, seeded_rf_logs):
     seen = _open_log(page, "/logs/loraham-kiss-tnc?job=rf-kiss.log", "**/api/rflog/**")
-    page.clock.run_for(4900)
+    page.clock.run_for(2900)
     _settle(page)
     assert seen["n"] == 1
     page.clock.run_for(200)

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{#- UI-REORG s5: the ONE shell of the static full log pages (controller, webserver, firewall; logs.html has the same
+    one): breadcrumb · header (the page's pill + tabs) · the path on its own line (+ an optional muted note) · the log,
+    refreshed every 3 s by logs.js from /api/logpreview/<source>?lines=300 (`log_source`, the page's history depth). -#}
+{% block content %}
+  {% include "_log_crumbs.html" %}
+  <div class="card" id="log-card" data-preview="{{ log_source }}">
+    <header>{% block header %}{% endblock %}</header>
+    <div class="body">
+      <p class="muted logpath">{{ path or '(no log file yet)' }}</p>
+      {% block note %}{% endblock %}
+      <pre id="logbox" class="logbox">{% for line in lines %}{{ line }}
+{% endfor %}{% if not lines %}(no output yet){% endif %}</pre>
+    </div>
+  </div>
+{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='logs.js') }}" defer></script>{% endblock %}
