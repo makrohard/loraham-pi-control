@@ -26,8 +26,16 @@ def _count(page, pattern, answer=None):
     return seen
 
 
-def _open_dashboard(page, pending=False):
+def _paused_clock(page):
+    """Playwright's clock, paused before the page loads: installed alone it runs with real time, and the real time a
+    load and a settle take counts into the test's windows (a 10 s / 3 s poll fired inside "9.9 s" / "2.9 s" on a
+    busy run: train A testlab 44525282762)."""
     page.clock.install()
+    page.clock.pause_at(page.evaluate("() => Date.now()") + 1000)
+
+
+def _open_dashboard(page, pending=False):
+    _paused_clock(page)
     page.route("**/__settled__", lambda route: route.fulfill(status=204, body=""))
     # "nothing structural changed": the answer never reloads the page under the test
     sig = _count(page, "**/api/dash-signature", lambda route: route.fulfill(
@@ -71,7 +79,7 @@ def test_while_a_start_is_pending_the_dashboard_checks_every_2_s(page):
 
 
 def _open_log(page, path, pattern):
-    page.clock.install()
+    _paused_clock(page)
     page.route("**/__settled__", lambda route: route.fulfill(status=204, body=""))
     seen = _count(page, pattern)
     page.goto(page.lab_base + path, wait_until="load")
