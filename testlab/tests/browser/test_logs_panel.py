@@ -125,10 +125,12 @@ def test_an_empty_log_and_a_failed_fetch_say_so(page):
     assert page.text_content("#log-meshcom-bridge .logpanel-text") == ""
 
 
-def test_a_radio_switch_click_on_the_logs_page_lands_with_the_switch_shown(page):
+def test_a_radio_switch_click_on_the_logs_page_lands_with_the_switch_shown(flask_page):
     # F9 B1: on the Logs level's page the switch sits in the closed Per radio group; a click on one of its radios
-    # lands on a page where Per radio (with the switch just used) is open, not hidden in a closed group.
-    page.goto(page.lab_base + "/stacks/meshcom/menu/logs-meshcom", wait_until="load")
+    # lands on a page where Per radio (with the switch just used) is open, not hidden in a closed group. On
+    # flask_page's own two-radio list (r1, r3): the shared lab's list is one radio after test_hardware_remove (its
+    # reset keeps the hardware list), and one radio has no switch.
+    page, _posts = flask_page(path="/stacks/meshcom/menu/logs-meshcom")
     page.click("#logs-meshcom--per-radio > summary")
     links = page.locator("#logs-meshcom--per-radio nav.rswitch a")
     assert links.count() >= 1
@@ -137,3 +139,4 @@ def test_a_radio_switch_click_on_the_logs_page_lands_with_the_switch_shown(page)
     assert "/stacks/meshcom/menu/logs-meshcom--per-radio" in page.url, page.url
     assert page.evaluate("() => document.getElementById('logs-meshcom--per-radio').open")
     assert page.locator("#logs-meshcom--per-radio nav.rswitch").is_visible()
+    page.context.close()
