@@ -1,7 +1,7 @@
 """DAEMON-MONITOR-TREE (0.14.0, maintainer's word 11-18) + F7 (his Q1 B, Q2 A, Q3, Q8 A, Q9 B, Q10 A): Apps ›
-LoRaHAM daemon › Settings › Monitor (ONE, on the Settings radio) holds STATUS, STATS, SOCKET and RX/TX View, tree
-nodes showing their view inline (Reload, "Daemon not running" each: F8) with no page of their own. Only the Monitor
-has a page: radio pins + view pins (Webserver-logs tabs), then ONE view (no Reload, no "every N s" line: F6). The
+LoRaHAM daemon › Settings › Monitor (ONE, on the Settings radio) holds STATUS, STATS, SOCKET and RX/TX View, each
+its own closed tree node (F14) showing its view (Reload, "Daemon not running" each: F8) with no page of their own.
+Only the Monitor has a page: radio pins + view pins (Webserver-logs tabs), then ONE view (no Reload, no "every N s" line: F6). The
 button row and its ✕ windows are gone; every view stays (the browser lane pins what each asks:
 testlab/tests/browser/test_daemon_monitor_tree.py)."""
 
@@ -102,11 +102,11 @@ def test_the_stacks_body_holds_the_views_and_no_button_row(tmp_path, web):
     c, _svc = _client(web, tmp_path)
     body = _html(c, "/stacks/daemon/body?radio=r1")
     doc = parse(body)
-    panels = doc.find("div", class_="daemonview")       # UI-REORG c4: always open views (was closed details)
+    panels = doc.find("details", class_="daemonview")   # F14: each view its own closed node
     assert sorted((p["data-rid"], p["data-kind"]) for p in panels) == sorted(("r1", k) for k, _n in _VIEWS)   # r1's view
     monitor = doc.by_id(_MON)
     assert "open" not in monitor.attrs and monitor["data-rid"] == "r1"           # c4: no hard `open`: nothing asks
-    views = doc.within(monitor).find("div", class_="daemonview")
+    views = doc.within(monitor).find("details", class_="daemonview")
     assert [p["id"] for p in views] == [_mid(k) for k, _n in _VIEWS]             # under its Monitor, in order
     for p in views:                                    # each with its Reload and its own (hidden) down line (F8)
         assert doc.within(p).find("button", class_="daemonview-reload")
@@ -117,6 +117,29 @@ def test_the_stacks_body_holds_the_views_and_no_button_row(tmp_path, web):
         assert f'class="{gone}' not in body and f" {gone}" not in body, gone
     assert not re.search(r'id="(liveout|socketout|txout)-', body)
     assert 'class="livebtn" data-rid' not in body
+
+
+def test_the_monitor_holds_four_own_closed_view_nodes_in_order(tmp_path, web):
+    # F14 (his "STILL ... all in one node!"): measured on the RENDERED tree, the Monitor's direct child nodes are
+    # exactly the four views in DAEMON_VIEWS order, each its own closed <details> (the Settings nodes' class) whose
+    # <summary> is its name, with its Reload, its own down line and its 22-line window; no heading block, no "page ›"
+    c, _svc = _client(web, tmp_path)
+    for rid in ("r1", "r2"):
+        doc = parse(_html(c, f"/stacks/daemon/body?radio={rid}"))
+        monitor = doc.by_id(_MON)
+        inner = [d for d in doc.within(monitor).find("details") if d is not monitor]
+        children = [d for d in inner if not any(e.index < d.index <= e.end for e in inner)]
+        assert children == inner and len(children) == 4, [d["id"] for d in inner]
+        for node, (kind, name) in zip(children, _VIEWS):
+            assert node["id"] == _mid(kind) and (node["data-rid"], node["data-kind"]) == (rid, kind)
+            assert {"advcfg", "dblock", "daemonview"} <= node.classes and not node.has_attr("open"), node.attrs
+            [summary] = doc.within(node).find("summary")
+            assert summary.index == node.index + 1 and _text(summary) == f"{name} · {rid}"
+            box = doc.within(node)
+            assert len(box.find("button", class_="daemonview-reload")) == 1
+            assert len(box.find("p", class_="dstate-down")) == 1 and len(box.find("pre", class_="stream22")) == 1
+            assert not box.find("a")
+        assert not doc.within(monitor).find("h4")
 
 
 def test_an_offline_radio_has_its_monitor_paused(tmp_path, web):

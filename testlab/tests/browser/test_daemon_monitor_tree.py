@@ -1,5 +1,6 @@
 """DAEMON-MONITOR-TREE (0.14.0, 11-18) + UI-REORG c4 (plan v7 s3/s4), in a real browser: a radio's
-four live daemon views under its Monitor are always open and ask only while SHOWN (every <details> around them open):
+four live daemon views under its Monitor, each its own closed node (F14), ask only while SHOWN (it and every <details>
+around it open; opening one node polls that view only):
 in the tree (the Settings page) Get STATUS / Get STATS one read per show and per Reload; View Socket a poll each
 second, RX/TX View one every 3 s, both stopped by hiding; the Monitor's page (F7) shows ONE view, which asks from load
 and repeats every 3 s (F6: no Reload, no "every N s" line); a reply to a run that was hidden meanwhile is dropped; one request
@@ -103,9 +104,19 @@ def _wait_text(page, kind, want, exact=False):
                            " return x ? t === w : t.includes(w); }", arg=[_sel(kind), want, exact], timeout=15000)
 
 
+def _open_monitor_and_views(page):
+    """F14: open the Monitor, then each view's own node (on the Settings page no accordion closes the others)."""
+    page.click(_MON + " > summary")
+    page.wait_for_function("m => document.querySelector(m).open", arg=_MON, timeout=15000)
+    for kind in _KINDS:
+        page.click(_sel(kind) + " > summary")
+    _running(page, True)
+
+
 def _loaded(page, settled, seen):
-    """The Settings page (TREE) with its Monitor opened: every view asked once; let those settle, then count afresh."""
-    _toggle_monitor(page, True)
+    """The Settings page (TREE) with its Monitor and the four view nodes opened: every view asked once; let those
+    settle, then count afresh."""
+    _open_monitor_and_views(page)
     for kind in _KINDS:
         page.wait_for_function("s => !document.querySelector(s).dvBusy", arg=_sel(kind), timeout=15000)
     settled()
@@ -164,6 +175,37 @@ def test_the_socket_view_polls_each_second_only_while_shown(flask_page):
     page.wait_for_function("s => !document.querySelector(s).dvBusy", arg=_sel("socket"), timeout=15000)
     _ticks(page, "socket", 2, settled)
     assert seen.count("/socket") == n + 3                                    # at once, then each second
+
+
+def test_opening_one_view_node_polls_that_view_only_and_closing_it_stops_it(flask_page):
+    # F14: the Monitor opened, its four views are closed nodes: nothing asks; opening SOCKET's node runs SOCKET only;
+    # closing that node (a click, then a scripted open=false after a reopen) stops it
+    page, _posts = flask_page(path=TREE, unix_replies=_READY)
+    seen, settled, _held = _serve(page)
+    page.click(_MON + " > summary")
+    page.wait_for_function("m => document.querySelector(m).open", arg=_MON, timeout=15000)
+    assert page.evaluate("() => [...document.querySelectorAll('.daemonview')].map(v => [v.tagName, v.open])") == \
+        [["DETAILS", False]] * 4
+    page.clock.run_for(5000)
+    settled()
+    assert seen == [] and not page.evaluate("() => [...document.querySelectorAll('.daemonview')].some(v => v.dvRunning)")
+    running = "() => [...document.querySelectorAll('.daemonview')].filter(v => v.dvRunning).map(v => v.dataset.kind)"
+    for close in ("click", "script"):
+        page.click(_sel("socket") + " > summary")
+        page.wait_for_function("s => document.querySelector(s).dvRunning", arg=_sel("socket"), timeout=15000)
+        assert page.evaluate(running) == ["socket"]
+        _ticks(page, "socket", 2, settled)
+        assert seen and set(seen) == {"/socket"}, seen
+        if close == "click":
+            page.click(_sel("socket") + " > summary")
+        else:
+            page.evaluate("s => { document.querySelector(s).open = false; }", _sel("socket"))
+        page.wait_for_function("s => !document.querySelector(s).dvRunning", arg=_sel("socket"), timeout=15000)
+        settled()
+        seen.clear()
+        page.clock.run_for(5000)
+        settled()
+        assert seen == [] and page.evaluate(running) == [], close
 
 
 def test_a_second_toggle_while_shown_starts_no_second_run(flask_page):

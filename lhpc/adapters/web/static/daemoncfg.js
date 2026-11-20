@@ -1,6 +1,7 @@
 // DAEMON-MONITOR-TREE: a radio's live daemon views (_daemon_view.html) under its Monitor, read-only over the
-// /api/daemon endpoints. UI-REORG s4: a view has no own show/hide; it asks only while it is SHOWN (every <details>
-// around it open, in the page, the tab visible: shown.js): STATUS / STATS one read of /api/daemon/<rid>
+// /api/daemon endpoints. UI-REORG s4 + F14: in the tree a view is its own closed <details>; it asks only while
+// SHOWN (it and every <details> around it open, in the page, the tab visible: shown.js): STATUS / STATS one read of
+// /api/daemon/<rid>
 // per show and per Reload;
 // SOCKET a rolling 22-line window polled from the config socket each second; "RX/TX View" the dashboard's
 // RX/TX feed every 3 s; on a Monitor's own page (data-fullpage) every view repeats every 3 s. Hiding stops the
@@ -158,6 +159,7 @@
   document.addEventListener("toggle", function (e) {
     var el = e.target;
     if (el && el.querySelectorAll) syncAll(el);      // a Monitor, Settings or row around views opened or closed
+    if (el && el.classList && el.classList.contains("daemonview")) sync(el);   // F14: a view's own node
   }, true);                                          // toggle does not bubble: caught on the way down
   document.addEventListener("visibilitychange", function () { syncAll(document); });   // s13 P1: hidden tab -> quiet
   document.addEventListener("click", function (e) {
