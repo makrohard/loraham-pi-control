@@ -57,7 +57,10 @@ def _serve(page, state=None):
             return
         route.fulfill(status=200, content_type="application/json", body=json.dumps(_REPLY[tail]))
 
+    # Paused before the page loads again: installed alone, the clock runs with real time, and the real time of the
+    # clicks and waits counts into the exact counts (a 1 s SOCKET poll inside _loaded: reader probe on 60a20fae)
     page.clock.install()
+    page.clock.pause_at(page.evaluate("() => Date.now()") + 1000)
     page.route(API, handler)
     page.route("**/__settled__", lambda route: route.fulfill(status=204, body=""))
 
@@ -266,7 +269,8 @@ def test_a_reply_to_a_hidden_run_is_dropped(flask_page):
     _toggle_monitor(page, False)                                              # hidden before the reply
     held[0].fulfill(status=200, content_type="application/json", body=json.dumps({"reachable": True, "line": "LATE"}))
     settled()
-    page.evaluate("() => new Promise(r => setTimeout(r, 0))")
+    page.evaluate("() => new Promise(r => { const c = new MessageChannel(); c.port1.onmessage = () => r();"
+                  " c.port2.postMessage(0); })")                           # one task later (no timer: clock paused)
     assert _text(page, "socket") == before and "LATE" not in _text(page, "socket")
 
 
@@ -499,8 +503,7 @@ def test_a_closed_blocks_pill_is_hidden_and_its_radio_polls_only_while_a_pill_is
     seen, settled, _held = _serve(page, state)
     live = _sel("live")
     assert _hidden(page, live)                                               # closed at load: hidden from the start
-    _loaded(page, settled, seen)
-    page.clock.pause_at(page.evaluate("() => Date.now()") + 1)               # no real-time flow: "at once" is at once
+    _loaded(page, settled, seen)                                             # paused since _serve: "at once"
 
     def toggle(want):
         page.click(live + " > summary")
@@ -592,7 +595,6 @@ def test_a_header_pin_shows_only_a_live_answer_while_its_node_is_open(flask_page
     seen, settled, _held = _serve(page, state)
     live = _sel("live")
     _loaded(page, settled, seen)
-    page.clock.pause_at(page.evaluate("() => Date.now()") + 1)
     _toggle_monitor(page, False)
     settled()
     assert _hidden(page, _MON) and _hidden(page, live)
