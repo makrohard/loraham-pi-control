@@ -28,7 +28,10 @@ def _open(page, answer, hidden=False, path="/"):
         seen[rid] += 1
         answer(route, RIDS[rid])
 
+    # Paused before the page loads: installed alone, the clock runs with real time, and the real time of the load and
+    # the render wait counted into the test's windows (a 3 s poll inside "2.5 s": testlab RED on cons/f14-r1)
     page.clock.install()
+    page.clock.pause_at(page.evaluate("() => Date.now()") + 1000)
     page.route(DAEMON, handler)
     # "nothing structural changed": the signature poll must not reload the page under the test
     page.route("**/api/dash-signature", lambda route: route.fulfill(
