@@ -926,6 +926,22 @@ def test_reset_clears_accumulated_state(tmp_path, monkeypatch):
     assert not (sd / "tx.jsonl").exists()
 
 
+def test_reset_puts_the_hardware_list_back(tmp_path, monkeypatch):
+    """A test that removes a radio (test_hardware_remove) leaves a one-radio list; the reset's wipe drops the list, so
+    the reset's hardware setup writes the baseline again (it keeps an existing list)."""
+    from lhpc.core import radios
+    paths = make_lab_root(tmp_path, monkeypatch)
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    svc = ControllerService(paths=paths)
+    assert svc.set_hardware_setup("loraham").ok
+    base = [(r.id, r.band) for r in radios.load(paths).radios]
+    assert base == [("r1", "433"), ("r2", "868")]
+    assert radios.save(paths, radios.load(paths).radios[:1]) == []             # a radio removed
+    ops._clear_runtime_state(svc)                                               # the reset: its wipe,
+    assert svc.set_hardware_setup("loraham").ok                                 # then its hardware setup
+    assert [(r.id, r.band) for r in radios.load(paths).radios] == base
+
+
 def test_power_reboot_does_not_tombstone(tmp_path, monkeypatch):
     """A simulated reboot terminates running stacks WITHOUT the operator-stop
     tombstone (which would make boot-restore skip them), and advances the boot id. No

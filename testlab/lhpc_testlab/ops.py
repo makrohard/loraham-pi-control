@@ -474,7 +474,10 @@ def _clear_runtime_state(svc) -> None:
                 ("state", "testlab", "populated"), ("state", "testlab", "populate.json"),
                 ("state", "testlab", "populate-run"),
                 ("state", "network-pending.json"), ("state", "network-outcome.json"),
-                ("state", "network-retry.json"), ("state", "network-preferred.json")):
+                ("state", "network-retry.json"), ("state", "network-preferred.json"),
+                # the hardware list: the hardware setup below keeps an existing one, so a test that removed a radio
+                # (test_hardware_remove) would leave the next tests a one-radio lab; dropped, the setup writes the baseline
+                ("config", "radios.toml")):
         try:
             p.under(*rel).unlink()
         except OSError:
