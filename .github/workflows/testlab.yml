@@ -492,6 +492,19 @@ jobs:
               /srcmirror /tmp/src/lhpc/data /xfer/wheels /out/transfers.toml"
           cat slowevidence/transfers.toml
 
+      # The lane box mounts like a Pi OS box: no online discard (a Pi OS root mounts `defaults,noatime`; the weekly
+      # fstrim timer trims). With `discard`, every file a git update replaces is a discard I/O charged to the lane's
+      # write-IOPS cap: the slow-build diagnostic measured ~456 per 0.13.8 -> candidate merge, a ~3.8 s floor under
+      # 0.13.8's 5 s cut (runs 44927382417 / 44927384794 / 44927387381). Stops if the option stays on.
+      - name: Mount the docker filesystem without online discard
+        run: |
+          t=$(findmnt -no TARGET -T /var/lib/docker)
+          echo "before: $(findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS -T /var/lib/docker)"
+          has() { findmnt -no OPTIONS -T /var/lib/docker | tr ',' '\n' | grep -qx discard; }
+          if has; then sudo -n mount -o remount,nodiscard "$t"; fi   # the runner's passwordless sudo, as below
+          echo "after: $(findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS -T /var/lib/docker)"
+          if has; then echo "::error::STOP: $t still mounts with online discard"; exit 1; fi
+
       # io.max takes whole disks. REQUIRED: the disk behind the container's writable layer,
       # where the calibration work dir under the lab user's home lives, and the disk behind
       # Docker's storage, which holds the /tmp volume. The writable layer is measured, not
