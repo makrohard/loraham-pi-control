@@ -264,10 +264,11 @@ def _banner_polls(page, feed):
         # a round trip from the page: every request issued before it has reached the handler
         assert page.evaluate("() => fetch('/__settled__').then(r => r.status)") == 204
 
-    page.clock.install()
+    now = page.evaluate("() => Date.now()") / 1000      # the real time, in SECONDS (Python Playwright's unit)
+    page.clock.install(time=now - 60)    # a minute back: a busy runner's stall cannot put the pause below in the past
     # Paused BEFORE the page loads: an installed clock otherwise runs with real time, and a busy run that takes 2 s
     # between the first render and the count below fires the FAST poll by itself (first == 2, a25 c13 N2).
-    page.clock.pause_at(page.evaluate("() => Date.now()") / 1000 + 1)   # Python Playwright: a number is in SECONDS
+    page.clock.pause_at(now + 1)          # paused: only the test moves the page's time
     page.route("**/api/tasks*", handler)
     page.route("**/__settled__", lambda route: route.fulfill(status=204, body=""))
     page.goto(page.lab_base + "/stacks", wait_until="networkidle")

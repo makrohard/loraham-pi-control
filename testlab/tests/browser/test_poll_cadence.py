@@ -32,8 +32,9 @@ def _paused_clock(page):
     """Playwright's clock, paused before the page loads: installed alone it runs with real time, and the real time a
     load and a settle take counts into the test's windows (a 10 s / 3 s poll fired inside "9.9 s" / "2.9 s" on a
     busy run: train A testlab 44525282762)."""
-    page.clock.install()
-    page.clock.pause_at(page.evaluate("() => Date.now()") / 1000 + 1)   # Python Playwright: a number is in SECONDS
+    now = page.evaluate("() => Date.now()") / 1000      # the real time, in SECONDS (Python Playwright's unit)
+    page.clock.install(time=now - 60)    # a minute back: a busy runner's stall cannot put the pause below in the past
+    page.clock.pause_at(now + 1)          # paused: only the test moves the page's time
 
 
 def _open_dashboard(page, pending=False):

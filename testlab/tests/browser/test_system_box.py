@@ -251,8 +251,9 @@ def _settled(page):
 def test_a_closed_box_makes_no_request_and_an_open_one_asks_gps_every_second_poll(page):
     # The page's timers run on Playwright's clock, which the test advances: the poll cadence is
     # proven over simulated seconds, not by sleeping through real ones.
-    page.clock.install()
-    page.clock.pause_at(page.evaluate("() => Date.now()") / 1000 + 1)   # paused: only run_for moves the page's time
+    now = page.evaluate("() => Date.now()") / 1000      # the real time, in SECONDS (Python Playwright's unit)
+    page.clock.install(time=now - 60)    # a minute back: a busy runner's stall cannot put the pause below in the past
+    page.clock.pause_at(now + 1)          # paused: only the test moves the page's time
     # Each answer carries its own uptime, so the footer shows which sample the page has applied.
     sysn = _serve(page, [dict(_sample(k, net=0), uptime_s=60 * (k + 1)) for k in range(4)])
     gps = _serve_gps(page, _gps("3d", "3D fix", 1.0, 2.0))

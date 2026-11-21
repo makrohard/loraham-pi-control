@@ -19,13 +19,14 @@ _ROW = "#stackrow-kiss > summary .col-status"
 
 def _open(flask_page, feed):
     page, _posts = flask_page(path="/stacks")
-    page.clock.install()
+    now = page.evaluate("() => Date.now()") / 1000      # the real time, in SECONDS (Python Playwright's unit)
+    page.clock.install(time=now - 60)    # a minute back: a busy runner's stall cannot put the pause below in the past
+    page.clock.pause_at(now + 1)          # paused: only the test moves the page's time
     page.route("**/api/tasks", lambda route: route.fulfill(
         status=200, content_type="application/json", body=json.dumps({"tasks": feed["tasks"]})))
     page.route("**/api/tasks/dismiss", lambda route: (feed["tasks"].remove(feed["dismiss"]), route.fulfill(
         status=200, content_type="application/json", body="{}")))
     page.reload()
-    page.clock.pause_at(page.evaluate("() => Date.now()") / 1000 + 1)   # polls only when the test advances time (SECONDS)
     return page
 
 
@@ -259,11 +260,12 @@ def test_a_real_home_card_of_the_stack_is_marked_and_another_stacks_card_is_not(
             "href": "/stacks/meshcom/hmac/enable", "stack": "meshcom", "op": "HMAC enable"}
     feed = {"tasks": [job, hmac]}
     page, _posts = flask_page(path="/", cmdlines=table)
-    page.clock.install()
+    now = page.evaluate("() => Date.now()") / 1000      # the real time, in SECONDS (Python Playwright's unit)
+    page.clock.install(time=now - 60)    # a minute back: a busy runner's stall cannot put the pause below in the past
+    page.clock.pause_at(now + 1)          # paused: only the test moves the page's time
     page.route("**/api/tasks", lambda route: route.fulfill(
         status=200, content_type="application/json", body=json.dumps({"tasks": feed["tasks"]})))
     page.reload()
-    page.clock.pause_at(page.evaluate("() => Date.now()") / 1000 + 1)   # polls only when the test advances time (SECONDS)
     card = 'p[data-stack="meshcom@r1"]'
     assert page.locator('p[data-stack="meshcore@r3"]').count() == 1      # the other stack's real card
     _wait_marks(page, card, ["⏳ install", "⏳ HMAC enable"])
