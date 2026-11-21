@@ -150,6 +150,18 @@ try:
     assert _action(op="build", target="kiss", confirmed="yes").status_code == 200
     assert svc.is_built(svc.stack("kiss").components[0]), "route: web Build must actually build"
     R["route_action"] = "POST /action: graywolf refused sans KISS; web Build mutates the model"
+    # The web start asks the ONE start readiness (install_blocker); the demo answers it from its model.
+    svc.seed_all_installed()
+    assert _action(op="start", target="kiss@r1").status_code == 200 and svc.stack_running("kiss"), "route: kiss@r1"
+    svc.stop("kiss", apply=True)
+    svc._d("kiss")["built"] = False
+    _page = _action(op="start", target="kiss@r1").get_data(as_text=True)
+    assert "not built" in _page and not svc.stack_running("kiss"), "route: an unbuilt kiss is refused"
+    svc.seed_all_installed()
+    svc._d("daemon")["built"] = False                   # start() lets the daemon run unbuilt: the readiness agrees
+    assert all(svc.install_blocker(x) == "" for x in svc.stack("daemon").components) \
+        and svc.start("daemon", apply=False).ok, "N1: the daemon is judged alike"
+    R["route_start_ready"] = "web start kiss@r1 runs; an unbuilt kiss is refused; the daemon is judged alike"
     # Restart + Clean must honour the same dependency integrity as Start/Stop, THROUGH /action.
     svc.seed_all_installed()
     svc.uninstall("kiss", apply=True)

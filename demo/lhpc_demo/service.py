@@ -97,6 +97,16 @@ class DemoService(ControllerService):
     def is_built(self, comp) -> bool:
         return self._d(self._sid(comp))["built"]
 
+    def install_blocker(self, comp) -> str:
+        """The ONE start readiness (the web start gate, the stack page, the radio cards) from the demo model, so every
+        start reader agrees with start() below: not installed, or not built (the daemon starts unbuilt there too)."""
+        sid = self._sid(comp)
+        if not self.is_installed(sid):
+            return f"not installed — run: lhpc install {sid}"
+        if sid != "daemon" and not self.is_built(comp):
+            return f"not built — run: lhpc build {sid}"
+        return ""
+
     # --- run-state is rendered from build_snapshot(); reflect the model there so Start/Stop
     #     are visible everywhere the console reads run_state (dashboard, apps, dash poll). --
     def build_snapshot(self, *a, **k):
