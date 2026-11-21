@@ -310,6 +310,16 @@ try:
     svc.uninstall("kiss", apply=True)
     assert svc.start("graywolf", apply=True, band="868").ok is False and svc._band("graywolf") == "433", \
         ("a refused start keeps the band", svc._band("graywolf"))
+    # Reboot / Shut down are offered as on a box with their authorization (PLAN-DEMO2 L6); the confirm page, then the
+    # confirmed POST answers simulated and nothing stops.
+    _home = c.get("/").get_data(as_text=True)
+    assert "Reboot…" in _home and "Shut down…" in _home, "power: Reboot / Shut down offered"
+    _tok = _re.search(r'name="_csrf"\s+value="([0-9a-f]+)"', _home).group(1)
+    assert 'name="confirmed"' in c.post("/power/reboot", data={"_csrf": _tok}).get_data(as_text=True), "power: confirm page"
+    _model = json.dumps(svc._demo, sort_keys=True)
+    _done = c.post("/power/reboot", data={"_csrf": _tok, "confirmed": "yes"}, follow_redirects=True).get_data(as_text=True)
+    assert "simulated" in _done and json.dumps(svc._demo, sort_keys=True) == _model, \
+        "power: the confirmed reboot is simulated, the demo box unchanged"
     R["radio_targets"] = "Start/Stop/Restart daemon (r1) act on r1 only; a refused start keeps its band"
     # P0 PARITY (PLAN-DEMO2): box H's own texts (PARITY-DEMO-v1 row #; class A rows only, no box-specific data) on the
     # demo's rendered pages while daemon@r1, kiss@r1 and graywolf@r1 run. It runs in every Pages workflow, so a later

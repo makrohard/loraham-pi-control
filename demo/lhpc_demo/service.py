@@ -502,6 +502,16 @@ class DemoService(ControllerService):
             return None
         return super().auto_install_welcome()
 
+    # --- Reboot / Shut down: a box with the reboot/shutdown authorization installed offers both (box H does); the
+    #     demo answers them as simulated and its box keeps running. -------------------------------------------------
+    def power_supported(self, kind: str | None = None) -> bool:        # service_maintenance.py:559, read at app.py:663
+        return True
+
+    def power_action(self, kind: str, apply: bool = False, client: str = ""):
+        word = {"reboot": "reboot", "poweroff": "shut down"}.get(kind, kind)
+        return ActionResult(True, (f"{word.capitalize()} requested (simulated) — the demo box keeps running."
+                                   if apply else f"{word.capitalize()} the box? (simulated in the demo)"))
+
     # --- lifecycle actions: mutate the model, honouring apply (apply=False is a dry run) --
     def install(self, stack_id=None, apply: bool = False, source: str = "pinned", **k):
         sid = self._sid(stack_id)
