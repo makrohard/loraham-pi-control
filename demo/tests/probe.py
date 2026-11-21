@@ -382,7 +382,7 @@ try:
     assert "logs/start-loraham-kiss-tnc-433-r1.log" in json.loads(_br.handle("GET", "/logs/loraham-kiss-tnc?radio=r1"))["body"], \
         "restore: the running kiss@r1's start log is there again"
     # The page's lhpc_open cookie reaches the app through the bridge (it renders a remembered Apps row open); the
-    # bridge's own session/CSRF cookie stays, so a CSRF-protected form posts after it (PLAN-DEMO2 v5 L14).
+    # bridge's own signed CSRF cookie stays, so a CSRF-protected form posts after it (PLAN-DEMO2 v5 L14).
     _row = lambda body: _re.search(r'<details class="stackrow" id="stackrow-daemon"([^>]*)>', body).group(1)  # noqa: E731
     _b1 = json.loads(_br.handle("GET", "/stacks", "", "theme=dark; lhpc_open=daemon"))["body"]
     assert " open" in _row(_b1), "cookie: lhpc_open=daemon renders the daemon row open"
@@ -392,7 +392,7 @@ try:
     _br._svc.stop("kiss", apply=True)
     _post = json.loads(_br.handle("POST", "/action", json.dumps({"_csrf": _tokn, "op": "start", "target": "kiss@r1"}), ""))
     assert _post["status"] == 200 and _br._svc.stack_running("kiss"), \
-        ("cookie: a CSRF form posts after the cookie pass (the session survives)", _post["status"])
+        ("cookie: a CSRF form posts after the cookie pass (the CSRF cookie survives)", _post["status"])
     # An optional part runs on its own inside its running stack (PLAN-DEMO2 L13): the card's Run and Stop; every stop
     # path of its stack clears it; a restored state keeps it.
     _txt = lambda h: " ".join(_re.sub(r"<[^>]+>", " ", h).split())  # noqa: E731

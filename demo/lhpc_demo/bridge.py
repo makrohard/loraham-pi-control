@@ -81,7 +81,8 @@ def boot(state_json: str = "") -> str:
 
 
 # The one browser cookie the app reads that the page writes itself: stacks_state.js remembers the open Apps rows in it
-# (app.py reads it to render them open). The client's own jar (Flask session + CSRF) is never touched otherwise.
+# (app.py reads it to render them open). The client's own jar (Flask's signed cookie with the CSRF token) is never
+# touched otherwise.
 _OPEN_COOKIE = "lhpc_open"
 
 
