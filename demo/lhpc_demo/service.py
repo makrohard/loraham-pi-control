@@ -39,13 +39,52 @@ class _DaemonSocket:
 
 class _DemoProcfs:
     """The processes a box would show for the demo's model (DemoService._projection), computed at each read, so they
-    follow every start, stop, reset, restore and hardware-list save without a hook. Everything else: the stock fake."""
+    follow every start, stop, reset, restore and hardware-list save without a hook: their argv and the TCP listeners
+    they own (inode -> pid). Everything else: the stock fake."""
 
     def __init__(self, svc, inner):
         self._svc, self._inner = svc, inner
 
     def cmdlines(self):
         return {**self._inner.cmdlines(), **{p[4]: p[5] for p in self._svc._projection()}}
+
+    def _owned(self) -> dict:
+        from lhpc.core.probes.backends import Listener
+        out = {}
+        for p in self._svc._projection():
+            for i, (kind, addr) in enumerate(p[6]):
+                if kind == "tcp":
+                    ip, _, port = addr.rpartition(":")
+                    out[Listener("ipv4", ip, int(port), p[4] * 16 + i)] = p[4]
+        return out
+
+    def tcp_listeners(self):
+        return [*self._inner.tcp_listeners(), *self._owned()]
+
+    def owner_pid(self, inode, budget_s):
+        return next(((pid, False) for li, pid in self._owned().items() if li.inode == inode), None) \
+            or self._inner.owner_pid(inode, budget_s)
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
+class _DemoFs:
+    """The demo's filesystem as the console probes it: a projected process's unix socket exists while it runs (the
+    daemon's loraconf-<rid>.sock; probes.unixsock.probe_socket reads `exists` then `is_socket`). Everything else: the
+    stock fake."""
+
+    def __init__(self, svc, inner):
+        self._svc, self._inner = svc, inner
+
+    def _sock(self, path) -> bool:
+        return any(k == "unix" and a == path for p in self._svc._projection() for k, a in p[6])
+
+    def exists(self, path):
+        return self._sock(path) or self._inner.exists(path)
+
+    def is_socket(self, path):
+        return self._sock(path) or self._inner.is_socket(path)
 
     def __getattr__(self, name):
         return getattr(self._inner, name)
@@ -58,7 +97,8 @@ class DemoService(ControllerService):
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
         self._system.unix = _DaemonSocket(self, self._system.unix)    # the cards read the daemon on its socket
-        self._system.procfs = _DemoProcfs(self, self._system.procfs)  # ... and its instances' processes
+        self._system.procfs = _DemoProcfs(self, self._system.procfs)  # ... its instances' processes + listeners
+        self._system.fs = _DemoFs(self, self._system.fs)              # ... and their unix sockets
         self._demo: dict[str, dict] = {}
         self._comp2stack: dict[str, str] | None = None
 
@@ -230,14 +270,16 @@ class DemoService(ControllerService):
         return on[0] if len(on) == 1 else ""
 
     def _projection(self) -> list:
-        """[(stack, rid, band, component, pid, argv)] of each process a box would run now, from the model by the ONE
+        """[(stack, rid, band, component, pid, argv, endpoints)] of each process a box would run now, from the model by the ONE
         radio rule: a radio's daemon while `_radio_up`, and each process component of a running stack on its band's
         radio (`_band_rid`). The procfs and the launch records the console reads are both rendered from it, at each
-        read. The argv is the component's process spec (what probes.process.matches accepts); the instance is named by
-        the record (lhpc's own launches are recorded; a daemon has no instance argv at all)."""
+        read. The argv is the component's process spec (what probes.process.matches accepts) and the option of each
+        start-time TCP port (the console reads a movable port from argv); the instance is named by
+        the record (lhpc's own launches are recorded; a daemon has no instance argv at all). `endpoints`: its
+        component's endpoints as (kind, address) rendered for its radio, the ones it serves while it runs."""
         import zlib
 
-        from lhpc.core import radios
+        from lhpc.core import commands, radios
         out = []
         for r in (r for r in radios.load(self._paths).radios if r.enabled):
             for sid in sorted(self._demo):
@@ -249,11 +291,16 @@ class DemoService(ControllerService):
                 for c in stk.components:
                     if c.process is None or c.optional:
                         continue
-                    p = c.process
+                    p, inst = c.process, commands.Instance(r.id)
                     argv = [p.exec_path or p.exec_name, *(("-m", p.entry) if p.entry else ()), *p.all_args,
                             *p.any_args[:1]]
+                    eps = [(e.kind, inst.subst(getattr(e, "address_template", "") or e.address)) for e in c.endpoints]
+                    for e, (kind, addr) in zip(c.endpoints, eps, strict=True):   # a start-time port shows in argv
+                        name = getattr(getattr(e, "firewall", None), "port_param", "")
+                        arg = next((q.arg for q in c.run_params if name and q.name == name and q.arg), "")
+                        argv += [arg, addr.rpartition(":")[2]] if kind == "tcp" and arg else []
                     out.append((sid, r.id, r.band, c.id, 2000 + zlib.crc32(f"{sid}@{r.id}/{c.id}".encode()) % 30000,
-                                argv))
+                                argv, eps))
         return out
 
     def _lifecycle(self):

@@ -290,13 +290,16 @@ try:
     # P0 PARITY (PLAN-DEMO2): box H's own texts (PARITY-DEMO-v1 row #; class A rows only, no box-specific data) on the
     # demo's rendered pages while daemon@r1, kiss@r1 and graywolf@r1 run. It runs in every Pages workflow, so a later
     # product change that breaks parity fails the gate (the recurring parity sweep). A str must (True) / must not
-    # (False) occur; a compiled pattern is searched. Scope "r1": only that radio's Home card.
+    # (False) occur; a compiled pattern is searched. Scope "r1": only that radio's Home card; "t" / "r1t": the page / that
+    # card as text (tags dropped, whitespace collapsed), for labels the markup splits.
     from lhpc.core.probes.process import matches as _matches
     svc.seed_all_installed()
     svc._set_dbands(set())
     assert svc.start("daemon", apply=True, band="433").ok and svc.start("graywolf", apply=True, band="433").ok
     _proj = svc._projection()
-    assert {(p[0], p[1]) for p in _proj} == {("daemon", "r1"), ("kiss", "r1"), ("graywolf", "r1")}, _proj
+    assert sorted((p[0], p[1]) for p in _proj) == [("daemon", "r1"), ("graywolf", "r1"), ("kiss", "r1")], _proj
+    _recs = svc._lifecycle().owned_inventory()[0]                # each instance once, its record pid = its process pid
+    assert sorted((r["stack"], r["rid"], r["pid"]) for r in _recs) == sorted((p[0], p[1], p[4]) for p in _proj), _recs
     assert all(_matches(svc.stack(p[0]).component(p[3]).process, p[5]) for p in _proj), "argv the spec accepts"
     PARITY = [
         ("#1", "/", "r1", True, 'data-stack="daemon@r1"'),
@@ -306,12 +309,23 @@ try:
         ("#2", "/", "r1", False, "No launch record or argv names the radio"),
         ("#3", "/", "r1", True, '<span class="pill">graywolf@r1</span>'),
         ("#17", "/hardware/radio/r1", "", True, "stop graywolf@r1 and stop kiss@r1"),
+        ("#3", "/", "r1t", True, "Graywolf APRS graywolf@r1 Web UI ↗"),
+        ("#3", "/", "r1t", True, "Graywolf web UI ↗"),
+        ("#2", "/", "r1t", True, "kiss: 127.0.0.1:8001"),
+        ("#6", "/", "t", True, "LoRaHAM KISS TNC @r1 127.0.0.1:8001 · local"),
+        ("#6", "/", "t", True, "Graywolf APRS @r1 http://127.0.0.1:8080 not proxied"),
+        ("#14", "/stacks/kiss/menu/stackrow-kiss", "t", True, "127.0.0.1:8001 (tcp) — 127.0.0.1:8001: present"),
+        ("#14", "/stacks/kiss/menu/stackrow-kiss", "t", True, "Instances kiss@r1 running"),
+        ("#14", "/stacks/kiss/menu/stackrow-kiss", "t", True, _re.compile(r"PIDs \d+")),
+        ("#14", "/stacks/daemon/menu/stackrow-daemon", "t", True, "loraconf-r1.sock (unix) — RADIO=READY"),
+        ("#14", "/stacks/daemon/menu/stackrow-daemon", "t", True, "Instances daemon@r1 running"),
     ]
     _seen = {}
 
     def _page(path, scope):
         h = _seen.setdefault(path, c.get(path, follow_redirects=True).get_data(as_text=True))
-        return _card(scope) if scope else h
+        h = _card("r1") if scope.startswith("r1") else h
+        return " ".join(_re.sub(r"<[^>]+>", " ", h).split()) if scope.endswith("t") else h
     _miss = [(row, path, getattr(txt, "pattern", txt)) for row, path, scope, want, txt in PARITY
              if bool(txt.search(_page(path, scope)) if hasattr(txt, "search") else txt in _page(path, scope)) != want]
     assert not _miss, ("parity with box H", _miss)
