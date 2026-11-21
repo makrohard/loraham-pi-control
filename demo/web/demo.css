@@ -1,10 +1,14 @@
-#demobar{position:sticky;top:0;z-index:1000;display:flex;gap:1rem;align-items:center;
+html,body{height:100%;margin:0}
+body{display:flex;flex-direction:column;overflow:hidden}
+#demobar{flex:none;display:flex;flex-wrap:wrap;gap:.5rem 1rem;align-items:center;
   justify-content:space-between;padding:.5rem 1rem;background:#0f2b46;color:#eaf2fb;
   font:14px/1.4 system-ui,sans-serif}
 #demobar button{background:#2b6cb0;color:#fff;border:0;border-radius:4px;padding:.35rem .8rem;
   cursor:pointer;font-size:13px}
 #demobar button:hover{background:#3182ce}
 #demobar .warn{background:#f6ad55;color:#1a202c;padding:.1rem .45rem;border-radius:4px;font-weight:600;white-space:nowrap}
+#app{flex:1 1 auto;width:100%;min-height:0;border:0;display:block}
+#app[hidden]{display:none}
 #loader{max-width:520px;margin:12vh auto;text-align:center;font:15px/1.6 system-ui,sans-serif;
   color:#334}
 #loader .hint{margin-top:.6rem;color:#889;font-size:13px}
