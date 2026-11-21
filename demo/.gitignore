@@ -2,6 +2,7 @@
 web/wheels/
 web/static/
 web/wheels.json
+lhpc_demo/_build.py
 # python build leftovers
 lib/
 *.egg-info/

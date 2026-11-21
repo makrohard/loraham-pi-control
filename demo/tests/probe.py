@@ -378,6 +378,9 @@ try:
         ("#19", "/stacks", "t", True, "satisfied pip · required"),
         ("#19", "/stacks", "t", False, "LHPC_TIME_SOURCE"),
         ("#20", "/dependencies", "t", False, _re.compile(r"satisfied [^·]{1,200}· missing")),
+        ("#22", "/stacks", "t", True, "identity ok"),
+        ("#22", "/stacks", "t", True, "Up to date."),
+        ("#22", "/stacks", "t", False, "not running from a git checkout"),
         ("#21", "/auto-install", "t", True, "Update all Stacks"),
         ("#21", "/auto-install", "t", False, "Install and Build all Stacks"),
         ("#18", "/logs/loraham-daemon?radio=r1", "t", True, "process running"),
@@ -396,6 +399,13 @@ try:
     _miss = [(row, path, getattr(txt, "pattern", txt)) for row, path, scope, want, txt in PARITY
              if bool(txt.search(_page(path, scope)) if hasattr(txt, "search") else txt in _page(path, scope)) != want]
     assert not _miss, ("parity with box H", _miss)
+    try:                                                           # #22: the bundled commit, as assemble.sh wrote it
+        from lhpc_demo._build import SHA as _sha
+    except ImportError:
+        _sha = ""
+    _st = " ".join(_re.sub(r"<[^>]+>", " ", _page("/stacks", "")).split())
+    assert _sha and f"Commit @{_sha} {_sha}" in _st and f"@{_sha}" in _page("/", "t"), \
+        ("self-update: the bundled commit on the LHPC row and in the footer", _sha)
     _ai = c.get("/auto-install").get_data(as_text=True)                # #21: every stack installed, binary where offered
     _opts = {sid: _re.findall(r">([^<]+)</option>", _re.search(rf'name="version:{sid}"[^>]*>(.*?)</select>', _ai, _re.DOTALL)
                               .group(1)) for sid in ("daemon", "meshtastic", "meshcom", "kiss", "graywolf")}

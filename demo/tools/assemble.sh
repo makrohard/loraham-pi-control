@@ -9,6 +9,8 @@ OUT="$HERE/web"
 PYBIN="${PYTHON:-python3}"
 rm -rf "$OUT/wheels" "$OUT/static"
 mkdir -p "$OUT/wheels" "$OUT/static"
+# the bundled commit, for the demo's simulated self-update view (footer "@<sha>", the LHPC row); "" without git
+printf 'SHA = "%s"\n' "$(git -C "$REPO" rev-parse --short=9 HEAD 2>/dev/null || true)" > "$HERE/lhpc_demo/_build.py"
 "$PYBIN" -m build --wheel -o "$OUT/wheels" "$REPO"   >/dev/null   # lhpc (the product)
 "$PYBIN" -m build --wheel -o "$OUT/wheels" "$HERE"   >/dev/null   # lhpc_demo (this)
 cp "$REPO"/lhpc/adapters/web/static/* "$OUT/static/"

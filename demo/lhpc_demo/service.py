@@ -544,6 +544,34 @@ class DemoService(ControllerService):
             return SourceState.BINARY, f"binary@{pin.pin_commit[:9]}"
         return SourceState.MATCH, pin.pin_tag or pin.pin_commit[:7]
 
+    # --- self-update: one simulated view, the cached one a box's last check leaves (up to date, its identity checked),
+    #     at the bundled build's own commit; BOTH readers of the product's cached view take it (G1-R2 B3). -------------
+    def _selfupdate_view(self) -> dict:
+        import time
+
+        from lhpc.core import selfupdate
+        try:                                           # written by demo/tools/assemble.sh: the bundled HEAD
+            from ._build import SHA
+        except ImportError:
+            SHA = ""
+        v, now = selfupdate.status_view(self._paths), int(time.time())
+        v.update({"is_git": True, "available": True, "head": SHA, "head_short": SHA, "branch": "main", "dirty": False,
+                  "have_upstream": True, "upstream_error": "", "upstream_version": v.get("version", ""),
+                  "upstream_head_short": SHA, "origin_canonical": True, "checked_at": now,
+                  "origin_line": "updates from https://github.com/makrohard/loraham-pi-control.git",
+                  "ver_color": "green", "commit_color": "green", "update_available": False,
+                  "identity": {"ok": True, "status": "ok", "reason": "", "checked_at": now}})
+        return v
+
+    def self_update_status(self) -> dict:                      # service_selfupdate.py:87 (footer, update panel)
+        return self._selfupdate_view()
+
+    def controller_status(self):                              # service_selfupdate.py:93 (the LHPC row)
+        d, v = super().controller_status(), self._selfupdate_view()
+        if d is not None:
+            d.update({k: v[k] for k in ("version", "head_short", "update_available", "identity", "origin_line")})
+        return d
+
     def source_check_view(self) -> dict:                      # service_maintenance.py:255, read by stackupdates.verdicts
         """The cached freshness view a box's last "Check for updates" leaves: each installed component current, on the
         head and lane key the snapshot reads (stackupdates.effective_status honours an entry only on those)."""
