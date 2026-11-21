@@ -209,7 +209,7 @@ class DemoService(ControllerService):
     # --- run-state is rendered from build_snapshot(); reflect the model there so Start/Stop
     #     are visible everywhere the console reads run_state (dashboard, apps, dash poll). --
     def build_snapshot(self, *a, **k):
-        from lhpc.core.model import RunState, SourceState
+        from lhpc.core.model import ProfileState, RunState, SourceState
         snap = super().build_snapshot(*a, **k)
         for ss in snap.stacks:
             d = self._d(ss.stack.id)
@@ -222,6 +222,7 @@ class DemoService(ControllerService):
                     cs.source_state = SourceState.MATCH
                     if comp is not None and comp.source is not None:
                         cs.source_state, cs.source_version = self._installed_version(ss.stack.id, comp)
+                        cs.source_head, cs.profile_state = comp.source.pin_commit, ProfileState.INSTALLED_UNVALIDATED
                 if cs.run_state == RunState.NOT_APPLICABLE:
                     continue                 # libraries/firmware have no run state
                 optional = bool(getattr(comp, "optional", False)) if comp else False
@@ -520,6 +521,23 @@ class DemoService(ControllerService):
         if spec is not None and comp.id in spec.covers:
             return SourceState.BINARY, f"binary@{pin.pin_commit[:9]}"
         return SourceState.MATCH, pin.pin_tag or pin.pin_commit[:7]
+
+    def source_check_view(self) -> dict:                      # service_maintenance.py:255, read by stackupdates.verdicts
+        """The cached freshness view a box's last "Check for updates" leaves: each installed component current, on the
+        head and lane key the snapshot reads (stackupdates.effective_status honours an entry only on those)."""
+        import time
+
+        from lhpc.core import stackupdates
+        from lhpc.core.model import SourceState
+        view, lhpc = super().source_check_view(), stackupdates.lhpc_heads(self._paths)
+        comps = dict(view.get("components") or {})
+        for st in self.stacks():
+            for comp in (st.components if self._d(st.id)["installed"] else ()):
+                if comp.source is not None:
+                    binary = self._installed_version(st.id, comp)[0] == SourceState.BINARY
+                    comps[comp.id] = {"status": stackupdates.UP_TO_DATE, "local_head_at_check": comp.source.pin_commit,
+                                      "lane_key": stackupdates.lane_key(self, comp, binary, lhpc)}
+        return {"checked_at": view.get("checked_at") or int(time.time()), "components": comps}
 
     def fetched_version_state(self, target: str) -> dict:     # service_maintenance.py:712: the stamp a fetch writes
         r = super().fetched_version_state(target)
