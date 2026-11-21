@@ -80,8 +80,20 @@ def boot(state_json: str = "") -> str:
     return "ok"
 
 
-def handle(method: str, path: str, form_json: str = "") -> str:
-    """Route one request through the real app's test client and return {status,ctype,body}."""
+# The one browser cookie the app reads that the page writes itself: stacks_state.js remembers the open Apps rows in it
+# (app.py reads it to render them open). The client's own jar (Flask session + CSRF) is never touched otherwise.
+_OPEN_COOKIE = "lhpc_open"
+
+
+def handle(method: str, path: str, form_json: str = "", cookies: str = "") -> str:
+    """Route one request through the real app's test client and return {status,ctype,body}. `cookies`: the page's
+    document.cookie; only `lhpc_open` is taken from it (set while it holds one, else deleted)."""
+    pairs = (c.strip().partition("=") for c in str(cookies or "").split(";"))
+    val = next((v for k, _eq, v in pairs if k == _OPEN_COOKIE), None)
+    if val is None:
+        _client.delete_cookie(_OPEN_COOKIE)
+    else:
+        _client.set_cookie(_OPEN_COOKIE, val)
     data = None
     if form_json:
         try:

@@ -358,6 +358,18 @@ try:
     _br.boot(_saved)
     assert "logs/start-loraham-kiss-tnc-433-r1.log" in json.loads(_br.handle("GET", "/logs/loraham-kiss-tnc?radio=r1"))["body"], \
         "restore: the running kiss@r1's start log is there again"
+    # The page's lhpc_open cookie reaches the app through the bridge (it renders a remembered Apps row open); the
+    # bridge's own session/CSRF cookie stays, so a CSRF-protected form posts after it (PLAN-DEMO2 v5 L14).
+    _row = lambda body: _re.search(r'<details class="stackrow" id="stackrow-daemon"([^>]*)>', body).group(1)  # noqa: E731
+    _b1 = json.loads(_br.handle("GET", "/stacks", "", "theme=dark; lhpc_open=daemon"))["body"]
+    assert " open" in _row(_b1), "cookie: lhpc_open=daemon renders the daemon row open"
+    _b2 = json.loads(_br.handle("GET", "/stacks", "", ""))["body"]
+    assert " open" not in _row(_b2), "cookie: no lhpc_open, the row is closed again"
+    _tokn = _re.search(r'name="_csrf"\s+value="([0-9a-f]+)"', _b2).group(1)
+    _br._svc.stop("kiss", apply=True)
+    _post = json.loads(_br.handle("POST", "/action", json.dumps({"_csrf": _tokn, "op": "start", "target": "kiss@r1"}), ""))
+    assert _post["status"] == 200 and _br._svc.stack_running("kiss"), \
+        ("cookie: a CSRF form posts after the cookie pass (the session survives)", _post["status"])
     R["lifecycle"] = "ok"
     R["render_with_state"] = c.get("/stacks").status_code
 except Exception:
