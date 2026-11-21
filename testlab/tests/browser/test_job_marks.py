@@ -25,7 +25,7 @@ def _open(flask_page, feed):
     page.route("**/api/tasks/dismiss", lambda route: (feed["tasks"].remove(feed["dismiss"]), route.fulfill(
         status=200, content_type="application/json", body="{}")))
     page.reload()
-    page.clock.pause_at((page.evaluate("() => Date.now()") + 1) / 1000)   # polls only when the test advances time (SECONDS)
+    page.clock.pause_at(page.evaluate("() => Date.now()") / 1000 + 1)   # polls only when the test advances time (SECONDS)
     return page
 
 
@@ -263,7 +263,7 @@ def test_a_real_home_card_of_the_stack_is_marked_and_another_stacks_card_is_not(
     page.route("**/api/tasks", lambda route: route.fulfill(
         status=200, content_type="application/json", body=json.dumps({"tasks": feed["tasks"]})))
     page.reload()
-    page.clock.pause_at((page.evaluate("() => Date.now()") + 1) / 1000)   # polls only when the test advances time (SECONDS)
+    page.clock.pause_at(page.evaluate("() => Date.now()") / 1000 + 1)   # polls only when the test advances time (SECONDS)
     card = 'p[data-stack="meshcom@r1"]'
     assert page.locator('p[data-stack="meshcore@r3"]').count() == 1      # the other stack's real card
     _wait_marks(page, card, ["⏳ install", "⏳ HMAC enable"])
