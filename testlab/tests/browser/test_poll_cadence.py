@@ -33,7 +33,7 @@ def _paused_clock(page):
     load and a settle take counts into the test's windows (a 10 s / 3 s poll fired inside "9.9 s" / "2.9 s" on a
     busy run: train A testlab 44525282762)."""
     page.clock.install()
-    page.clock.pause_at(page.evaluate("() => Date.now()") + 1000)
+    page.clock.pause_at(page.evaluate("() => Date.now()") / 1000 + 1)   # Python Playwright: a number is in SECONDS
 
 
 def _open_dashboard(page, pending=False):
