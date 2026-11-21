@@ -288,6 +288,29 @@ try:
     assert svc.daemon_view("433", "").reachable, "no radio: the band view, as before"
     assert _radios.save(svc._paths, _st.radios) == []                           # the seeded list back
     R["daemon_socket"] = "r1 up on its socket after a start (read_view, /api/daemon/r1, Home card); r2, r99 offline"
+    # The radio a dashboard button names reaches the lifecycle (PLAN-DEMO2 L3): the console strips "@r1" and passes the
+    # radio (spawn_start_job's rid, stop's inst), so "Start daemon (r1)" brings up r1 only and "Stop daemon (r1)"
+    # takes down r1 only — the rendered forms' own fields, through /action.
+    _rb = lambda rid: _re.search(rf'id="rd-badge-{rid}"[^>]*>([^<]*)<', c.get("/").get_data(as_text=True)).group(1)  # noqa: E731
+    svc.start("daemon", apply=True, band="868")
+    svc.seed_all_installed()
+    assert svc._dbands() == set() and not any("band" in svc._d(i) for i in ids), "reseed: no stale per-band state"
+    _action(op="start", target="daemon@r1", **{"from": "dash"})
+    assert (_rb("r1"), _rb("r2")) == ("daemon READY", "daemon offline"), ("Start daemon (r1): r1 up, r2 offline",
+                                                                           _rb("r1"), _rb("r2"))
+    _action(op="start", target="daemon@r2", **{"from": "dash"})
+    _action(op="stop", target="daemon@r1", confirmed="yes", **{"from": "dash"})          # its confirm page's Apply
+    assert (_rb("r1"), _rb("r2")) == ("daemon offline", "daemon READY"), ("Stop daemon (r1): r1 down, r2 stays",
+                                                                           _rb("r1"), _rb("r2"))
+    _action(op="restart", target="daemon@r1", confirmed="yes", **{"from": "dash"})
+    assert (_rb("r1"), _rb("r2")) == ("daemon READY", "daemon READY"), "Restart daemon (r1): r1 up again"
+    # a refused start keeps the band its stack had (the band is committed only after its dependencies hold)
+    svc.seed_all_installed()
+    assert svc.start("graywolf", apply=True, band="433").ok and svc.stop("graywolf", apply=True).ok
+    svc.uninstall("kiss", apply=True)
+    assert svc.start("graywolf", apply=True, band="868").ok is False and svc._band("graywolf") == "433", \
+        ("a refused start keeps the band", svc._band("graywolf"))
+    R["radio_targets"] = "Start/Stop/Restart daemon (r1) act on r1 only; a refused start keeps its band"
     # P0 PARITY (PLAN-DEMO2): box H's own texts (PARITY-DEMO-v1 row #; class A rows only, no box-specific data) on the
     # demo's rendered pages while daemon@r1, kiss@r1 and graywolf@r1 run. It runs in every Pages workflow, so a later
     # product change that breaks parity fails the gate (the recurring parity sweep). A str must (True) / must not

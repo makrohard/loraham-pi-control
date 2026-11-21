@@ -122,6 +122,8 @@ class DemoService(ControllerService):
                     continue
                 d = self._d(s.id)
                 d["installed"], d["built"], d["running"] = True, True, False
+                d.pop("band", None)                  # no stale per-band state: nothing runs, nothing is placed
+            self._set_dbands(set())
         except Exception:
             pass
 
@@ -233,11 +235,20 @@ class DemoService(ControllerService):
         d["bands"] = sorted(b for b in bands if b in ("433", "868"))
         d["running"] = bool(d["bands"])          # daemon stack row reflects "any band up"
 
+    def _req_band(self, k) -> str:
+        """The band a lifecycle call targets: its `band`, else its instance's radio (`inst`, the web's `<sid>@<rid>`,
+        whose `@rid` the console strips before the call) by the hardware list; "" for neither."""
+        from lhpc.core import radios
+        b = str((k or {}).get("band") or "")
+        rid = getattr((k or {}).get("inst"), "rid", "") or ""
+        return b if b in ("433", "868") else next((r.band for r in radios.load(self._paths).radios
+                                                  if rid and r.id == rid), "")
+
     def _daemon_start_bands(self, k) -> list:
         """Which bands a daemon start/restart affects: the explicit `band` if given, else
         every configured radio-mode band (a bandless start serves the whole configured set —
         matching real dual/single mode), falling back to both."""
-        b = str((k or {}).get("band") or "")
+        b = self._req_band(k)
         if b in ("433", "868"):
             return [b]
         try:
@@ -658,7 +669,7 @@ class DemoService(ControllerService):
         # stack's current/declared band. Resolved for BOTH the dry run and apply so the confirm
         # preview reasons about the SAME radio Apply will use (persist only on apply). Starting
         # graywolf on 868 must not touch 433 — plan or apply.
-        req_band = str((k or {}).get("band") or "")
+        req_band = self._req_band(k)
         # The production identity gate on the saved configuration: no resolvable callsign or
         # node name refuses the start, and the web sends the visitor to the Settings row.
         if (refused := self._identity_refusal(sid, self._launch_band_hint(sid, req_band),
@@ -668,8 +679,6 @@ class DemoService(ControllerService):
         refused, plan_data = self._band_takeover(sid, band, apply, k)   # before ANY mutation
         if refused is not None:
             return refused
-        if apply and band in ("433", "868"):
-            d["band"] = band
         # Full-stack: the dependency chain (graywolf needs the KISS TNC, etc.) must be
         # SATISFIABLE — refuse the parent if a required provider is absent, unbuilt, or fails to
         # start; a band-switchable provider follows the parent onto its band (moved if running
@@ -678,6 +687,8 @@ class DemoService(ControllerService):
                                                          bool((k or {}).get("stop_owners")))
         if err:
             return err
+        if apply and band in ("433", "868"):         # committed only once the dependencies hold (a refused start
+            d["band"] = band                         # keeps the band it had)
         pending = started_deps if apply else self._deps_needing_start(sid, band)
         owners = self._band_owners(sid, band)          # competitors on the TARGET band
         if apply:
@@ -717,7 +728,7 @@ class DemoService(ControllerService):
                 return ActionResult(False, f"'{raw}' is an optional component — the demo "
                                     "stops stacks, not individual optional parts.")
         if sid == "daemon":
-            b = str((k or {}).get("band") or "")
+            b = self._req_band(k)
             # The daemon is 'up' on a band via an explicit start OR a stack running there.
             # Stopping it takes those bands down — which means CASCADING to the stacks on them
             # (they lose the radio), or the daemon view would keep reading reachable.
@@ -772,7 +783,7 @@ class DemoService(ControllerService):
         # restart brings the FULL stack back and uses the SAME hardened dependency check as
         # start: refuse if a dependency is absent, unbuilt, or won't start (the audit's
         # "restart graywolf while KISS is missing"). Honour the band selector too (dry run + apply).
-        req_band = str((k or {}).get("band") or "")
+        req_band = self._req_band(k)
         if (refused := self._identity_refusal(sid, self._launch_band_hint(sid, req_band),
                                               "restart")) is not None:
             return refused
@@ -780,12 +791,12 @@ class DemoService(ControllerService):
         refused, plan_data = self._band_takeover(sid, band, apply, k)   # before ANY mutation
         if refused is not None:
             return refused
-        if apply and band in ("433", "868"):
-            d["band"] = band
         err, started_deps = self._require_and_start_deps(sid, apply, band,
                                                          bool((k or {}).get("stop_owners")))
         if err:
             return err
+        if apply and band in ("433", "868"):         # committed only once the dependencies hold (a refused start
+            d["band"] = band                         # keeps the band it had)
         pending = started_deps if apply else self._deps_needing_start(sid, band)
         if apply:
             for o in self._band_owners(sid, band):
@@ -816,7 +827,9 @@ class DemoService(ControllerService):
         """The web Start/Restart is a DETACHED job in production; Pyodide cannot spawn one, so run
         the simulated operation synchronously and return the `blocked` shape with the real summary
         (the web flashes it and returns to the stack)."""
-        res = self.run_action(op, target, apply=True, stop_owners=stop_owners, band=band,
+        from lhpc.core import commands
+        res = self.run_action(op, target, apply=True, stop_owners=stop_owners,
+                              band=band or self._req_band({"inst": commands.Instance(rid)} if rid else {}),
                               cascade=cascade)
         return None, "blocked", res.summary
 
