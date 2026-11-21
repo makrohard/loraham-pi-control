@@ -250,13 +250,13 @@ class DemoService(ControllerService):
         return ch
 
     def daemon_feed(self, band: str, lines: int = 40, rid: str = "") -> list:
-        if not self._daemon_up_on(band):
+        if not self._up(band, rid):
             return []
         from . import daemon_sim
         return daemon_sim.feed(band, lines)
 
     def daemon_socket_line(self, band: str, rid: str = "") -> str:
-        if not self._daemon_up_on(band):
+        if not self._up(band, rid):
             return ""
         from . import daemon_sim
         return "STATUS " + " ".join(f"{k}={v}" for k, v in daemon_sim.status(band).items())

@@ -269,7 +269,8 @@ try:
     assert [r.id for r in _radios.load(svc._paths).radios] == ["r1", "r2", "r3"]
     for _rid in ("r1", "r3"):
         assert not _dc.read_view(svc._system, _rid).reachable and not svc.daemon_view("433", _rid).reachable \
-            and svc.daemon_channel("433", _rid) == {} and svc.daemon_channel_scan("433", _rid) == {}, \
+            and svc.daemon_channel("433", _rid) == {} and svc.daemon_channel_scan("433", _rid) == {} \
+            and svc.daemon_feed("433", rid=_rid) == [] and svc.daemon_socket_line("433", _rid) == "", \
             ("a second 433 radio: offline everywhere", _rid)
     assert not c.get("/api/daemon/r1").get_json()["reachable"] and _badge() == "daemon offline"
     assert svc.daemon_view("433", "").reachable, "no radio: the band view, as before"
