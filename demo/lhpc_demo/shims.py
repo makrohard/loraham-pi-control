@@ -1,5 +1,5 @@
 """Browser shims installed BEFORE lhpc is imported. Pyodide lacks a few POSIX modules that
-lhpc imports at module load; in a single browser tab their real behaviour is meaningless."""
+lhpc imports at module load (fcntl, grp); in a single browser tab their real behaviour is meaningless."""
 from __future__ import annotations
 
 import sys
@@ -16,3 +16,15 @@ def install() -> None:
         m.fcntl = lambda *a, **k: 0
         m.ioctl = lambda *a, **k: 0
         sys.modules["fcntl"] = m
+    # grp: a browser tab has no groups. KeyError is grp's own answer for an unknown group, and every lhpc caller
+    # handles it (an unnamed group reads as UNKNOWN). Imported first: on CPython the real module stays.
+    try:
+        import grp  # noqa: F401
+    except ImportError:
+        g = types.ModuleType("grp")
+
+        def _unknown(*_a):
+            raise KeyError("no groups in the browser demo")
+        g.getgrgid = g.getgrnam = _unknown
+        g.getgrall = list
+        sys.modules["grp"] = g

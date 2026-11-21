@@ -19,6 +19,19 @@ try:
     # S1: the real routes render under Pyodide
     for p in ("/", "/stacks", "/healthz"):
         R[p] = c.get(p).status_code
+    # Every page of the built demo renders: the fixed pages, each stack row's page and lazy body, and every menu page
+    # the Apps page links. A 500 is a page a visitor cannot open (0.14.0: a missing `grp` broke nine of them).
+    import re as _re
+    _apps = c.get("/stacks").get_data(as_text=True)
+    _sids = sorted(set(_re.findall(r'id="stackrow-([A-Za-z0-9_.-]+)"', _apps)))
+    _menus = sorted(set(_re.findall(r'href="(/stacks/[^"/]+/menu/[^"#?]+)', _apps)))
+    assert len(_sids) == len(svc.stacks()) and _menus, (_sids, _menus)     # floor: an empty scan cannot pass
+    _pages = ["/", "/stacks", "/healthz", "/stacks/menus", "/dependencies", "/hardware", "/hardware/add",
+              "/hardware/radio/r1", "/hardware/radio/r2", "/logs/daemon", "/controller/logs", "/webserver/logs",
+              "/firewall/logs"] + [p for s in _sids for p in (f"/stacks/{s}", f"/stacks/{s}/body")] + _menus
+    _bad = {p: st for p in _pages if (st := c.get(p, follow_redirects=True).status_code) != 200}   # as the bridge
+    assert not _bad, _bad
+    R["pages"] = f"{len(_pages)} pages render"
     # apply gating: dry run does not mutate, apply commits (real ControllerService contract)
     assert svc.is_installed("kiss") is False
     assert svc.install("kiss", apply=False).ok and svc.is_installed("kiss") is False
