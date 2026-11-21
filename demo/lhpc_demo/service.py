@@ -214,13 +214,16 @@ class DemoService(ControllerService):
         for ss in snap.stacks:
             d = self._d(ss.stack.id)
             for cid, cs in ss.components.items():
+                comp = ss.stack.component(cid)
                 if d["installed"]:
                     # installed -> source present (drives radio_overview's daemon_installed
-                    # and every source_state-based "installed" check the dashboard reads).
+                    # and every source_state-based "installed" check the dashboard reads), at the version a box's
+                    # install leaves (the Apps row and Info show it).
                     cs.source_state = SourceState.MATCH
+                    if comp is not None and comp.source is not None:
+                        cs.source_state, cs.source_version = self._installed_version(ss.stack.id, comp)
                 if cs.run_state == RunState.NOT_APPLICABLE:
                     continue                 # libraries/firmware have no run state
-                comp = ss.stack.component(cid)
                 optional = bool(getattr(comp, "optional", False)) if comp else False
                 if not d["installed"]:
                     cs.run_state = RunState.NOT_INSTALLED
@@ -505,6 +508,24 @@ class DemoService(ControllerService):
     def auto_install_mode(self) -> str:              # service_auto_install.py:1693, the same three answers
         got = {self._d(st.id)["installed"] for st in self.stacks() if st.id != "loraham-pi-control"}
         return "update" if got == {True} else "install" if got <= {False} else "mixed"
+
+    def _installed_version(self, sid, comp) -> tuple:
+        """(source state, version) of an installed component, as a box's install leaves it: covered by its stack's
+        prebuilt binary on this target (binary_available + the spec's `covers`), BINARY "binary@<9 hex>"; else its
+        manifest pin (the tag, else the short commit). The demo has no artifact index (no network), so the 9 hex
+        are the manifest pin commit's, standing in for the artifact sha a box records (status.py:255-275)."""
+        from lhpc.core.model import SourceState
+        pin = comp.source
+        spec = self.binary_spec(sid) if self.binary_available(sid)[0] else None
+        if spec is not None and comp.id in spec.covers:
+            return SourceState.BINARY, f"binary@{pin.pin_commit[:9]}"
+        return SourceState.MATCH, pin.pin_tag or pin.pin_commit[:7]
+
+    def fetched_version_state(self, target: str) -> dict:     # service_maintenance.py:712: the stamp a fetch writes
+        r = super().fetched_version_state(target)
+        if r and not r.get("installed") and self._d(self._sid(target))["installed"]:
+            r = {**r, "installed": r.get("pinned", "")}       # an installed fetched stack is at its pin
+        return r
 
     def auto_install_welcome(self):
         # A pre-provisioned demo box is never "fresh" — suppress the first-run
