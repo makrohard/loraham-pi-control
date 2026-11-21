@@ -577,14 +577,16 @@ def elsewhere(svc, target_rid: str):
 
 def _held_radios(svc) -> dict:
     """{(stack id, component id): radios} its running instances run on, by record or token; the daemon's by --id when
-    every daemon process has one."""
+    every daemon process has one, and none when one has not (a record beside it tells only part: the whole band)."""
     from . import radio_start
     held = {}
     for s_id, r_id, c_id, _p in instance_processes(svc, svc._system.procfs.cmdlines()):
         held.setdefault((s_id, c_id), set()).add(r_id)              # G1-K6C 1: per component, not per stack
-    dprocs = radio_start._daemon_procs(svc)
+    dprocs, daemon = radio_start._daemon_procs(svc), (svc.stack_of(svc.DAEMON_ID), svc.DAEMON_ID)
     if dprocs and all(p.kind == "id" for p in dprocs):
-        held[(svc.stack_of(svc.DAEMON_ID), svc.DAEMON_ID)] = {p.rid for p in dprocs}
+        held[daemon] = {p.rid for p in dprocs}
+    elif dprocs:
+        held.pop(daemon, None)
     return held
 
 

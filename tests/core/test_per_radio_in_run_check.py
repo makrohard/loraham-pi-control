@@ -170,3 +170,14 @@ def test_box_h_meshtastic_on_r2_beside_a_daemon_on_r2_is_blocked_with_its_way_ou
         assert _conflicts(svc, MESHTASTIC, "r2") == [
             "loraham-daemon (provider) vs meshtastic (exclusive) on loraham.radio.868 (radios r2, r4, r5) — both "
             "running; stop daemon@r2 or use another radio"]
+
+
+def test_a_recorded_daemon_beside_one_without_id_holds_the_whole_band(tmp_path):
+    # G2-153 N1: daemon@r4 runs by its record, a hand-started daemon without --id runs too: the daemon is not told on
+    # r4 alone, so rns@r2 is blocked and the status shows the conflict. red-before (85f62b1d): admitted, none shown
+    hand = (*DAEMON, "r2", "868", False, ["loraham_daemon", "--radio", "868"])
+    with _box(tmp_path, (*DAEMON, "r4", "868"), hand) as svc:
+        got = [c.split("; ")[0] for c in _conflicts(svc, RNS, "r2")]           # the sentence; its way out is N2's limit
+        assert got == ["loraham-daemon (provider) vs rns (exclusive) on loraham.radio.868 (radios r2, r4) — both running"]
+    with _box(tmp_path, (*DAEMON, "r4", "868"), hand, (*RNS, "r2", "868")) as svc:
+        assert _radio_conflicts(svc) == [("loraham.radio.868 (radios r2, r4)", "loraham-daemon", "rns")]
