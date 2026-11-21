@@ -21,6 +21,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 
 from .probes import System
 
@@ -37,9 +38,9 @@ _KEY_RE = re.compile(r"[A-Za-z0-9_]+")        # daemon CONF key grammar
 #
 # The daemon DOES reply to every command line -- `config_dispatch_reply()` writes exactly one
 # newline-terminated "OK" or "ERR ..." per line, and has since before 2a0db88; `docs/conf-protocol.md`
-# states it as the contract. What it does not do is ECHO a radio param back in GET STATUS/CHANNEL,
-# which is a different thing and is what `is_confirmable` below is about. This comment used to say
-# the daemon was silent; it was wrong about the ack and right about the echo.
+# states it as the contract. The echo is a different thing: STATUS echoes only FREQ/SF/POWER (daemon
+# 1.3.0, "-" = the band default), and only `GET RADIO` (daemon 1.5.0) echoes all nine radio params
+# with the values in effect; see `read_radio` and `_RADIO_VERIFY` below.
 _ALLOWED_SET: dict[str, set[str]] = {
     # TX / CAD monitoring (config_dispatch)
     "TXMODE": {"MANAGED", "DIRECT"},
@@ -302,6 +303,31 @@ def read_view(system: System, band: str) -> DaemonView:
     return view
 
 
+# The eleven fields of daemon 1.5.0's `GET RADIO` reply, in its order (docs/conf-protocol.md of the daemon).
+_RADIO_FIELDS = ("RADIO", "MODE", "FREQ", "SF", "BW", "CR", "PREAMBLE", "SYNC", "CRC", "LDRO", "POWER")
+
+
+def read_radio(system: System, band: str, status: dict) -> dict[str, str]:
+    """The radio params in effect, from daemon 1.5.0's `GET RADIO` — the ONE way LHPC reads that query (the live
+    poll and a SET's read-back both use it). `{}` = "not available", never a guess:
+      * Guard A: only a daemon whose STATUS carries `RADIOERR=` (new in 1.5.0) is asked; an older one would take
+        the unknown line under its radio lock and stall for a whole TX airtime.
+      * Strict: the reply must hold a newline-terminated first line (the transport stops at EOF too, so a cut
+        reply has none), parse with `parse_conf_reply`, and carry all eleven `_RADIO_FIELDS`. A cut, partial or
+        `ERR` reply, a timeout and a transport error are all `{}`.
+    The values describe the chip only with `RADIO=READY` in this same reply (it keeps them while UNPLUGGED/FAILED)."""
+    if "RADIOERR" not in status or not _valid_key(band):
+        return {}
+    try:
+        raw = system.unix.request(conf_socket(band), b"GET RADIO\n", _READ_TIMEOUT, _MAX)
+    except OSError:                                # TimeoutError included
+        return {}
+    if b"\n" not in raw:                           # no complete first line: a cut reply (e.g. FREQ=433.1 of 433.175)
+        return {}
+    radio = parse_conf_reply(raw, "RADIO")
+    return radio if all(k in radio for k in _RADIO_FIELDS) else {}
+
+
 def read_channel_passive(system: System, band: str) -> dict[str, str]:
     """One CHANNEL field map WITHOUT a CAD scan — `GET CHANNEL NOSCAN` (daemon >= 1.1.0).
 
@@ -417,8 +443,7 @@ def validate_set(key: str, value: str, family: str = "", high_power: bool = Fals
 
 # Which GET command + field reports each SET key back, for read-back confirmation
 # (config_status.h: STATUS reports the TX/CAD flags, CHANNEL reports MODE). The radio
-# params (FREQ/SF/BW/CR/CRC/PREAMBLE/SYNC/LDRO/POWER) are applied to the chip but NOT
-# echoed by any GET, so they cannot be confirmed over the socket.
+# params are `_RADIO_VERIFY`: confirmed through `read_radio` on a daemon >= 1.5.0 only.
 _VERIFY: dict[str, tuple[bytes, str]] = {
     "TXMODE": (b"GET STATUS\n", "TXMODE"),
     "TXRESULT": (b"GET STATUS\n", "TXRESULT"),
@@ -434,24 +459,30 @@ _VERIFY: dict[str, tuple[bytes, str]] = {
     # asking to measure the channel. NOSCAN reports MODE, so the read-back is unaffected.
     "MODE": (b"GET CHANNEL NOSCAN\n", "MODE"),
 }
+# The radio params `GET RADIO` (daemon 1.5.0) reports back, each under its own name.
+_RADIO_VERIFY = frozenset({"FREQ", "SF", "BW", "CR", "PREAMBLE", "SYNC", "CRC", "LDRO", "POWER"})
 
 
 def _norm(val: str) -> str:
-    """Canonicalise for comparison: integers numerically, else upper-cased."""
+    """Canonicalise for comparison: a number EXACTLY (433.175 != 433.9, 7.8 != 7, but 433.0 == 433 and 125.0 == 125),
+    a `0x` value as its number (SYNC 0x12 == 18), anything else upper-cased."""
     v = val.strip().upper()
+    if v.startswith("0X"):
+        try:
+            return str(int(v, 16))
+        except ValueError:
+            return v
     try:
-        f = float(v)
-    except ValueError:
+        d = Decimal(v)
+    except InvalidOperation:
         return v
-    # A hostile/garbled daemon reply of `inf`/`-inf`/`1e400`/a long digit run makes
-    # float() non-finite; int(inf) raises OverflowError. Never let a socket value crash
-    # a mutating action — a non-finite/overflowing value is left as its upper-cased text.
-    if not math.isfinite(f):
+    # A hostile/garbled daemon reply (`inf`, `nan`, `1E999999999`) is left as its text: never expanded or crashed on.
+    if not d.is_finite() or not -40 <= d.adjusted() <= 40:
         return v
-    try:
-        return str(int(f))
-    except (ValueError, OverflowError):
-        return v
+    s = format(d, "f")                           # exact, no rounding
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return "0" if s in ("-0", "") else s
 
 
 def chip_family_from_status(status: dict) -> str:
@@ -550,9 +581,9 @@ def canonical_value(key: str, value: str) -> str:
 
 
 def is_confirmable(key: str) -> bool:
-    """True if the daemon reports this key back over a GET, so a SET can be CONFIRMED.
-    Radio params (FREQ/SF/BW/…) are applied to the chip but never echoed, so a SET of
-    them can only be reported as SENT-but-unconfirmed, never 'applied'."""
+    """True if every daemon reports this key back over a GET, so an OK'd SET is always CONFIRMED or refused.
+    Radio params (FREQ/SF/BW/…) are not: only daemon 1.5.0's `GET RADIO` echoes them (`_confirm_radio`), so a
+    caller takes their outcome from `apply_set`'s `confirmed`, never from this."""
     return key.upper() in _VERIFY
 
 
@@ -612,6 +643,8 @@ def apply_set(system: System, band: str, key: str, value: str) -> tuple[bool, bo
     if ack != "OK":                               # timeout or empty
         return False, False, (f"{key}={value}: SET unconfirmed — no valid OK within "
                               f"{_READ_TIMEOUT:g} s")
+    if key in _RADIO_VERIFY:
+        return _confirm_radio(system, band, key, value)
     if key not in _VERIFY:
         return True, False, (f"{key}={value} SENT but UNCONFIRMED — accepted (OK), but a radio "
                              "param the daemon does not report back, so it cannot be verified "
@@ -629,6 +662,31 @@ def apply_set(system: System, band: str, key: str, value: str) -> tuple[bool, bo
     if _norm(got) == _norm(value):
         return True, True, f"{key}={value} confirmed by the daemon ({field}={got})"
     return False, False, f"NOT applied — daemon reports {field}={got} (expected {value})"
+
+
+def _confirm_radio(system: System, band: str, key: str, value: str) -> tuple[bool, bool, str]:
+    """The read-back of an OK'd radio-param SET (`apply_set`). A daemon before 1.5.0 (no `RADIOERR=` in STATUS)
+    is never asked: SENT but UNCONFIRMED, as before. On 1.5.0 `read_radio` decides, and only a complete reply
+    with `RADIO=READY` in it can confirm (it keeps the values while UNPLUGGED/FAILED)."""
+    try:
+        status = _query(system, band, b"GET STATUS\n", "STATUS")
+    except OSError:
+        status = {}
+    if "RADIOERR" not in status:
+        return True, False, (f"{key}={value} SENT but UNCONFIRMED — accepted (OK), but a radio "
+                             "param this daemon does not report back (before 1.5.0), so it cannot be "
+                             "verified over the socket (check the daemon log)")
+    radio = read_radio(system, band, status)
+    if not radio:
+        return True, False, (f"{key}={value} sent (OK), but the read-back is unavailable "
+                             "(no complete GET RADIO reply)")
+    if radio["RADIO"].upper() != "READY":
+        return True, False, (f"{key}={value} sent (OK), current application not confirmed "
+                             f"(RADIO={radio['RADIO']})")
+    got = radio[key]
+    if _norm(got) == _norm(value):
+        return True, True, f"{key}={value} confirmed by the daemon (RADIO {key}={got})"
+    return False, False, f"NOT applied — daemon reports {key}={got} (expected {value})"
 
 
 def allowed_settings() -> dict:

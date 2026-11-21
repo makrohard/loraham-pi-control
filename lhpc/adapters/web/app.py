@@ -2081,11 +2081,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         band = _api_radio(rid)
         view = service.daemon_view(band, rid)
         channel = service.daemon_channel(band, rid) if view.reachable else {}
+        from lhpc.core import radio_start
+        radio = radio_start.read_daemon_radio(service, band, rid, view)    # GET RADIO: a 1.5.0 daemon only (Guard A)
         return jsonify(rid=rid, band=band, reachable=view.reachable, ready=view.ready,
                        radio_state=view.radio_state,
                        label=_submenus.daemon_label(view.ready, view.reachable, view.radio_state),
                        status=view.status,
-                       stats=view.stats, channel=channel,
+                       stats=view.stats, channel=channel, radio=radio,
                        feed=service.daemon_feed(band, 40, rid))
 
     @app.get("/api/daemon/<rid>/feed")

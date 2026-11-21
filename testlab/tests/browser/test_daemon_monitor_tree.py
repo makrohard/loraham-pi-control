@@ -1,5 +1,5 @@
 """DAEMON-MONITOR-TREE (0.14.0, 11-18) + UI-REORG c4 (plan v7 s3/s4), in a real browser: a radio's
-four live daemon views under its Monitor, each its own closed node (F14), ask only while SHOWN (it and every <details>
+live daemon views (STATUS RADIO STATS SOCKET RX TX; RADIO = daemon 1.5.0, its own tests at the end) under its Monitor, each its own closed node (F14), ask only while SHOWN (it and every <details>
 around it open; opening one node polls that view only):
 in the tree (the Settings page) Get STATUS / Get STATS one read per show and per Reload; View Socket a poll each
 second, RX/TX View one every 3 s, both stopped by hiding; the Monitor's page (F7) shows ONE view, which asks from load
@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import re
 
+import pytest
+
 RID = "r3"                                           # flask_page's USB radio (its daemon answers: unix_replies)
 _READY = {"/tmp/loraconf-r3.sock": b"STATUS RADIO=READY ID=r3 BOUND=- TXMODE=MANAGED\n"}
 MONITOR = f"/stacks/daemon/menu/stack-settings-daemon--monitor?radio={RID}"   # F7: the one Monitor page (STATUS): 3 s
@@ -23,7 +25,7 @@ _REPLY = {"": {"reachable": True, "status": {"RADIO": "READY"}, "stats": {"RX": 
           "/feed": {"feed": ["RX one", "TX two"]}}
 API = re.compile(r".*/api/daemon/" + RID + r"(/socket|/feed)?$")
 _MON = "#stack-settings-daemon--monitor"
-_KINDS = ("status", "stats", "socket", "rxtx")
+_KINDS = ("status", "radio", "stats", "socket", "rxtx")
 
 
 def _badge_answer(route, up):
@@ -117,13 +119,13 @@ def _open_monitor_and_views(page):
 
 
 def _loaded(page, settled, seen):
-    """The Settings page (TREE) with its Monitor and the four view nodes opened: every view asked once; let those
+    """The Settings page (TREE) with its Monitor and the five view nodes opened: every view asked once; let those
     settle, then count afresh."""
     _open_monitor_and_views(page)
     for kind in _KINDS:
         page.wait_for_function("s => !document.querySelector(s).dvBusy", arg=_sel(kind), timeout=15000)
     settled()
-    assert sorted(seen) == ["", "", "/feed", "/socket"], seen
+    assert sorted(seen) == ["", "", "", "/feed", "/socket"], seen
     seen.clear()
 
 
@@ -143,12 +145,12 @@ def test_status_and_stats_ask_once_per_show_and_per_reload_and_never_while_hidde
     settled()
     assert seen == []
     _toggle_monitor(page, True)                                              # shown again: one read each
-    for kind, want in (("status", "RADIO=READY"), ("stats", "RX=7")):
+    for kind, want in (("status", "RADIO=READY"), ("radio", "needs daemon 1.5.0"), ("stats", "RX=7")):
         _wait_text(page, kind, want)
         assert _text(page, kind).split("\n")[0] == f"{kind.upper()} — {RID} (live)"
     settled()
-    assert seen.count("") == 2
-    for kind in ("status", "stats"):
+    assert seen.count("") == 3
+    for kind in ("status", "radio", "stats"):
         before = seen.count("")
         page.click(_sel(kind) + " .daemonview-reload")
         page.clock.run_for(15000)
@@ -181,14 +183,14 @@ def test_the_socket_view_polls_each_second_only_while_shown(flask_page):
 
 
 def test_opening_one_view_node_polls_that_view_only_and_closing_it_stops_it(flask_page):
-    # F14: the Monitor opened, its four views are closed nodes: nothing asks; opening SOCKET's node runs SOCKET only;
+    # F14: the Monitor opened, its five views are closed nodes: nothing asks; opening SOCKET's node runs SOCKET only;
     # closing that node (a click, then a scripted open=false after a reopen) stops it
     page, _posts = flask_page(path=TREE, unix_replies=_READY)
     seen, settled, _held = _serve(page)
     page.click(_MON + " > summary")
     page.wait_for_function("m => document.querySelector(m).open", arg=_MON, timeout=15000)
     assert page.evaluate("() => [...document.querySelectorAll('.daemonview')].map(v => [v.tagName, v.open])") == \
-        [["DETAILS", False]] * 4
+        [["DETAILS", False]] * len(_KINDS)
     page.clock.run_for(5000)
     settled()
     assert seen == [] and not page.evaluate("() => [...document.querySelectorAll('.daemonview')].some(v => v.dvRunning)")
@@ -310,16 +312,16 @@ def test_a_hide_and_show_during_a_slow_status_asks_once_more_when_it_settles(fla
     _toggle_monitor(page, False)
     _toggle_monitor(page, True)                                               # shown while it is out
     settled()
-    assert len(held) == 2, len(held)                                          # STATS asks; STATUS waits (pending)
+    assert len(held) == 3, len(held)                                          # RADIO, STATS ask; STATUS waits (pending)
     assert _text(page, "status") == "loading…"
     held.pop(0).fulfill(status=200, content_type="application/json", body=json.dumps(_REPLY[""]))   # the old one
     settled()
-    assert len(held) == 2, len(held)                                          # exactly one fresh STATUS request
+    assert len(held) == 3, len(held)                                          # exactly one fresh STATUS request
     for r in held:
         r.fulfill(status=200, content_type="application/json", body=json.dumps(_REPLY[""]))
     _wait_text(page, "status", "RADIO=READY")
     settled()
-    assert seen.count("") == 3                                                # Reload, STATS, the one fresh STATUS
+    assert seen.count("") == 4                                                # Reload, RADIO, STATS, the one fresh STATUS
 
 
 def test_a_monitor_page_without_the_hardware_list_resumes_when_the_daemon_starts(flask_page):
@@ -403,7 +405,7 @@ def test_a_stopped_monitor_inserted_later_pauses_at_once(flask_page):
 def test_the_monitor_pages_one_view_repeats_every_3_s_status_and_stats_included(flask_page):
     # UI-REORG c5 (s4) + F7/F6: the Monitor's page works like a log page: its ONE view (each kind in turn) repeats
     # every 3 s; no Reload and no "every N s" line (STATUS / STATS: "updated hh:mm:ss" only, a25 v4 N1)
-    path = {"status": "", "stats": "", "socket": "/socket", "rxtx": "/feed"}
+    path = {"status": "", "radio": "", "stats": "", "socket": "/socket", "rxtx": "/feed"}
     for kind in _KINDS:
         page, _posts = flask_page(path=MONITOR + "&view=" + kind, unix_replies=_READY)
         seen, settled, _held = _serve(page)
@@ -418,7 +420,7 @@ def test_the_monitor_pages_one_view_repeats_every_3_s_status_and_stats_included(
         assert seen == [path[kind]] * 2, (kind, seen)                       # 3 s, STATUS/STATS included
         assert page.locator(".daemonview").count() == 1 and page.locator(".daemonview-reload").count() == 0
         status = page.text_content(_sel(kind) + " .daemonview-status")
-        assert (re.fullmatch(r"updated \d\d:\d\d:\d\d", status) if kind in ("status", "stats")
+        assert (re.fullmatch(r"updated \d\d:\d\d:\d\d", status) if kind in ("status", "radio", "stats")
                 else status == ""), (kind, status)
         assert page.locator(".dbadge").count() == 1 and page.locator(".pagehead").count() == 0   # F15: the node's pin
         page.context.close()
@@ -484,7 +486,7 @@ def test_a_hidden_tab_stops_the_views_and_visible_again_asks_each_view_once(flas
     for kind in _KINDS:
         page.wait_for_function("s => !document.querySelector(s).dvBusy", arg=_sel(kind), timeout=15000)
     settled()
-    assert sorted(seen) == ["", "", "/feed", "/socket"], seen
+    assert sorted(seen) == ["", "", "", "/feed", "/socket"], seen
     assert state["polls"] == polls + 1                                       # the badge poll: one at once
 
 
@@ -620,3 +622,33 @@ def test_a_header_pin_shows_only_a_live_answer_while_its_node_is_open(flask_page
     assert _pill(page, live) == ["daemon offline", "badge badge-stopped dbadge"]
     toggle(False)
     assert _hidden(page, live) and state["hold"] == []
+
+
+# ---- RADIO (daemon 1.5.0 `GET RADIO`, plan v17 §13 A6.1): the RADIO view reads /api/daemon/<rid>'s `radio` ----------
+
+_RADIO = {"RADIO": "READY", "MODE": "LORA", "FREQ": "433.175", "SF": "12", "BW": "125.0", "CR": "5",
+          "PREAMBLE": "8", "SYNC": "0x12", "CRC": "1", "LDRO": "1", "POWER": "17"}
+_ST15 = {"RADIO": "READY", "RADIOERR": "retry"}                       # a 1.5.0 daemon's STATUS carries RADIOERR=
+
+
+@pytest.mark.parametrize("status,radio,want,absent", [
+    (_ST15, _RADIO, "FREQ=433.175", None),
+    ({"RADIO": "READY"}, {}, "RADIO not reported by this daemon (needs daemon 1.5.0)", None),
+    (_ST15, {}, "RADIO not readable", "needs daemon 1.5.0"),                        # 1.5.0, but no complete reply
+    (_ST15, dict(_RADIO, RADIO="FAILED"), "RADIO=FAILED", "RADIO=READY"),          # its health, never STATUS's
+    (_ST15, dict(_RADIO, RADIO="UNPLUGGED"), "RADIO=UNPLUGGED", "RADIO=READY"),
+], ids=["1.5.0", "1.4.2", "1.5.0-unreadable", "radio-failed", "radio-unplugged"])
+def test_the_radio_view_shows_its_get_radio_reply_and_says_why_there_is_none(flask_page, monkeypatch, status, radio,
+                                                                             want, absent):
+    monkeypatch.setitem(_REPLY, "", {"reachable": True, "status": status, "stats": {}, "radio": radio})
+    page, _posts = flask_page(path=TREE, unix_replies=_READY)
+    seen, settled, _held = _serve(page)
+    page.click(_MON + " > summary")
+    page.wait_for_function("m => document.querySelector(m).open", arg=_MON, timeout=15000)
+    page.click(_sel("radio") + " > summary")                                  # only the RADIO node shown
+    _wait_text(page, "radio", want)
+    text = _text(page, "radio")
+    assert text.split("\n")[0] == f"RADIO — {RID} (live)", text
+    assert absent is None or absent not in text, text
+    settled()
+    assert seen == [""], seen                                                 # one read per show

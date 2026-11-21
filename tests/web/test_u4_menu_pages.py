@@ -167,7 +167,7 @@ def test_firewall_other_commands_opens_on_its_own_page(tmp_path, web):
 
 # ---- every level: one descriptor, one link, one page, the same block -----------------------------
 
-_PAGE_LESS = re.compile(r"stack-settings-[a-z0-9-]+--monitor-(status|stats|socket|rxtx)")
+_PAGE_LESS = re.compile(r"stack-settings-[a-z0-9-]+--monitor-(status|radio|stats|socket|rxtx)")
 
 
 @pytest.mark.parametrize("radios, paged", [(False, None), (True, ("daemon", "meshcore"))],

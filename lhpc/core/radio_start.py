@@ -1163,6 +1163,15 @@ def daemon_claimed(svc, band: str, rid: str) -> bool:
     return False
 
 
+def read_daemon_radio(svc, band: str, rid: str, view) -> dict[str, str]:
+    """The radio params in effect (`GET RADIO`, daemon 1.5.0) for a band `view` read by `svc.daemon_view`: {} when
+    the daemon is unreachable, older (no `RADIOERR=` in its STATUS: never asked) or gave no complete reply."""
+    from . import daemon_control
+    if not view.reachable:
+        return {}
+    return daemon_control.read_radio(svc._system, daemon_key(svc, rid or band), view.status)
+
+
 def daemon_key(svc, band: str) -> str:
     """The key of a band's daemon sockets (daemon_control.conf_socket), every read and every SET: socket_key."""
     return socket_key(svc._paths, band)

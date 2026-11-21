@@ -22,6 +22,13 @@
     if (!obj || !Object.keys(obj).length) return "(no data)";
     return Object.keys(obj).map(function (k) { return k + "=" + obj[k]; }).join("\n");
   }
+  // RADIO view: the reply of GET RADIO (daemon 1.5.0) as it came, its own RADIO= health first among the values;
+  // none: an older daemon (no RADIOERR= in its STATUS, never asked) or a 1.5.0 one whose reply was not complete.
+  function radioText(d) {
+    if (d.radio && Object.keys(d.radio).length) return render(d.radio);
+    return d.status && "RADIOERR" in d.status ? "RADIO not readable"
+      : "RADIO not reported by this daemon (needs daemon 1.5.0)";
+  }
   function two(n) { return (n < 10 ? "0" : "") + n; }
   function stamp() {
     var d = new Date();
@@ -71,14 +78,15 @@
     var text = panel.querySelector(".daemonview-text"), status = panel.querySelector(".daemonview-status");
     var full = !!panel.closest("[data-fullpage]");   // the Monitor's page: its one view repeats every 3 s (s4, F7)
     var poll;
-    if (kind === "status" || kind === "stats") {
+    if (kind === "status" || kind === "radio" || kind === "stats") {
       text.textContent = "loading…";
       status.textContent = "";
       poll = function () {
         ask(panel, "", function (d, failed) {
           if (failed) { text.textContent = "request failed"; status.textContent = full ? "" : "Reload to ask again"; return; }
           text.textContent = !d || !d.reachable ? "daemon not reachable on " + rid
-            : kind.toUpperCase() + " — " + rid + " (live)\n" + render(kind === "stats" ? d.stats : d.status);
+            : kind.toUpperCase() + " — " + rid + " (live)\n"
+              + (kind === "radio" ? radioText(d) : render(kind === "stats" ? d.stats : d.status));
           status.textContent = "updated " + stamp();                          // F6: no "every 3 s" line
         });
       };

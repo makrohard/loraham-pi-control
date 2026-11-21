@@ -104,3 +104,33 @@ def test_an_fsk_warning_lists_the_stacks_of_that_radio(web, tmp_path, csrf):
     body = c.post("/radio/r2/set", data={"_csrf": csrf(c), "key": "MODE", "value": "FSK"}).get_data(as_text=True)
     assert asked == ["r2"]
     assert "affected: <strong>kiss@r2</strong>" in body and "kiss@r1" not in body
+
+
+# ---- daemon 1.5.0 (plan v17 §13 A6): /api/daemon/<rid> carries that radio's GET RADIO, Guard A --------------------
+
+class _PerCommand:
+    """CONF sockets that answer per command: `replies[path][payload]`; every request is recorded as (path, payload)."""
+
+    def __init__(self, replies):
+        self.replies, self.asked = replies, []
+
+    def request(self, path, payload, timeout, maxb):
+        self.asked.append((path, payload))
+        return self.replies.get(path, {}).get(payload, b"ERR UNKNOWN\n")
+
+    def send(self, *a): ...
+
+
+def test_the_api_carries_each_radios_own_get_radio_and_asks_only_a_1_5_0_daemon(web, tmp_path):
+    radios_fixture.write(tmp_path, TWO_433)
+    r2_radio = b"RADIO RADIO=READY MODE=LORA FREQ=433.175 SF=10 BW=125.0 CR=6 PREAMBLE=8 SYNC=0x12 CRC=1 LDRO=1 POWER=17\n"
+    sys = FakeSystem().system
+    sys.unix = _PerCommand({
+        "/tmp/loraconf-r1.sock": {b"GET STATUS\n": _status("r1")},                         # a 1.4.2 daemon
+        "/tmp/loraconf-r2.sock": {b"GET STATUS\n": _status("r2").replace(b"\n", b" RADIOERR=retry\n"),
+                                  b"GET RADIO\n": r2_radio}})
+    c = web(system=sys)
+    r1, r2 = c.get("/api/daemon/r1").get_json(), c.get("/api/daemon/r2").get_json()
+    assert r1["radio"] == {} and r2["radio"]["FREQ"] == "433.175" and r2["radio"]["SF"] == "10"
+    assert ("/tmp/loraconf-r1.sock", b"GET RADIO\n") not in sys.unix.asked          # Guard A: 1.4.2 never asked
+    assert ("/tmp/loraconf-r2.sock", b"GET RADIO\n") in sys.unix.asked

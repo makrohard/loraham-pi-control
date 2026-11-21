@@ -20,7 +20,7 @@ from lhpc.core.services import ControllerService
 
 _STATUS = (b"STATUS RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90 RXREADY=1 "
            b"HIGHPOWER=0 CHIPFAMILY=SX127x\n")
-_VIEWS = [("status", "STATUS"), ("stats", "STATS"), ("socket", "SOCKET"), ("rxtx", "RX/TX View")]
+_VIEWS = [("status", "STATUS"), ("radio", "RADIO"), ("stats", "STATS"), ("socket", "SOCKET"), ("rxtx", "RX/TX View")]
 _MON = "stack-settings-daemon--monitor"
 
 
@@ -52,7 +52,7 @@ def _monitor_page(c, query):
     return parse(_html(c, f"/stacks/daemon/menu/{_MON}?{query}"))
 
 
-def test_the_tree_lists_one_monitor_with_its_four_views_without_pages(tmp_path, web):
+def test_the_tree_lists_one_monitor_with_its_five_views_without_pages(tmp_path, web):
     c, _svc = _client(web, tmp_path)
     for rid in ("r1", "r2"):                                  # the tree shows the levels of the radio it is opened on
         doc = parse(_html(c, f"/stacks/menus?radio={rid}"))
@@ -118,7 +118,7 @@ def test_the_stacks_body_holds_the_views_and_no_button_row(tmp_path, web):
     for p in views:                                    # each with its Reload and its own (hidden) down line (F8)
         assert doc.within(p).find("button", class_="daemonview-reload")
         assert [x.has_attr("hidden") for x in doc.within(p).find("p", class_="dstate-down")] == [True]
-    assert len(doc.within(monitor).find("p", class_="dstate-down")) == 4         # F8: no Monitor-level line
+    assert len(doc.within(monitor).find("p", class_="dstate-down")) == len(_VIEWS)   # F8: no Monitor-level line
     assert not [a for a in doc.within(monitor).find("a") if "--monitor-" in a["href"]]   # no "page ›" (Q3)
     for gone in ("socketbtn", "txbtn", "liveclose", "socketclose", "txclose"):
         assert f'class="{gone}' not in body and f" {gone}" not in body, gone
@@ -126,9 +126,9 @@ def test_the_stacks_body_holds_the_views_and_no_button_row(tmp_path, web):
     assert 'class="livebtn" data-rid' not in body
 
 
-def test_the_monitor_holds_four_own_closed_view_nodes_in_order(tmp_path, web):
+def test_the_monitor_holds_five_own_closed_view_nodes_in_order(tmp_path, web):
     # F14 (his "STILL ... all in one node!"): measured on the RENDERED tree, the Monitor's direct child nodes are
-    # exactly the four views in DAEMON_VIEWS order, each its own closed <details> (the Settings nodes' class) whose
+    # exactly the five views in DAEMON_VIEWS order (RADIO after STATUS: daemon 1.5.0), each its own closed <details> (the Settings nodes' class) whose
     # <summary> is its name, with its Reload, its own down line and its 22-line window; no heading block, no "page ›"
     c, _svc = _client(web, tmp_path)
     for rid in ("r1", "r2"):
@@ -136,7 +136,7 @@ def test_the_monitor_holds_four_own_closed_view_nodes_in_order(tmp_path, web):
         monitor = doc.by_id(_MON)
         inner = [d for d in doc.within(monitor).find("details") if d is not monitor]
         children = [d for d in inner if not any(e.index < d.index <= e.end for e in inner)]
-        assert children == inner and len(children) == 4, [d["id"] for d in inner]
+        assert children == inner and len(children) == len(_VIEWS) == 5, [d["id"] for d in inner]
         for node, (kind, name) in zip(children, _VIEWS):
             assert node["id"] == _mid(kind) and (node["data-rid"], node["data-kind"]) == (rid, kind)
             assert {"advcfg", "dblock", "daemonview"} <= node.classes and not node.has_attr("open"), node.attrs
@@ -159,7 +159,7 @@ def test_an_offline_radio_has_its_monitor_paused(tmp_path, web):
     monitor = doc.by_id(_MON)
     assert monitor["data-rid"] == "r2" and monitor["data-up"] == "0"
     downs = doc.within(monitor).find("p", class_="dstate-down")
-    assert len(downs) == 4 and not any(d.has_attr("hidden") for d in downs)
+    assert len(downs) == len(_VIEWS) and not any(d.has_attr("hidden") for d in downs)
     assert all(b.has_attr("disabled") for b in doc.within(monitor).find("button", class_="daemonview-reload"))
     page = _monitor_page(c, "radio=r2")                                          # its page: that radio, paused
     [view] = page.find("div", class_="daemonview")

@@ -51,7 +51,9 @@ def daemon_label(ready, reachable, radio_state) -> str:
 
 # DAEMON-MONITOR-TREE + F7: a daemon's live views, the tree nodes under its ONE "Monitor" (Q2 A: their display
 # names), in page order; they show inline in the tree and have no page of their own (Q3: only Monitor has one)
-DAEMON_VIEWS = (("status", "STATUS"), ("stats", "STATS"), ("socket", "SOCKET"), ("rxtx", "RX/TX View"))
+# RADIO (daemon 1.5.0 `GET RADIO`): his word, the line "STATUS RADIO STATS SOCKET RX TX"
+DAEMON_VIEWS = (("status", "STATUS"), ("radio", "RADIO"), ("stats", "STATS"), ("socket", "SOCKET"),
+                ("rxtx", "RX/TX View"))
 
 
 def monitor_id(sid: str) -> str:

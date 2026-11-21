@@ -1,6 +1,6 @@
 {#- DAEMON-MONITOR-TREE + F14: one live daemon view of a radio. In the tree its OWN collapsible node (a closed
     <details class="advcfg"> like the other Settings nodes, F14); on the Monitor page the one view, always shown. It is
-    shown when it and every <details> around it are open. daemoncfg.js asks while it is shown: STATUS / STATS one read of
+    shown when it and every <details> around it are open. daemoncfg.js asks while it is shown: STATUS / RADIO / STATS one read of
     /api/daemon/<rid> per show and per Reload; SOCKET polls /api/daemon/<rid>/socket each second (a rolling 22
     lines), RX/TX View /api/daemon/<rid>/feed every 3 s. Daemon not running: paused, Reload off. Text only, in a fixed
     22-line window. F7: the view the Monitor page shows (`dv.page`) carries the own-page state (data-up), no daemon

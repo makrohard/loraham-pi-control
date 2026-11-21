@@ -78,26 +78,24 @@ class DaemonParamsMixin:
 
     # -- per-stack daemon radio parameters (see core/daemon_params.py) ------
 
-    def _apply_daemon_param(self, band: str, key: str, value: str, rid: str = "") -> tuple[bool, str]:
-        """Apply one daemon param at `band`. TXMODE and CAD timing are confirmed by readback;
-        radio params (FREQ/SF/BW/…) are SET once — the daemon never echoes them, so they are
-        reported SENT-but-unconfirmed (non-gating)."""
-        if key == "TXMODE":
-            return self._apply_tx_mode(band, value, rid)
-        if key in ("CADWAIT", "CADIDLE"):
-            return self._apply_conf_param(band, key, value, rid)
+    def _apply_daemon_param(self, band: str, key: str, value: str, rid: str = "") -> tuple[bool, bool, str]:
+        """Apply one daemon param at `band`: (ok, confirmed, detail). TXMODE and CAD timing: confirmed by readback;
+        a radio param (FREQ/SF/BW/…) only when the daemon reports it back (apply_set: GET RADIO, daemon 1.5.0)."""
+        if key in ("TXMODE", "CADWAIT", "CADIDLE"):
+            ok, detail = (self._apply_tx_mode(band, value, rid) if key == "TXMODE"
+                          else self._apply_conf_param(band, key, value, rid))
+            return ok, ok, detail
         view = daemon_control.read_view(self._system, radio_start.daemon_key(self, rid or band))
         if not view.ready:
             state = view.radio_state or ("unreachable" if not view.reachable else "unknown")
-            return False, f"{band} radio not READY for {key} (RADIO={state})"
+            return False, False, f"{band} radio not READY for {key} (RADIO={state})"
         if key == "POWER":
             # The live predicate: the RUNNING family and permission decide what may be sent,
             # never the saved hardware setup. `apply_set` re-validates against the union only.
             err = self._live_power_error(band, value, view.status, rid)
             if err:
-                return False, err
-        ok, _confirmed, detail = daemon_control.apply_set(self._system, radio_start.daemon_key(self, rid or band), key, value)
-        return ok, detail
+                return False, False, err
+        return daemon_control.apply_set(self._system, radio_start.daemon_key(self, rid or band), key, value)
 
     def _live_power_error(self, band: str, value: str, status: dict, rid: str = "") -> str | None:
         """One shared predicate for every LIVE POWER request (direct SET, profile apply, the
@@ -274,8 +272,8 @@ class DaemonParamsMixin:
         if not apply:
             note = ("This changes live daemon behaviour (non-RF tuning)."
                     if confirmable else
-                    "This is a radio param the daemon does NOT report back — it can be "
-                    "SENT but NOT confirmed over the socket.")
+                    "This is a radio param: a daemon 1.5.0 reports it back (GET RADIO) and "
+                    "confirms it; an older daemon does not, so it is SENT but NOT confirmed.")
             return ActionResult(
                 True,
                 f"Will apply SET {key.upper()}={value.upper()} to the daemon of {rid} ({band} MHz, live).",
@@ -336,14 +334,14 @@ class DaemonParamsMixin:
                 return lines, False, (f"{stack_id} requests POWER={pw} on {band} MHz without the "
                                       "running daemon's high-power permission")
         for key, val in applies.items():
-            ok, detail = self._apply_daemon_param(band, key, val, rid)
+            ok, confirmed, detail = self._apply_daemon_param(band, key, val, rid)
             gating = key == "TXMODE"                     # the app needs its mode; radio/CAD not
             if gating:
                 tx_ok = ok
             tag = "ok" if ok else ("fail" if gating else "warn")
-            # Radio params aren't echoed by the daemon; keep the start log concise (no verbose
-            # "SENT but UNCONFIRMED …" explanation for each one).
-            if ok and not daemon_control.is_confirmable(key):
+            # An unconfirmed radio param (an older daemon never echoes it); keep the start log concise (no
+            # verbose "SENT but UNCONFIRMED …" explanation for each one).
+            if ok and not confirmed:
                 detail = f"{key}={val} sent"
             lines.append(f"  [{tag}] {band}: {detail}")
         return lines, tx_ok, ""
@@ -412,10 +410,10 @@ class DaemonParamsMixin:
                 at_start = ["POWER"] if holder and applies.pop("POWER", None) else []
                 applied, failed, confirmed, unconfirmed, details = [], [], [], [], [f"{k}: takes effect at the next start of {holder}" for k in at_start]
                 for key, val in applies.items():
-                    ok, detail = self._apply_daemon_param(b, key, val, rid)
+                    ok, conf, detail = self._apply_daemon_param(b, key, val, rid)
                     if ok:
                         applied.append(key)
-                        (confirmed if daemon_control.is_confirmable(key) else unconfirmed).append(key)
+                        (confirmed if conf else unconfirmed).append(key)
                     else:
                         failed.append(key)
                     details.append(f"{key}={val}: {detail}")

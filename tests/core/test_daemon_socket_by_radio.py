@@ -47,6 +47,11 @@ class RidDaemon(FakeSystem):
             return f"STATS TXOK={self.txok.get(path, 0)} RXOK=0\n".encode()
         if line.startswith("GET CHANNEL"):
             return b"CHANNEL MODE=RX RSSI=-120 CADSTATE=NOTSCANNED BUSY=0\n"
+        if line == "GET RADIO" and "RADIOERR" in st:          # daemon 1.5.0: the params in effect (SETs included)
+            f = {"RADIO": st["RADIO"], "MODE": "LORA", "FREQ": "433.9", "SF": "12", "BW": "125.0", "CR": "5",
+                 "PREAMBLE": "8", "SYNC": "0x12", "CRC": "1", "LDRO": "1", "POWER": "10"}
+            f.update({k: v for k, v in st.items() if k in f and k != "RADIO"})
+            return ("RADIO " + " ".join(f"{k}={v}" for k, v in f.items()) + "\n").encode()
         return b"ERR UNKNOWN\n"
 
     def send(self, path, payload, timeout):
@@ -244,3 +249,30 @@ def test_the_view_shows_the_rows_dp_value(tmp_path):
     svc, _fake = _svc_dp(tmp_path)
     assert svc._daemon_param_applies("daemon", "r1").get("CADWAIT") == "200"
     assert {r["name"]: r["value"] for r in svc.daemon_params_view("daemon", rid="r1")["rows"]}["CADWAIT"] == "200"
+
+
+# ---- daemon 1.5.0 (plan v17 §13 A6): a radio param the daemon reports back (GET RADIO) is confirmed --------------
+
+def _svc_150(tmp_path, radioerr):
+    svc, fake = _svc_dp(tmp_path, r1_dp=(("SF", "12"),), legacy=("daemon", {}))
+    if radioerr:
+        fake.serve["/tmp/loraconf-r1.sock"]["RADIOERR"] = "retry"
+    return svc, fake
+
+
+@pytest.mark.parametrize("radioerr,listed", [(True, "confirmed"), (False, "sent_unconfirmed")],
+                         ids=["daemon-1.5.0", "daemon-1.4.2"])
+def test_apply_lists_a_radio_param_confirmed_only_when_its_daemon_reports_it_back(tmp_path, radioerr, listed):
+    svc, fake = _svc_150(tmp_path, radioerr)
+    res = svc.apply_daemon_params("daemon", rid="r1")
+    assert "SF" in res.data[listed], (res.summary, res.data)
+    assert ("SF" in res.data["confirmed"]) is radioerr
+
+
+@pytest.mark.parametrize("radioerr,line", [(True, "SF=12 confirmed by the daemon"), (False, "SF=12 sent")],
+                         ids=["daemon-1.5.0", "daemon-1.4.2"])
+def test_the_start_log_names_a_confirmed_radio_param_confirmed(tmp_path, radioerr, line):
+    svc, fake = _svc_150(tmp_path, radioerr)
+    lines, _tx_ok, gate = svc._apply_stack_daemon_params("daemon", "433", "r1")
+    sf = [x for x in lines if ": SF=12" in x]
+    assert gate == "" and len(sf) == 1 and line in sf[0], lines
