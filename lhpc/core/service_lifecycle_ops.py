@@ -148,8 +148,8 @@ class LifecycleOpsMixin:
         conflicts = resources_mod.interpret_conflicts([*self._keyed(running, inst), target], running_ids | {comp.id}, lambda b: radio_start.radio_name(self._paths, b))
         # Advisory conflicts (e.g. the Companion client slot) never block a start: arbitration is at runtime (the WebUI
         # yields to a running CLI via a lock), so admission lets it through; observed_conflicts() shows them (banner).
-        return [c.message for c in conflicts
-                if comp.id in c.holders and c.observed and not c.advisory]
+        return [f"{c.message}; {instances.way_out(self, next(h for h in c.holders if h != comp.id), c.resource_key, band)}"
+                for c in conflicts if comp.id in c.holders and c.observed and not c.advisory]
 
     def gps_feed_state(self, comp, inst=None) -> dict:
         """The feed's own readiness marker, or {} when absent/unreadable.
@@ -1349,8 +1349,8 @@ class LifecycleOpsMixin:
                             req_remediation(r, bool(r.groups) and life.group_grant_pending(r)) for r in miss))
                         continue
                     # The exclusive UI claim is REAL for a terminal variant too (its instance's, DEC-W351).
-                    if self._running_conflicts(comp, cfg_band, prep.inst):
-                        record(comp, stack, Outcome.BLOCKED, "resource conflict")
+                    if (_held := self._running_conflicts(comp, cfg_band, prep.inst)):
+                        record(comp, stack, Outcome.BLOCKED, "resource conflict: " + "; ".join(_held))
                         continue
                     # The shared-config OWNER must have completed in THIS run: a BLOCKED
                     # owner (config generation failed) must not yield a presented command
@@ -1426,8 +1426,8 @@ class LifecycleOpsMixin:
                        "; ".join(req_remediation(r, bool(r.groups) and life.group_grant_pending(r))
                                  for r in miss))
                 continue
-            if self._running_conflicts(comp, cfg_band, prep.inst):
-                record(comp, stack, Outcome.BLOCKED, "resource conflict")
+            if (_held := self._running_conflicts(comp, cfg_band, prep.inst)):
+                record(comp, stack, Outcome.BLOCKED, "resource conflict: " + "; ".join(_held))
                 continue
             if (_why := self.install_blocker(comp)):
                 record(comp, stack, Outcome.BLOCKED, _why)

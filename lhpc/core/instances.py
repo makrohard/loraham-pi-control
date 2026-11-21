@@ -386,6 +386,18 @@ def holder_keys(svc, blocker: dict) -> list:
     return [k for k in running_keys(svc, sid) if k.partition("@")[2] in on] or [f"{sid}@<rid>"]
 
 
+def way_out(svc, holder: str, resource: str, band: str) -> str:
+    """A blocked start's way out (Q6b): stop the running component `holder`'s instances on `resource` (holder_keys
+    for a radio claim; else the running one a per-instance key names, `voice.ui-r1`, or every running one; its stack
+    when none is known), or, for a radio, use another radio."""
+    sid = svc.stack_of(holder) or ""
+    radio = resource.startswith("loraham.radio.")
+    run, own = ([] if radio else stop_keys(svc, sid)), re.search(r"[.-](r[1-9][0-9]?)$", resource)
+    keys = (holder_keys(svc, {"holder_stack": sid, "resource": resource, "band": band}) if radio
+            else [k for k in run if own and k == f"{sid}@{own.group(1)}"] or run) or [sid]
+    return f"stop {' and '.join(keys)}" + (" or use another radio" if radio else "")
+
+
 def holder_stops(svc, blockers, daemon_sid: str) -> list:
     """The instances a start's stop_owners stops, in its order: the app holders first, then the daemon's radios;
     exactly the holders (holder_keys), a `<rid>` template only for a holder no other blocker names (G1-C60-RE)."""

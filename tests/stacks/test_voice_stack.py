@@ -277,7 +277,7 @@ def _cli_holds_audio_conflict(monkeypatch, svc):
     # process table would also make a Voice component RUNNING in the snapshot, which is a different case from "a sibling
     # holds the instance's UI" (the real per-instance verdict: tests/stacks/test_voice_ui_per_instance.py)
     monkeypatch.setattr(type(svc), "_running_conflicts",
-                        lambda self, c, b, inst=None: c.id == "loraham-voice-cli")
+                        lambda self, c, b, inst=None: ["voice.ui held"] if c.id == "loraham-voice-cli" else [])
 
 
 def test_desktop_daemon_recovery_is_ok_despite_a_running_gtk_app(tmp_path, monkeypatch, set_call, real_spawn):
@@ -546,7 +546,27 @@ def test_voice_r1s_running_gtk_app_refuses_voice_r1s_terminal_variant(tmp_path, 
     set_call(svc)
     _gtk_running_on(svc, "r1", "433", monkeypatch)
     cli = _cli(_start(svc, "voice@r1"))
-    assert (cli.outcome, cli.summary) == (Outcome.BLOCKED, "resource conflict"), (cli.outcome, cli.summary)
+    assert (cli.outcome, cli.summary) == (Outcome.BLOCKED, "resource conflict: loraham-voice (exclusive) vs "
+                                          "loraham-voice-cli (exclusive) on voice.ui-r1 — both running; stop voice@r1"), \
+        (cli.outcome, cli.summary)                       # Q6b: the full sentence and the way out
+
+
+def test_the_way_out_names_the_one_instance_whose_ui_is_held(tmp_path, monkeypatch, set_call, real_spawn):
+    # Q6b N1: voice@r1 and voice@r2 both run their GTK app; only voice@r1 holds voice.ui-r1, so only it is named
+    # (red-before e6f56b93: "stop voice@r1 and voice@r2")
+    from lhpc.core.lifecycle import Lifecycle
+    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
+    _config_written(monkeypatch, svc)
+    set_call(svc)
+    recs = [{"stack": "voice", "component": "loraham-voice", "role": "", "band": b, "rid": r, "pid": p}
+            for r, b, p in (("r1", "433", 4711), ("r2", "868", 4712))]
+    monkeypatch.setattr(svc._system.procfs, "cmdlines", lambda: {p: ["/x/LoRaHAM_Voice/loraham_voice"] for p in (4711, 4712)})
+    monkeypatch.setattr(Lifecycle, "owned_inventory", lambda self: ([dict(r) for r in recs], [], "ok"))
+    monkeypatch.setattr(Lifecycle, "verify_owned", lambda self, r: (r.get("pid") in (4711, 4712), ""))
+    cli = _cli(_start(svc, "voice@r1"))
+    assert (cli.outcome, cli.summary) == (Outcome.BLOCKED, "resource conflict: loraham-voice (exclusive) vs "
+                                          "loraham-voice-cli (exclusive) on voice.ui-r1 — both running; stop voice@r1"), \
+        (cli.outcome, cli.summary)
 
 
 def test_voice_r2s_terminal_variant_is_allowed_while_voice_r1s_gtk_app_runs(tmp_path, monkeypatch, set_call,
@@ -584,7 +604,8 @@ def test_a_terminal_variant_no_instance_tells_holds_every_instances_ui(tmp_path,
     monkeypatch.setattr(svc._system.procfs, "cmdlines", lambda: {4712: ["/x/LoRaHAM_Voice/loraham_voice_cli"]})
     res = _start(svc, "voice@r1")
     gtk = next(r for r in res.results if r.component == "loraham-voice")
-    assert (gtk.outcome, gtk.summary) == (Outcome.BLOCKED, "resource conflict"), outcomes(res)
+    assert (gtk.outcome, gtk.summary) == (Outcome.BLOCKED, "resource conflict: loraham-voice-cli (exclusive) vs "
+                                          "loraham-voice (exclusive) on voice.ui-r1 — both running; stop voice"), outcomes(res)
 
 
 def test_status_reports_no_ui_conflict_for_voice_r1s_gtk_app_beside_a_terminal_variant(tmp_path, monkeypatch, set_call,
