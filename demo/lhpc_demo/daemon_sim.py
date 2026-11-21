@@ -33,13 +33,21 @@ def _live_rssi(band: str) -> int:
     return int(-92 + 14 * math.sin(e / 4.0 + ph))
 
 
-def status(band: str) -> dict:
+def status(band: str, rid: str = "", chipfamily: str = "") -> dict:
+    """STATUS as a 1.2+ daemon answers it. With its radio (`rid`, `chipfamily` in the daemon's own spelling) it also
+    names itself (ID), its chip (CHIPFAMILY), the high-power permission it runs with (HIGHPOWER=0, the default) and
+    its channel (FREQ/SF/POWER, the values `channel` reports)."""
     e = _elapsed()
     # TX active: mostly idle, a brief burst every ~11 s (matches the beacon cadence in feed()).
     tx_active = "1" if int(e) % 11 == 0 else "0"
-    return {"RADIO": "READY", "TXMODE": "MANAGED", "TX": tx_active, "TXRESULT": "OK",
-            "TXQUEUE": "0", "CADMONITOR": "1", "CADRSSI": "-90", "CADTXAFTERTIMEOUT": "0",
-            "CADWAIT": "1500", "CADIDLE": "28"}
+    out = {"RADIO": "READY", "TXMODE": "MANAGED", "TX": tx_active, "TXRESULT": "OK",
+           "TXQUEUE": "0", "CADMONITOR": "1", "CADRSSI": "-90", "CADTXAFTERTIMEOUT": "0",
+           "CADWAIT": "1500", "CADIDLE": "28"}
+    if rid:
+        ch = channel(band)
+        out.update({"HIGHPOWER": "0", "CHIPFAMILY": chipfamily, "ID": rid,
+                    "FREQ": ch["FREQ"], "SF": ch["SF"], "POWER": ch["POWER"]})
+    return out
 
 
 def channel(band: str) -> dict:

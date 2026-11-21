@@ -30,7 +30,7 @@ class _DaemonSocket:
             return b""
         from . import daemon_sim
         key = payload.split()[1].decode()
-        fields = (daemon_sim.status if key == "STATUS" else daemon_sim.stats)(band)
+        fields = self._svc._sim_status(band, m.group(1)) if key == "STATUS" else daemon_sim.stats(band)
         return f"{key} {' '.join(f'{k}={v}' for k, v in fields.items())}\n".encode()[:max_bytes]
 
     def send(self, path, payload, timeout):
@@ -343,13 +343,22 @@ class DemoService(ControllerService):
         """A radio's daemon (`rid`), or without one the band, as before."""
         return bool(self._radio_up(rid)) if rid else self._daemon_up_on(band)
 
+    def _sim_status(self, band: str, rid: str = "") -> dict:
+        """The simulated STATUS every reader shows (the CONF socket, daemon_view, the socket line): with a radio, its id
+        and its saved chip family in the daemon's own CHIPFAMILY spelling (daemon_control._STATUS_FAMILY)."""
+        from lhpc.core import daemon_control, radio_start
+
+        from . import daemon_sim
+        fam = (radio_start.chip_family(self, rid) or "") if rid else ""
+        return daemon_sim.status(band, rid, next((k for k, v in daemon_control._STATUS_FAMILY.items() if v == fam), ""))
+
     def daemon_view(self, band: str, rid: str = ""):          # the core's signatures: the console passes the rid
         from lhpc.core.daemon_control import DaemonView
         if not self._up(band, rid):
             return DaemonView(band=band, reachable=False)
         from . import daemon_sim
         v = DaemonView(band=band, reachable=True)
-        v.status, v.stats, v.channel = (daemon_sim.status(band), daemon_sim.stats(band),
+        v.status, v.stats, v.channel = (self._sim_status(band, rid), daemon_sim.stats(band),
                                         daemon_sim.channel(band))
         return v
 
@@ -389,8 +398,7 @@ class DemoService(ControllerService):
     def daemon_socket_line(self, band: str, rid: str = "") -> str:
         if not self._up(band, rid):
             return ""
-        from . import daemon_sim
-        return "STATUS " + " ".join(f"{k}={v}" for k, v in daemon_sim.status(band).items())
+        return "STATUS " + " ".join(f"{k}={v}" for k, v in self._sim_status(band, rid).items())
 
     # --- simulated GPS receiver: make the Monitor under Position LIVE. Synthetic NMEA goes through
     #     the product's own parser (gps.NmeaSnapshot), so the snapshot has the real shape. A

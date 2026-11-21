@@ -302,6 +302,11 @@ try:
     assert len({p[4] for p in _proj}) == len(_proj), ("distinct pids", _proj)
     for _sid in ("daemon", "kiss", "graywolf"):                  # each instance exactly once on its card
         assert _card("r1").count(f'data-stack="{_sid}@r1"') == 1, f"r1 card: {_sid}@r1 exactly once"
+    _ln = _u.request("/tmp/loraconf-r1.sock", b"GET STATUS\n", 1.0, 4096).decode()     # as a 1.2 daemon names itself
+    _tok = dict(t.split("=", 1) for t in _ln.split()[1:])
+    assert {k: _tok.get(k) for k in ("ID", "CHIPFAMILY", "HIGHPOWER")} == {"ID": "r1", "CHIPFAMILY": "SX127X",
+                                                                         "HIGHPOWER": "0"} \
+        and all(_tok.get(k) for k in ("FREQ", "SF", "POWER")), ("STATUS names its radio", _ln)
     _recs = svc._lifecycle().owned_inventory()[0]                # each instance once, its record pid = its process pid
     assert sorted((r["stack"], r["rid"], r["pid"]) for r in _recs) == sorted((p[0], p[1], p[4]) for p in _proj), _recs
     assert all(_matches(svc.stack(p[0]).component(p[3]).process, p[5]) for p in _proj), "argv the spec accepts"
@@ -324,6 +329,7 @@ try:
         ("#14", "/stacks/daemon/menu/stackrow-daemon", "t", True, "loraconf-r1.sock (unix) — RADIO=READY"),
         ("#14", "/stacks/daemon/menu/stackrow-daemon", "t", True, "Instances daemon@r1 running"),
         ("#5", "/", "r1t", True, "RF log: daemon r1 (433) · graywolf r1"),
+        ("#16", "/stacks/daemon/menu/stackrow-daemon", "t", True, "Save running daemon: permission OFF (sx127x)"),
         ("#18", "/logs/loraham-daemon?radio=r1", "t", True, "process running"),
         ("#18", "/logs/loraham-daemon?radio=r1", "t", True, "logs/start-loraham-daemon-433-r1.log"),
         ("#18", "/logs/loraham-daemon?radio=r1", "t", False, "(no log file yet)"),
