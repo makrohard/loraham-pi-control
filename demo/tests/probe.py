@@ -447,6 +447,8 @@ try:
     assert _off in _txt(_card("r1")), "optional: kiss@r1 up -> serial stopped + Run"
     _action(op="start", target="loraham-kiss-serial@r1")
     assert _on in _txt(_card("r1")), "optional: Run -> serial running + Stop"
+    assert "loraham-kiss-serial service · 433 MHz optional running" in _txt(
+        c.get("/stacks/kiss/menu/stackrow-kiss").get_data(as_text=True)), "optional: the kiss page shows the serial running"
     _action(op="stop", target="loraham-kiss-serial@r1", confirmed="yes")
     assert _off in _txt(_card("r1")), "optional: Stop -> serial stopped + Run"
     _action(op="start", target="loraham-kiss-serial@r1")
