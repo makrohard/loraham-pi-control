@@ -11,6 +11,7 @@ import re
 def _count(page, pattern):
     seen = []
     page.clock.install()
+    page.clock.pause_at(page.evaluate("() => Date.now()") / 1000 + 1)   # paused: only run_for moves the page's time
     page.route("**/__settled__", lambda route: route.fulfill(status=204, body=""))
     page.route(re.compile(pattern), lambda route: (seen.append(route.request.url), route.fallback()))
     page.reload()
