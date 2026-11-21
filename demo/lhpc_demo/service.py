@@ -36,6 +36,21 @@ class _DaemonSocket:
     def send(self, path, payload, timeout):
         return self._inner.send(path, payload, timeout)
 
+
+class _DemoProcfs:
+    """The processes a box would show for the demo's model (DemoService._projection), computed at each read, so they
+    follow every start, stop, reset, restore and hardware-list save without a hook. Everything else: the stock fake."""
+
+    def __init__(self, svc, inner):
+        self._svc, self._inner = svc, inner
+
+    def cmdlines(self):
+        return {**self._inner.cmdlines(), **{p[4]: p[5] for p in self._svc._projection()}}
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
+
+
 _KEYS = ("installed", "built", "running")
 
 
@@ -43,6 +58,7 @@ class DemoService(ControllerService):
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
         self._system.unix = _DaemonSocket(self, self._system.unix)    # the cards read the daemon on its socket
+        self._system.procfs = _DemoProcfs(self, self._system.procfs)  # ... and its instances' processes
         self._demo: dict[str, dict] = {}
         self._comp2stack: dict[str, str] | None = None
 
@@ -204,9 +220,53 @@ class DemoService(ControllerService):
         enabled one of its band, whose band the model has up. The demo models one daemon per band, so a second radio
         on a band reads offline everywhere (a demo limit)."""
         from lhpc.core import radios
-        on = [r for r in radios.load(self._paths).radios if r.enabled]
-        band = next((r.band for r in on if r.id == rid), "")
-        return band if band and [r.band for r in on].count(band) == 1 and self._daemon_up_on(band) else ""
+        band = next((r.band for r in radios.load(self._paths).radios if r.enabled and r.id == rid), "")
+        return band if band and self._band_rid(band) == rid and self._daemon_up_on(band) else ""
+
+    def _band_rid(self, band: str) -> str:
+        """The radio the demo runs `band` on: the band's only enabled radio of the hardware list, else ""."""
+        from lhpc.core import radios
+        on = [r.id for r in radios.load(self._paths).radios if r.enabled and r.band == band]
+        return on[0] if len(on) == 1 else ""
+
+    def _projection(self) -> list:
+        """[(stack, rid, band, component, pid, argv)] of each process a box would run now, from the model by the ONE
+        radio rule: a radio's daemon while `_radio_up`, and each process component of a running stack on its band's
+        radio (`_band_rid`). The procfs and the launch records the console reads are both rendered from it, at each
+        read. The argv is the component's process spec (what probes.process.matches accepts); the instance is named by
+        the record (lhpc's own launches are recorded; a daemon has no instance argv at all)."""
+        import zlib
+
+        from lhpc.core import radios
+        out = []
+        for r in (r for r in radios.load(self._paths).radios if r.enabled):
+            for sid in sorted(self._demo):
+                stk = self.stack(sid)
+                if stk is None or not (self._radio_up(r.id) == r.band if sid == "daemon" else
+                                       self._d(sid)["running"] and self._band(sid) == r.band
+                                       and self._band_rid(r.band) == r.id):
+                    continue
+                for c in stk.components:
+                    if c.process is None or c.optional:
+                        continue
+                    p = c.process
+                    argv = [p.exec_path or p.exec_name, *(("-m", p.entry) if p.entry else ()), *p.all_args,
+                            *p.any_args[:1]]
+                    out.append((sid, r.id, r.band, c.id, 2000 + zlib.crc32(f"{sid}@{r.id}/{c.id}".encode()) % 30000,
+                                argv))
+        return out
+
+    def _lifecycle(self):
+        """lhpc's Lifecycle with the launch records lhpc would have written for the projected processes, read through
+        like the procfs and verified while projected: a daemon names its radio only by its record (no instance argv),
+        and instances.instance_processes reads both."""
+        lc = super()._lifecycle()
+        lc.owned_inventory = lambda: ([{"launch_id": f"demo-{p[4]}", "stack": p[0], "rid": p[1], "band": p[2],
+                                        "component": p[3], "pid": p[4], "role": "", "launched_at": 0.0, "version": 1}
+                                       for p in self._projection()], [], "ok")
+        lc.verify_owned = lambda rec: ((True, "verified") if any(rec.get("pid") == p[4] for p in self._projection())
+                                       else (False, "process gone"))
+        return lc
 
     def _up(self, band: str, rid: str) -> bool:
         """A radio's daemon (`rid`), or without one the band, as before."""

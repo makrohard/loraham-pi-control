@@ -263,10 +263,21 @@ try:
     except OSError:
         pass
     del _u._inner.unix_errors["/tmp/other.sock"]
+    # The radio's instances and their processes (PLAN-DEMO2 L1) follow the same one rule: published while r1 is up,
+    # gone everywhere once a second 433 radio makes it offline (a hardware-list save, no lifecycle call in between).
+    def _card(rid):                         # radio `rid`'s Home card: from its id to the next radio card
+        h = c.get("/").get_data(as_text=True)
+        h = h[h.find(f'id="radio-{rid}"'):]
+        return h[:h.find('id="radio-r', 10)] if h.find('id="radio-r', 10) > 0 else h
+    _evid = lambda: "process.pids" in c.get("/stacks/daemon/body").get_data(as_text=True)  # noqa: E731
+    assert 'data-stack="daemon@r1"' in _card("r1") and 'data-stack="kiss@r1"' in _card("r1") and _evid(), \
+        "instances: r1 up -> daemon@r1, kiss@r1 and the daemon's process evidence"
     _st = _radios.load(svc._paths)
     _r3 = _radios.Radio("r3", "rfm98 433", "ch341-rfm98pw-433", "433", usb_serial="CHE1W433")
     assert _radios.save(svc._paths, (*_st.radios, _r3)) == []
     assert [r.id for r in _radios.load(svc._paths).radios] == ["r1", "r2", "r3"]
+    assert not _re.search(r'data-stack="[a-z-]+@r1"', _card("r1")), "a second 433 radio: no r1 instance"
+    assert not _evid(), "a second 433 radio: no process evidence"
     for _rid in ("r1", "r3"):
         assert not _dc.read_view(svc._system, _rid).reachable and not svc.daemon_view("433", _rid).reachable \
             and svc.daemon_channel("433", _rid) == {} and svc.daemon_channel_scan("433", _rid) == {} \
@@ -276,6 +287,35 @@ try:
     assert svc.daemon_view("433", "").reachable, "no radio: the band view, as before"
     assert _radios.save(svc._paths, _st.radios) == []                           # the seeded list back
     R["daemon_socket"] = "r1 up on its socket after a start (read_view, /api/daemon/r1, Home card); r2, r99 offline"
+    # P0 PARITY (PLAN-DEMO2): box H's own texts (PARITY-DEMO-v1 row #; class A rows only, no box-specific data) on the
+    # demo's rendered pages while daemon@r1, kiss@r1 and graywolf@r1 run. It runs in every Pages workflow, so a later
+    # product change that breaks parity fails the gate (the recurring parity sweep). A str must (True) / must not
+    # (False) occur; a compiled pattern is searched. Scope "r1": only that radio's Home card.
+    from lhpc.core.probes.process import matches as _matches
+    svc.seed_all_installed()
+    svc._set_dbands(set())
+    assert svc.start("daemon", apply=True, band="433").ok and svc.start("graywolf", apply=True, band="433").ok
+    _proj = svc._projection()
+    assert {(p[0], p[1]) for p in _proj} == {("daemon", "r1"), ("kiss", "r1"), ("graywolf", "r1")}, _proj
+    assert all(_matches(svc.stack(p[0]).component(p[3]).process, p[5]) for p in _proj), "argv the spec accepts"
+    PARITY = [
+        ("#1", "/", "r1", True, 'data-stack="daemon@r1"'),
+        ("#1", "/", "r1", True, "LoRaHAM Daemon"),
+        ("#2", "/", "r1", True, '<span class="pill">kiss@r1</span>'),
+        ("#2", "/", "r1", True, _re.compile(r'value="restart">\s*<input type="hidden" name="target" value="kiss@r1"')),
+        ("#2", "/", "r1", False, "No launch record or argv names the radio"),
+        ("#3", "/", "r1", True, '<span class="pill">graywolf@r1</span>'),
+        ("#17", "/hardware/radio/r1", "", True, "stop graywolf@r1 and stop kiss@r1"),
+    ]
+    _seen = {}
+
+    def _page(path, scope):
+        h = _seen.setdefault(path, c.get(path, follow_redirects=True).get_data(as_text=True))
+        return _card(scope) if scope else h
+    _miss = [(row, path, getattr(txt, "pattern", txt)) for row, path, scope, want, txt in PARITY
+             if bool(txt.search(_page(path, scope)) if hasattr(txt, "search") else txt in _page(path, scope)) != want]
+    assert not _miss, ("parity with box H", _miss)
+    R["parity"] = f"{len(PARITY)} box-H rows hold"
     R["lifecycle"] = "ok"
     R["render_with_state"] = c.get("/stacks").status_code
 except Exception:
