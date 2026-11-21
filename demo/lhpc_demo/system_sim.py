@@ -12,19 +12,18 @@ _UPTIME_BASE = 5 * 3600 + 1234          # a plausible "up 5h 20m" base
 _MEM_TOTAL_KB = 8138240                 # ~8 GiB (Pi 5 8GB)
 _SWAP_TOTAL_KB = 2097152                # 2 GiB zram/swap
 _DISK_TOTAL_B = 31 * 10 ** 9           # a 32 GB card
-_T0 = None
+_T0: list = []                          # the first reading (set once), held without `global`
 
 
 def _elapsed() -> float:
-    global _T0
     try:
         import time
         t = time.time()                 # Pyodide maps this to Date.now()
     except Exception:
         t = 0.0
-    if _T0 is None:
-        _T0 = t
-    return max(0.0, t - _T0)
+    if not _T0:
+        _T0.append(t)
+    return max(0.0, t - _T0[0])
 
 
 def ts() -> float:

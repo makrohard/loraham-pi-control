@@ -9,21 +9,20 @@ import math
 _CALLS = ("XX0LAB", "XX1AAA", "XX3XYZ", "XX5FOO", "XX0RES", "XX4BAR", "XX7XYZ", "XX2BAZ")
 
 
-_T0 = None
+_T0: list = []                          # the first reading (set once), held without `global`
 
 
 def _elapsed() -> float:
     """Seconds since the daemon telemetry first started — counters/feed grow from here, so
     they read as small realistic numbers (not the Unix epoch)."""
-    global _T0
     try:
         import time
         t = time.time()                          # Pyodide maps this to Date.now()
     except Exception:
         t = 0.0
-    if _T0 is None:
-        _T0 = t
-    return max(0.0, t - _T0)
+    if not _T0:
+        _T0.append(t)
+    return max(0.0, t - _T0[0])
 
 
 def _live_rssi(band: str) -> int:
