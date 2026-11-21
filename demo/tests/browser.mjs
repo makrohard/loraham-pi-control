@@ -173,6 +173,23 @@ try {
   }, { timeout: 30000 });
   console.log("OK: GPS Monitor shows the simulated fix and the Skyview draws its satellites");
 
+  // The Monitor page's one daemon pin (in its node title, F15; rendered hidden until a live answer) shows r1's state.
+  await page.evaluate(() => go("GET", "/stacks/daemon/menu/stack-settings-daemon--monitor?radio=r1"));
+  await page.waitForFunction(() => {
+    const b = document.querySelector("#stack-settings-daemon--monitor > summary .dbadge");
+    return !!b && !b.hidden && b.offsetWidth > 0 && b.textContent === "daemon READY";
+  }, { timeout: 30000 });
+  console.log("OK: the Monitor page shows r1's daemon pin (daemon READY)");
+  // ... and a closed block's pin stays hidden: in the Settings tree the Monitor node is closed; after a live tick its pin
+  // is still hidden (the console's rule: no state shown for a closed node).
+  await page.evaluate(() => go("GET", "/stacks/daemon/menu/stack-settings-daemon?radio=r1"));
+  await page.waitForFunction(() => { const d = document.getElementById("stack-settings-daemon--monitor");
+    return !!d && !d.open; }, { timeout: 30000 });
+  const closedPin = await page.evaluate(() => { liveTick();
+    return document.querySelector("#stack-settings-daemon--monitor > summary .dbadge").hidden; });
+  if (!closedPin) throw new Error("the closed Monitor node's pin is shown");
+  console.log("OK: a closed Monitor node keeps its pin hidden");
+
   // persistence across reload: kiss still running -> r1 still READY
   await page.reload({ waitUntil: "domcontentloaded" });
   await ready(page);

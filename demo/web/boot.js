@@ -291,7 +291,21 @@ function liveSysGps() {
   if (l) l.textContent = pos ? d.lat.toFixed(6) : "—";
   if (o) o.textContent = pos ? d.lon.toFixed(6) : "";
 }
-function liveTick() { if (!bridge) return; try { liveDaemon(); liveSystem(); liveGps(); liveSysGps(); } catch (_) { /* never break the page */ } }
+// The daemon pins (.dbadge[data-rid]: e.g. the Monitor node's, rendered hidden until a live answer) are painted by
+// dash.js on a box; here from the bridge, by the same rule: the answer's label and colour, hidden inside a closed block.
+function liveBadges() {
+  const answers = {};
+  document.querySelectorAll(".dbadge[data-rid]").forEach((b) => {
+    const rid = b.getAttribute("data-rid");
+    const d = rid in answers ? answers[rid] : (answers[rid] = ask("/api/daemon/" + encodeURIComponent(rid)));
+    if (!d) return;
+    b.hidden = !!b.closest("details:not([open])");
+    if (b.hidden) return;
+    if (b.textContent !== d.label) b.textContent = d.label;
+    b.className = "badge badge-" + (d.ready ? "running" : (d.reachable ? "degraded" : "stopped")) + " dbadge";
+  });
+}
+function liveTick() { if (!bridge) return; try { liveDaemon(); liveBadges(); liveSystem(); liveGps(); liveSysGps(); } catch (_) { /* never break the page */ } }
 
 async function go(method, path, formData) {
   const formJson = formData ? JSON.stringify(Object.fromEntries(formData.entries())) : "";
