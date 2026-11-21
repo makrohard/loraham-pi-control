@@ -270,8 +270,9 @@ try:
         h = h[h.find(f'id="radio-{rid}"'):]
         return h[:h.find('id="radio-r', 10)] if h.find('id="radio-r', 10) > 0 else h
     _evid = lambda: "process.pids" in c.get("/stacks/daemon/body").get_data(as_text=True)  # noqa: E731
-    assert 'data-stack="daemon@r1"' in _card("r1") and 'data-stack="kiss@r1"' in _card("r1") and _evid(), \
-        "instances: r1 up -> daemon@r1, kiss@r1 and the daemon's process evidence"
+    assert 'data-stack="daemon@r1"' in _card("r1"), "instances: r1 up -> daemon@r1 on its card"
+    assert 'data-stack="kiss@r1"' in _card("r1"), "instances: r1 up -> kiss@r1 on its card"
+    assert _evid(), "instances: r1 up -> the daemon's process evidence (process.pids)"
     _st = _radios.load(svc._paths)
     _r3 = _radios.Radio("r3", "rfm98 433", "ch341-rfm98pw-433", "433", usb_serial="CHE1W433")
     assert _radios.save(svc._paths, (*_st.radios, _r3)) == []
@@ -298,6 +299,9 @@ try:
     assert svc.start("daemon", apply=True, band="433").ok and svc.start("graywolf", apply=True, band="433").ok
     _proj = svc._projection()
     assert sorted((p[0], p[1]) for p in _proj) == [("daemon", "r1"), ("graywolf", "r1"), ("kiss", "r1")], _proj
+    assert len({p[4] for p in _proj}) == len(_proj), ("distinct pids", _proj)
+    for _sid in ("daemon", "kiss", "graywolf"):                  # each instance exactly once on its card
+        assert _card("r1").count(f'data-stack="{_sid}@r1"') == 1, f"r1 card: {_sid}@r1 exactly once"
     _recs = svc._lifecycle().owned_inventory()[0]                # each instance once, its record pid = its process pid
     assert sorted((r["stack"], r["rid"], r["pid"]) for r in _recs) == sorted((p[0], p[1], p[4]) for p in _proj), _recs
     assert all(_matches(svc.stack(p[0]).component(p[3]).process, p[5]) for p in _proj), "argv the spec accepts"
