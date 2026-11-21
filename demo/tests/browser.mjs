@@ -1,7 +1,7 @@
 // Headless-browser smoke test for the assembled demo bundle: the real Pyodide app renders a
 // pre-provisioned box, STARTS a stack via the real confirm->Apply flow, the simulated daemon
-// goes LIVE (433 panel READY), and it PERSISTS across a reload. Running is verified by the
-// dashboard daemon panel, not the always-present stop button.
+// goes LIVE (r1's card READY), and it PERSISTS across a reload. Running is verified by the
+// dashboard daemon card, not the always-present stop button.
 // Env: DEMO_URL, CHROME (default /usr/bin/google-chrome).
 import puppeteer from "puppeteer-core";
 
@@ -51,51 +51,56 @@ try {
   // 0.2.9: Start means start — a routine Start runs the saved configuration at once (no confirm
   // page; only a consequential choice asks), so clicking the row's Start IS the start. The stack
   // body ALWAYS shows start+stop, so neither is a running signal; the authoritative running check
-  // is the DASHBOARD DAEMON PANEL going READY (a stack owns its band's daemon).
+  // is the DASHBOARD DAEMON CARD of r1 going READY (a stack owns its radio's daemon).
+  // 0.14: the stack's Start names its radio (a target select kiss@r1 / kiss@r2); the row also holds
+  // the optional kiss-serial's own start forms, so the form is the one inside #stackrow-kiss that offers kiss@r1.
   await openKiss(page);
   await hasOp(page, "start");
+  await page.waitForFunction(() => [...document.querySelectorAll('#stackrow-kiss form')].some((f) => {
+    const op = f.querySelector('input[name="op"]'), t = f.querySelector('[name="target"]'), b = f.querySelector('button');
+    return op && op.value === "start" && t && [...(t.options || [])].some((o) => o.value === "kiss@r1") && b && !b.disabled;
+  }), { timeout: 30000 });
   await page.evaluate(() => {
-    const f = [...document.querySelectorAll('form')].find((f) => {
-      const op = f.querySelector('input[name="op"]'), t = f.querySelector('input[name="target"]');
-      return op && op.value === "start" && t && /kiss/.test(t.value);
+    const f = [...document.querySelectorAll('#stackrow-kiss form')].find((f) => {
+      const op = f.querySelector('input[name="op"]'), t = f.querySelector('[name="target"]');
+      return op && op.value === "start" && t && [...(t.options || [])].some((o) => o.value === "kiss@r1");
     });
-    if (!f) throw new Error("kiss start form not found");
-    (f.querySelector('button') || { click() { f.requestSubmit(); } }).click();
+    f.querySelector('[name="target"]').value = "kiss@r1";
+    f.querySelector('button').click();
   });
 
   const daemonReady = () => page.waitForFunction(() => {
     const a = [...document.querySelectorAll('a[href]')].find(
       (x) => x.getAttribute('href') === '/' || x.textContent.trim() === 'Home');
     if (a) a.click();
-    const t = document.getElementById("app").innerText;
-    return /433 MHz[^]*?(READY|usable)/.test(t);
+    const b = document.getElementById("rd-badge-r1");
+    return !!b && /READY|usable/.test(b.textContent);
   }, { timeout: 30000 });
 
-  // start worked <=> the 433 daemon panel is now READY (kiss owns 433)
+  // start worked <=> r1's daemon card is now READY (kiss owns r1)
   await daemonReady();
-  console.log("OK: start kiss -> 433 daemon live (READY) on the dashboard");
+  console.log("OK: start kiss@r1 -> r1's daemon live (READY) on the dashboard");
 
-  // RX-TX Monitor is LIVE: the demo's boot.js poller reads /api/daemon/433 from the bridge
-  // every tick and fills the rd-* cells (the real dash.js can't run under the Pyodide bridge).
+  // RX-TX Monitor is LIVE: the demo's boot.js poller reads /api/daemon/r1 from the bridge
+  // every tick and fills the rd-*-r1 cells (the real dash.js can't run under the Pyodide bridge).
   await page.waitForFunction(() => {
     const val = (id, re) => { const el = document.getElementById(id);
       return el && re.test((el.textContent || "").trim()); };
-    return val("rd-rssiv-433", /-?\d+/) && val("rd-uptime-433", /\d/) &&
-           val("rd-rx-433", /\d/) && val("rd-txok-433", /\d/);
+    return val("rd-rssiv-r1", /-?\d+/) && val("rd-uptime-r1", /\d/) &&
+           val("rd-rx-r1", /\d/) && val("rd-txok-r1", /\d/);
   }, { timeout: 30000 });
-  console.log("OK: 433 RX-TX monitor shows live values (RSSI/uptime/RX/TX)");
+  console.log("OK: r1 RX-TX monitor shows live values (RSSI/uptime/RX/TX)");
 
-  // ONE DAEMON PER RADIO: kiss started only 433, so an 868 card (dual-radio mode) must
-  // stay offline — a 433 start must never bring 868 up. (N/A in single-radio mode.)
+  // ONE DAEMON PER RADIO: kiss started only r1 (433), so the demo box's second radio r2 (868)
+  // must show its card and stay offline: an r1 start must never bring r2 up.
   const perRadio = await page.evaluate(() => {
-    const c8 = [...document.querySelectorAll('[data-radio-band]')].find(
-      (c) => c.getAttribute("data-radio-band") === "868");
-    if (!c8) return "single";
-    return /READY|usable/.test(c8.innerText) ? "BOTH_LIVE" : "isolated";
+    const c2 = document.getElementById("radio-r2");
+    if (!c2) return "missing";
+    return /READY|usable/.test(c2.innerText) ? "BOTH_LIVE" : "isolated";
   });
-  if (perRadio === "BOTH_LIVE")
-    throw new Error("868 went live from a 433-only start — one-daemon-per-radio broken");
-  console.log("OK: one daemon per radio (" + perRadio + ")");
+  if (perRadio !== "isolated")
+    throw new Error("r2's card: " + perRadio + " — the dual-radio demo box must show r2 offline after an r1 start");
+  console.log("OK: one daemon per radio (r2 stays offline)");
 
   // SYSTEM box: open it and confirm the simulated host backend fills live metrics.
   await page.evaluate(() => {
@@ -168,11 +173,11 @@ try {
   }, { timeout: 30000 });
   console.log("OK: GPS Monitor shows the simulated fix and the Skyview draws its satellites");
 
-  // persistence across reload: kiss still running -> 433 still READY
+  // persistence across reload: kiss still running -> r1 still READY
   await page.reload({ waitUntil: "domcontentloaded" });
   await ready(page);
   await daemonReady();
-  console.log("OK: running state persisted across reload (433 still READY)");
+  console.log("OK: running state persisted across reload (r1 still READY)");
 } catch (e) {
   console.error("FAIL:", e.message, "| pageerrors:", JSON.stringify(errs.slice(0, 5)));
   rc = 1;

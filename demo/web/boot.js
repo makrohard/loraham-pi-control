@@ -116,8 +116,9 @@ function ask(path) {
   } catch (_) { return null; }
 }
 function liveDaemon() {
-  document.querySelectorAll("[data-radio-band]").forEach((col) => {
-    const b = col.getAttribute("data-radio-band");
+  // one daemon per radio (0.14): a card's cells end in its radio id, /api/daemon/<rid> answers it
+  document.querySelectorAll("[data-radio-rid]").forEach((col) => {
+    const b = col.getAttribute("data-radio-rid");
     const j = ask("/api/daemon/" + encodeURIComponent(b));
     if (!j || !j.reachable) return;                 // offline panel: leave as rendered
     const st = j.status || {}, sta = j.stats || {}, ch = j.channel || {};
