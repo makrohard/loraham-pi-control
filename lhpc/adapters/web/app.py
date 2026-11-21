@@ -1083,7 +1083,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             if only_sid is not None and ss.stack.id != only_sid:
                 continue                              # lazy-body partial: build only the requested row
             stack = ss.stack
-            _inst = _settings_copy(stack.id, _page_radio()[0])      # G1-W2-RE F2: every stack's view on the page radio
+            _page_rid = _page_radio()[0]                           # G1-W2-RE F2: every stack's view on the page radio,
+            _inst = _instances.copy_of(service, stack.id, _page_rid)[0] if _page_rid else None   # also one it may not start
             _view_inst = _inst or _shown_instance(stack)            # G4-web: the Settings view's instance, never a band
             main = stack.main_component
             own = [(c, ss.components[c.id]) for c in stack.components
@@ -1134,6 +1135,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             inline = _row_inline(stack.id, _jobs, restored_open, request.args)
             # W250: a running stack's tools; a radio's page lists them only while the stack runs on THAT radio
             _tool_comps = [c for c in stack.components if c.interactive and c.id != stack.main]
+            _run_on = sorted(set(_instances.can_run_on(service, stack)) | {k.partition("@")[2] for k in
+                             _instances.running_keys(service, stack.id)}, key=lambda r: int(r[1:]))
             _page_rid = _page_radio()[0]
             _tools_here = bool(_tool_comps and rollup[stack.id] in _RUNNING and (
                 not _page_rid or f"{stack.id}@{_page_rid}" in _instances.running_keys(service, stack.id)))
@@ -1198,9 +1201,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "ui_creds_list": service.ui_credentials_list(stack.id, _inst),   # 7f: the shown instance's own
                     "pin_refusal": service.binary_install_refusal(stack.id),
                     "removable": bool(buildable and service.fetched_artifacts_present(stack.id)),
-                    # W2: the Run line's ONE radio selector, the union of the runnable and the running instances
-                    "run_on": sorted(set(_instances.can_run_on(service, stack)) | {k.partition("@")[2] for k in
-                                     _instances.running_keys(service, stack.id)}, key=lambda r: int(r[1:])),
+                    # W2: the Run line's ONE radio selector, the union of the runnable and the running instances (Stop);
+                    # Start/Run/Restart offer only the radios the stack may start on (instances.eligible)
+                    "run_on": _run_on,
+                    "start_on": list(_instances.eligible(stack, service._paths, _run_on)),
                     "command": service.manual_start_command(main, _inst) if interactive else "",   # 7f: the shown instance's
                     # Per-stack Settings section rendered inline on the Apps list (same data the
                     # stack-detail Settings uses): operator, component-scoped params, sources, autostart.

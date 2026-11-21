@@ -1161,6 +1161,7 @@ main = "graywolf"
 [[stack]]
 id = "meshtastic"
 name = "Meshtastic"
+radio_access = "spi"     # meshtasticd drives the RF95 directly: SPI radios only (instances.radio_refusal)
 summary = "Native meshtasticd on the RF95 (433 or 868). Run ROOTLESS by lhpc as a user process. Direct SPI — conflicts with the LoRaHAM daemon."
 main = "meshtastic"
 
@@ -3069,6 +3070,7 @@ main = "meshcore-node"
 [[stack]]
 id = "reticulum"
 name = "Reticulum (RNS)"
+radio_access = "spi"     # drives the radio directly: SPI radios only (instances.radio_refusal); "daemon" once it runs on it
 summary = "Reticulum node driving the LoRa radio DIRECTLY over SPI — no rnoded, no RNode firmware, no KISS. Owns the radio for its band; shares the SPI bus with the daemon through spi0.lock."
 main = "rns"
 

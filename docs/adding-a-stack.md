@@ -32,6 +32,7 @@ id = "meshcom"
 name = "MeshCom (QEMU)"
 summary = "MeshCom firmware under QEMU, bridged to the daemon. 433 MHz, daemon MANAGED. Order: daemon -> bridge -> GPS -> QEMU."
 main = "meshcom-qemu"          # the app; the others are its dependencies
+# radio_access = "spi"         # drives the radio itself over SPI: offered and started on SPI radios only (default "daemon")
 ```
 
 ### A component

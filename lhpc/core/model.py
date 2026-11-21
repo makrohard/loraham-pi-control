@@ -569,6 +569,7 @@ class Stack:
     components: tuple[Component, ...] = ()
     main: str = ""               # id of the primary component (the app itself)
     binary: BinarySpec | None = None   # optional prebuilt-binary channel declaration
+    radio_access: str = "daemon"  # "spi": drives its radio itself, starts on SPI radios only; "daemon": any radio
 
     def component(self, component_id: str) -> Component | None:
         for c in self.components:

@@ -8,7 +8,7 @@ import hashlib
 import json
 import re
 
-from . import commands, radios
+from . import commands, radio_models, radios
 
 _RID_RE = re.compile(r"r[1-9][0-9]?")
 
@@ -19,6 +19,25 @@ def stack_bands(stack) -> tuple:
         if c.bands:
             return tuple(c.bands)
     return tuple(sorted({c.band for c in stack.components if getattr(c, "band", "")}))
+
+
+def radio_refusal(stack, radio, models=None) -> str:
+    """Why `stack` may not START on `radio` ("" = it may): radio_access "spi" drives the radio itself, so an SPI model
+    only; "daemon" (the default) reaches any radio through the daemon. `models`: the caller's one table snapshot."""
+    if stack.radio_access != "spi":
+        return ""
+    have = getattr((radio_models.load() if models is None else models).get(radio.model), "transport", "")
+    return "" if have == "spi" else f"{stack.id} drives SPI radios only, {radio.id} is a {(have or 'unknown').upper()} radio"
+
+
+def eligible(stack, paths, rids=None, models=None) -> tuple:
+    """The radios of `rids` (default radios_of) `stack` may be STARTED on: what offers, Start selects and suggestions
+    read. What runs and what a Stop reaches stay radios_of and the running keys. An "spi" stack needs the radio's row."""
+    rids = radios_of(stack, paths) if rids is None else tuple(rids)
+    if stack is None or stack.radio_access != "spi":
+        return rids
+    rows, models = {r.id: r for r in radios.load(paths).radios}, radio_models.load() if models is None else models
+    return tuple(r for r in rids if r in rows and not radio_refusal(stack, rows[r], models))
 
 
 def fixed_band(stack) -> str:
@@ -82,7 +101,7 @@ def radios_able(svc, sid: str, band: str = "") -> list:
 def one_radio(svc, sid: str, band: str) -> tuple:
     """(rid, "") of the ONE radio of `band` able to run `sid`, else ("", why): none or several is refused by name, never
     one picked (G1-K8A 1: the web's ?band= start until W5)."""
-    rids = radios_able(svc, sid, band)
+    rids = list(eligible(svc.stack(sid), svc._paths, radios_able(svc, sid, band)))
     if len(rids) == 1:
         return rids[0], ""
     return "", (f"no radio on {band} MHz runs '{sid}'" if not rids else
@@ -411,7 +430,7 @@ def parse_instance(svc, stack, name: str, at: str, rid: str, verb: str):
         named = [f"{name}@{k.partition('@')[2]}" for k in run]
         return sid, None, "", f"{name} runs as {' and '.join(named)}: name one ({named[0]})"
     if not at:
-        can = can_run_on(svc, stack)
+        can = eligible(stack, svc._paths)
         if not can:
             return sid, None, "", f"{name} can run on no enabled radio of the hardware list: add one on the Hardware page"
         return sid, None, "", (f"{name} can run on {' or '.join(can)}: use " + " or ".join(f"{name}@{r}" for r in can))
@@ -504,14 +523,21 @@ def copy_of(svc, sid: str, rid: str = "", band: str = "", run=None):
     # a start refuses on the why); the current row decides only for an instance that does not run
     launched = recorded_bands(svc, sid) if run is None or rid in run else {}
     moved = rid in launched and radio is not None and launched[rid] != radio.band
-    if radio is None or (bands and radio.band not in bands) or moved:
+    models = radio_models.load() if radio is not None and stack.radio_access == "spi" else {}   # one snapshot
+    refused = radio_refusal(stack, radio, models) if radio is not None else ""
+    alts = eligible(stack, svc._paths, models=models) if refused else ()      # never the refused radio itself
+    if radio is None or (bands and radio.band not in bands) or moved or refused:
         why = (f"{sid}@{rid}: {rid} is not in the hardware list" if radio is None else
                f"{sid}@{rid}: {sid} runs on {' or '.join(bands)} MHz, {rid} is on {radio.band} MHz"
                if bands and radio.band not in bands else
                f"{sid}@{rid}: it runs as launched on {launched[rid] or 'an unknown band'} MHz, {rid} is on "
-               f"{radio.band} MHz now: stop it first")
+               f"{radio.band} MHz now: stop it first" if moved else
+               f"{sid}@{rid}: {refused}: " + ("use " + " or ".join(f"{sid}@{r}" for r in alts) if alts else
+                                               "add an SPI radio on the Hardware page"))
         if rid in launched:
             return commands.Instance(rid, band=launched[rid]), why
+        if refused and not (bands and radio.band not in bands):    # addressed like a disabled radio's: never started
+            return commands.Instance(rid, band=radio.band), why
         return None, why
     if band and band != radio.band:
         return None, f"{sid}@{rid}: {rid} is on {radio.band} MHz, not {band} MHz"

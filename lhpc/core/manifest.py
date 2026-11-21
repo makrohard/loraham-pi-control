@@ -590,6 +590,11 @@ def _resolve_pin_tokens(data: dict) -> None:
                     argv[i] = pin
 
 
+# How a stack reaches its radio: through the LoRaHAM daemon (any radio), or by driving it itself over SPI (an SPI radio
+# only: instances.radio_refusal).
+RADIO_ACCESS = ("daemon", "spi")
+
+
 def parse_manifest(data: dict) -> tuple[Stack, ...]:
     """Parse an already-loaded TOML mapping (kept separate for testing). Validates
     each component's structured lifecycle spec AND the whole dependency graph — an
@@ -602,6 +607,9 @@ def parse_manifest(data: dict) -> tuple[Stack, ...]:
         )
         for comp in components:
             _validate_component(comp)
+        access = stack_raw.get("radio_access", "daemon")
+        if access not in RADIO_ACCESS:
+            raise ManifestError(f"[{stack_raw.get('id', '?')}]: radio_access must be one of {RADIO_ACCESS}, got {access!r}")
         binary = None
         if "binary" in stack_raw:
             binary = _parse_binary(stack_raw["binary"], stack_raw["id"], components)
@@ -613,6 +621,7 @@ def parse_manifest(data: dict) -> tuple[Stack, ...]:
                 components=components,
                 main=stack_raw.get("main", ""),
                 binary=binary,
+                radio_access=access,
             )
         )
     result = tuple(stacks)

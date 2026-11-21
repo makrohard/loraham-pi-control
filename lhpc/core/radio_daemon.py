@@ -325,7 +325,7 @@ SHARED_BAND_TEXT = ("two radios on one band each run their own daemon: address o
 
 
 def _unstartable(state, old_config) -> Target:
-    """The W1-8 reason rule, shared by resolve_target and reticulum_rid."""
+    """The W1-8 reason rule of resolve_target (and the parser's no-list refusal)."""
     if state.kind == radios_mod.ABSENT:
         if old_config is Tri.YES:
             return _refuse(OLD_CONFIG_TEXT, next_command="lhpc hardware")
@@ -444,30 +444,6 @@ def stop_targets(rid, procs, owned_pids) -> StopPlan:
             else:
                 named.append((p.pid, f"an unverified process claims {rid}"))
     return StopPlan(tuple(signal), tuple(named), not named)
-
-
-def reticulum_rid(state, models, band, *, old_config=Tri.NO) -> Target:
-    """The one enabled SPI radio of `band` that Reticulum's direct-SPI interface claims (W4-9, W1-8)."""
-    if not isinstance(old_config, Tri):
-        return _refuse(f"old_config {old_config!r} is not a Tri")
-    if not isinstance(state, radios_mod.State):
-        return _refuse("state is not a hardware-list state")
-    if not isinstance(models, dict):
-        return _refuse("models is not a dict")
-    if not state.startable:
-        return _unstartable(state, old_config)
-    if not (type(band) is str and band in _BANDS):
-        return _refuse(f"{band!r} is not 433 or 868")
-    scope = [r for r in _order(state.radios) if r.enabled and r.band == band]
-    for r in scope:
-        if r.model not in models:
-            return _refuse(f"{r.id}: model {r.model} is unknown", tuple(x.id for x in scope))
-    spi = [r for r in scope if models[r.model].transport == "spi"]
-    usb = [r.id for r in scope if models[r.model].transport != "spi"]
-    if not spi and usb:
-        return _refuse(f"Reticulum drives SPI radios only; {band} MHz has only USB radios: {', '.join(usb)}",
-                       tuple(usb), "lhpc hardware")
-    return _pick(spi, f"on {band} MHz", "reticulum")
 
 
 def settings_save_refusals(old, new, users, procs=(), owned_pids=frozenset()) -> list:

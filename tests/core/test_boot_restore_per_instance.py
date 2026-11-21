@@ -320,3 +320,19 @@ def test_a_boot_with_only_a_skipped_item_retires_its_record(tmp_path, monkeypatc
     assert svc.boot_restore_run().ok
     assert _journal(tmp_path)["state"] == "no-plan" and _skips(tmp_path) == [("kiss@r3", "radio r3 is disabled")]
     assert starts == [] and f"{rec['launch_id']}.json" not in _owned(tmp_path)
+
+
+def test_spi_refusal_a_direct_spi_instance_on_a_usb_radio_is_not_restored_and_says_why(tmp_path, monkeypatch):
+    # SPI-REFUSAL T11: reticulum@r4 (a USB stick) fails with the one text (the resolver's refusal: claimed, then
+    # failed with its why, as any item the resolver refuses); reticulum@r2 (SPI) is restored.
+    # red-before (aa4a88c8): both were started
+    starts = []
+    svc = _service(tmp_path, monkeypatch, (HAT433, HAT868, STICK868), starts)
+    _record(tmp_path, rid="r2", band="868", pid=999941, at=1000, stack="reticulum", comp="rns")
+    _record(tmp_path, rid="r4", band="868", pid=999942, at=1001, stack="reticulum", comp="rns")
+    assert not svc.boot_restore_run().ok
+    assert starts == [("reticulum", "868", "r2")]
+    assert [(i["target"], i["state"], i["result"]["summary"]) for i in _journal(tmp_path)["items"]
+            if i["target"].endswith("@r4")] == \
+        [("reticulum@r4", "failed", "reticulum@r4: reticulum drives SPI radios only, r4 is a USB-CH341 radio: use "
+                                    "reticulum@r1 or reticulum@r2")]

@@ -2,7 +2,7 @@
 
 A [Reticulum](https://reticulum.network) node driving the LoRa radio **directly over SPI** on its
 radio's band (868 or 433 MHz). No rnoded, no RNode firmware, no KISS layer: one LoRa packet is one RNS
-packet. The driver is [loraham-rns-interface](https://github.com/makrohard/loraham-rns-interface).
+packet. The driver is [loraham-rns-interface](https://github.com/makrohard/loraham-rns-interface). SPI radios only: a USB radio is not offered, its start is refused.
 
 | | |
 |---|---|

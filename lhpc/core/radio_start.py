@@ -1397,9 +1397,10 @@ def overview_entry(svc, row, e: dict) -> dict:
     here = {x.get("sid", x["id"]) for x in running}                       # an instance's entry: id "<sid>@<rid>"
     elsewhere = [x.get("sid", x["id"]) for x in e["running"] if x.get("rid") and x.get("sid", x["id"]) not in here]
     startable = [x for x in e["startable"] + [e["entries"][sid] for sid in dict.fromkeys(elsewhere) if sid in e["entries"]]
-                 if rid in instances.radios_able(svc, x["id"])]
+                 if rid in instances.eligible(svc.stack(x["id"]), svc._paths, instances.radios_able(svc, x["id"]))]   # an offer
     interactive = [x for x in e["interactive"] if rid in x.get("on_rids", ()) or "" in x.get("on_rids", ())    # G1-K8D3 N1
-                   or (not x.get("on_rids") and rid in instances.radios_able(svc, x["id"]))]
+                   or (not x.get("on_rids") and rid in instances.eligible(svc.stack(x["id"]), svc._paths,
+                                                                          instances.radios_able(svc, x["id"])))]
     up, procs = dv.reachable, _daemon_procs(svc)
     own = any(p.rid == rid for p in procs)                                # G1-K8D3 B1: this radio's own process
     told = all(p.kind == "id" for p in procs)

@@ -1,7 +1,8 @@
 # Stack: Meshtastic
 
 Rootless `meshtasticd` driving the RF95 radio **directly over SPI**, on its radio's band (868 or 433 MHz).
-`lhpc` starts and stops it as a user process — no sudo, no systemd.
+`lhpc` starts and stops it as a user process — no sudo, no systemd. SPI radios only: a USB radio is not offered, its
+start is refused.
 
 | | |
 |---|---|

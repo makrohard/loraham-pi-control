@@ -425,7 +425,7 @@ def test_w7_8_any_other_rf_log_path_is_refused(value):
 
 
 # ---- the wiring functions (INTERFACE-B4-W5 b2beded0, confirmed by the code role) ----------------------
-# W1-1..W1-11 resolve_target, W4-7 stop_targets, W4-9 reticulum_rid, W5-8/H3/H4 settings_save_refusals.
+# W1-1..W1-11 resolve_target, W4-7 stop_targets, W5-8/H3/H4 settings_save_refusals.
 
 def _state(*radios, kind=None, reasons=()):
     rad = _radios()
@@ -640,42 +640,6 @@ def test_w4_7_a_bool_pid_never_matches_and_odd_entries_are_named():
 def test_w4_7_an_invalid_rid_raises():
     with pytest.raises(ValueError):
         _rd().stop_targets("r0", [], set())
-
-
-# W4-9: reticulum_rid
-def test_w4_9_the_one_spi_radio_of_the_band():
-    rd = _rd()
-    assert _proceeds(rd.reticulum_rid(_state(_r("r2", band="868")), MODELS, "868"), "r2")
-    mixed = _state(_r("r2", band="868"), _stick("r3", "ABCDEFGH"))
-    assert _proceeds(rd.reticulum_rid(mixed, MODELS, "868"), "r2")
-
-
-def test_w4_9_none_usb_only_or_two_spi_radios_refuse():
-    rd = _rd()
-    assert _refuses(rd.reticulum_rid(_state(_r("r1", band="433")), MODELS, "868"))
-    usb = rd.reticulum_rid(_state(_stick("r3", "ABCDEFGH")), MODELS, "868")
-    assert _refuses(usb) and "r3" in usb.reason
-    two = rd.reticulum_rid(_state(*_two_868()), MODELS, "868")
-    assert _refuses(two) and "r1" in two.reason and "r2" in two.reason
-
-
-def test_w4_9_the_list_state_band_and_inputs():
-    rad, rd = _radios(), _rd()
-    absent = _state(kind=rad.ABSENT)
-    no = rd.reticulum_rid(absent, MODELS, "868", old_config=rd.Tri.NO)
-    yes = rd.reticulum_rid(absent, MODELS, "868", old_config=rd.Tri.YES)
-    unk = rd.reticulum_rid(absent, MODELS, "868", old_config=rd.Tri.UNKNOWN)
-    assert all(_refuses(t) for t in (no, yes, unk)) and len({no.reason, yes.reason, unk.reason}) == 3
-    assert unk.reason == "the old configuration cannot be read"
-    inv = rd.reticulum_rid(_state(kind=rad.INVALID, reasons=("x",)), MODELS, "868")
-    assert _refuses(inv) and "x" in inv.reason
-    assert _refuses(rd.reticulum_rid(_state(kind=rad.INVALID), MODELS, "868"))
-    assert _refuses(rd.reticulum_rid(_state(_r("r2", band="868")), MODELS, "868", old_config="yes"))
-    assert _refuses(rd.reticulum_rid(_state(_r("r2", band="868")), MODELS, "915"))
-    models = {k: v for k, v in MODELS.items() if k != "loraham"}
-    assert _refuses(rd.reticulum_rid(_state(_r("r2", band="868")), models, "868"))
-    assert _refuses(rd.reticulum_rid(None, MODELS, "868"))
-    assert _refuses(rd.reticulum_rid(_state(_r("r2", band="868")), [], "868"))
 
 
 # W5-8 / H3 / H4: settings_save_refusals

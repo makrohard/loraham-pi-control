@@ -98,7 +98,7 @@
 {% endmacro %}
 
 {# Grouped lifecycle actions for a stack — one group per line. #}
-{% macro stack_actions(stack_id, installed, has_source, buildable=False, removable=False, fetched_update=False, upstream=None, run_on=(), pick="") %}
+{% macro stack_actions(stack_id, installed, has_source, buildable=False, removable=False, fetched_update=False, upstream=None, run_on=(), pick="", start_on=()) %}
 {# A fetched-binary stack (no clone) still has an artifact on disk, and the CLI removes it —
    so it gets its own removal line instead of silently having none. Not labelled "Source":
    there is no source here, and Update/source-check have nothing to act on. #}
@@ -149,7 +149,8 @@
 <div class="actline">
   <span class="grouplabel">Run</span>
   {# W2: one radio selector per request; every start, stop and restart names its instance, `<stack>@<rid>` #}
-  {% for op, label in (("start", "Run"), ("stop", "Stop"), ("restart", "Restart")) %}{{ instance_btn(op, stack_id, label, run_on, "", pick) }}{% endfor %}
+  {# Run and Restart offer the radios it may start on (start_on), Stop every runnable or running one (run_on) #}
+  {% for op, label in (("start", "Run"), ("stop", "Stop"), ("restart", "Restart")) %}{{ instance_btn(op, stack_id, label, run_on if op == "stop" else start_on, "", pick) }}{% endfor %}
 </div>
 {% endmacro %}
 
