@@ -8,7 +8,7 @@ import hashlib
 import json
 import re
 
-from . import commands, radio_models, radios
+from . import commands, radio_models, radios, resources
 
 _RID_RE = re.compile(r"r[1-9][0-9]?")
 
@@ -581,6 +581,13 @@ def elsewhere(svc, target_rid: str):
         told = rids and (comp.id == svc.DAEMON_ID or not unclaimed(svc, comp))
         return bool(target_rid and told and target_rid not in rids)
     return other
+
+
+def off_radio(svc, running, inst) -> list:
+    """Q6c, one stack per radio inside the run too: `running` with the radio claims dropped of each component that
+    `elsewhere` tells on radios other than `inst`'s (the pre-start rule of run_blockers); one not told keeps them."""
+    other = elsewhere(svc, getattr(inst, "rid", "") or "")
+    return [resources.limit_radio_claims(c, set()) if other(svc.stack_of(c.id) or "", c) else c for c in running]
 
 
 def saved_insts(svc, sid: str) -> list:

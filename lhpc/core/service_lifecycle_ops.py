@@ -140,12 +140,12 @@ class LifecycleOpsMixin:
 
     def _running_conflicts(self, comp, band: str = "", inst=None) -> list[str]:
         """Observed conflicts that would block starting `comp` (as `inst`) now: radio claims by the band each side uses
-        (868 vs a 433-only daemon: none); a templated claim per instance (_keyed), the target's own key."""
+        (868 vs a 433-only daemon: none) and per radio (off_radio); a templated claim per instance (_keyed)."""
         limited, running, running_ids = self._band_limited_running(self.build_snapshot(), conservative=True)  # blocks: every band
         target = limited(comp, {band} if band else set())
         based = instances.with_bases(self, self.stack_of(comp.id), inst)          # DEC-W384ac: its saved ports
         target = dataclasses.replace(target, resources=tuple(dataclasses.replace(r, key=instances.claim_key(r, based)) for r in target.resources))
-        conflicts = resources_mod.interpret_conflicts([*self._keyed(running, inst), target], running_ids | {comp.id}, lambda b: radio_start.radio_name(self._paths, b))
+        conflicts = resources_mod.interpret_conflicts([*self._keyed(instances.off_radio(self, running, inst), inst), target], running_ids | {comp.id}, lambda b: radio_start.radio_name(self._paths, b))
         # Advisory conflicts (e.g. the Companion client slot) never block a start: arbitration is at runtime (the WebUI
         # yields to a running CLI via a lock), so admission lets it through; observed_conflicts() shows them (banner).
         return [f"{c.message}; {instances.way_out(self, next(h for h in c.holders if h != comp.id), c.resource_key, band)}"

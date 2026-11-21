@@ -45,9 +45,8 @@ None — an APRS position belongs to the TNC's client ([graywolf](graywolf.md#po
   the next after a disconnect. Not a declared resource, so LHPC does not lock it.
 - **One app stack per radio.** The daemon-socket consumer claim only records the dependency; the
   start gate's same-frequency rule refuses a second daemon client on the same radio ("… must be
-  stopped first"); a client on another radio of the band does not block. A process no instance
-  claims, a daemon without `--id`, or a direct-radio stack (meshtastic, reticulum) on a band two radios
-  share still blocks the whole band. Resource model: [architecture](../architecture.md#radios-bands-and-resource-claims).
+  stopped first"); a client or a direct-radio stack (meshtastic, reticulum) on another radio of the band
+  does not block. A process no instance claims, or a daemon without `--id`, still blocks the whole band. Resource model: [architecture](../architecture.md#radios-bands-and-resource-claims).
 
 ## Conflicts
 
