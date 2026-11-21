@@ -17,6 +17,7 @@ def _serve(page):
         route.fulfill(status=200, content_type="application/json", body=json.dumps(_GPS))
 
     page.clock.install()
+    page.clock.pause_at(page.evaluate("() => Date.now()") / 1000 + 1)   # paused: only run_for moves the page's time
     page.route("**/api/gps", handler)
     page.route("**/__settled__", lambda route: route.fulfill(status=204, body=""))
     page.reload()
