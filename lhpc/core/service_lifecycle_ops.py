@@ -119,10 +119,10 @@ class LifecycleOpsMixin:
         return limited, running, running_ids
 
     def _observed_conflicts(self, snap=None):
-        """Band-aware observed resource conflicts (both claimants running, radio claims limited to each one's band)."""
+        """Band-aware observed conflicts (both running, radio claims limited to each one's band; per radio: apart)."""
         snap = snap if snap is not None else self.build_snapshot()
         _, running, running_ids = self._band_limited_running(snap)
-        return [c for c in resources_mod.interpret_conflicts(self._keyed(running), running_ids, lambda b: radio_start.radio_name(self._paths, b)) if c.observed]
+        return [c for c in resources_mod.interpret_conflicts(self._keyed(running), running_ids, lambda b: radio_start.radio_name(self._paths, b)) if c.observed and not instances.apart(self, c)]
 
     def _keyed(self, running, inst=None) -> list:
         """`running` with each templated claim keyed per instance (DEC-W351): by its running instances; one no instance

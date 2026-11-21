@@ -567,20 +567,46 @@ def elsewhere(svc, target_rid: str):
     """K6, one app stack per RADIO (W286/W322, triage T9) -> predicate(stack_id, comp): the running `comp` of
     `stack_id` is told on radios that are not `target_rid`'s, so it does not block that instance. A radio not told (a
     process no instance claims, a daemon without --id) blocks the whole band, as before (fail-safe)."""
-    held = {}
-    if target_rid:
-        from . import radio_start
-        for s_id, r_id, c_id, _p in instance_processes(svc, svc._system.procfs.cmdlines()):
-            held.setdefault((s_id, c_id), set()).add(r_id)          # G1-K6C 1: per component, not per stack
-        dprocs = radio_start._daemon_procs(svc)
-        if dprocs and all(p.kind == "id" for p in dprocs):
-            held[(svc.stack_of(svc.DAEMON_ID), svc.DAEMON_ID)] = {p.rid for p in dprocs}
+    held = _held_radios(svc) if target_rid else {}
 
     def other(stack_id, comp) -> bool:
-        rids = held.get((stack_id, comp.id), set())
-        told = rids and (comp.id == svc.DAEMON_ID or not unclaimed(svc, comp))
-        return bool(target_rid and told and target_rid not in rids)
+        rids = _told(svc, held, stack_id, comp)
+        return bool(target_rid and rids and target_rid not in rids)
     return other
+
+
+def _held_radios(svc) -> dict:
+    """{(stack id, component id): radios} its running instances run on, by record or token; the daemon's by --id when
+    every daemon process has one."""
+    from . import radio_start
+    held = {}
+    for s_id, r_id, c_id, _p in instance_processes(svc, svc._system.procfs.cmdlines()):
+        held.setdefault((s_id, c_id), set()).add(r_id)              # G1-K6C 1: per component, not per stack
+    dprocs = radio_start._daemon_procs(svc)
+    if dprocs and all(p.kind == "id" for p in dprocs):
+        held[(svc.stack_of(svc.DAEMON_ID), svc.DAEMON_ID)] = {p.rid for p in dprocs}
+    return held
+
+
+def _told(svc, held, stack_id, comp) -> set:
+    """The radios `comp` of `stack_id` is told on (`held`), or none when a process of it no instance claims runs."""
+    rids = held.get((stack_id, comp.id), set())
+    return rids if rids and (comp.id == svc.DAEMON_ID or not unclaimed(svc, comp)) else set()
+
+
+def apart(svc, conflict) -> bool:
+    """Q9 (his word: per radio): `conflict` is on a radio key and its two running holders are each told on radios
+    (elsewhere's rule) and share none, so the status does not show it."""
+    if not conflict.resource_key.startswith(resources.RADIO_KEY_PREFIX):
+        return False
+    held = _held_radios(svc)
+
+    def told(cid) -> set:
+        sid = svc.stack_of(cid)
+        comp = svc.stack(sid).component(cid) if sid else None
+        return _told(svc, held, sid, comp) if comp is not None else set()
+    ra, rb = (told(h) for h in conflict.holders)
+    return bool(ra and rb and not ra & rb)
 
 
 def off_radio(svc, running, inst) -> list:

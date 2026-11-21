@@ -175,7 +175,9 @@ already holds a resource it needs. The modes:
 The radio claims:
 
 - `loraham.radio.<band>` — **provider** on the daemon for the band it runs; **exclusive** for a
-  direct radio user (meshtastic, reticulum). One stack per radio; a holder no record tells holds the whole band.
+  direct radio user (meshtastic, reticulum). One stack per radio, in both start checks and the status; a holder no
+  record tells holds the whole band. Known, accepted limitation: the one known conflict this lets through is an
+  Uputronics dual board with a stack on each module (CE0 + CE1).
 - `loraham.daemon-socket.<band>` — **provider** on the daemon, **consumer** on every daemon-client
   stack (kiss, meshcom, meshcore).
 - `spi.bus.0` — the shared SPI bus, **cooperative** in group `spi.bus.0`: the daemon (and the

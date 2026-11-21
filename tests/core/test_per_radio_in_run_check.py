@@ -114,3 +114,41 @@ def test_n2_the_daemon_on_the_same_radio_as_a_running_rns_is_still_blocked(tmp_p
         assert _conflicts(svc, DAEMON, "r2") == [
             "rns (exclusive) vs loraham-daemon (provider) on loraham.radio.868 (radios r2, r4) — both running; "
             "stop reticulum@r2 or use another radio"]
+
+
+# ---- step 2, the status (his Q9 "Yes spi per-radio"): observed_conflicts, every UI's one source -------------------
+
+def _radio_conflicts(svc):
+    return sorted((c.resource_key, *sorted(c.holders)) for c in svc.observed_conflicts()
+                  if c.resource_key.startswith("loraham.radio."))
+
+
+def test_t7_the_status_shows_no_conflict_for_rns_on_r2_beside_the_daemon_on_r4(tmp_path):
+    # red-before (c4ec4b38): a red "loraham.radio.868 (radios r2, r4)" conflict for a state both checks admit
+    with _box(tmp_path, (*RNS, "r2", "868"), (*DAEMON, "r4", "868")) as svc:
+        assert _radio_conflicts(svc) == []
+
+
+def test_t7_the_status_still_shows_the_same_radio(tmp_path):
+    with _box(tmp_path, (*RNS, "r2", "868"), (*DAEMON, "r2", "868")) as svc:
+        assert _radio_conflicts(svc) == [("loraham.radio.868 (radios r2, r4)", "loraham-daemon", "rns")]
+
+
+def test_t7_the_status_still_shows_a_holder_no_record_and_no_id_tells(tmp_path):
+    with _box(tmp_path, (*RNS, "r2", "868"), (*DAEMON, "r4", "868", False, ["loraham_daemon", "--radio", "868"])) as svc:
+        assert _radio_conflicts(svc) == [("loraham.radio.868 (radios r2, r4)", "loraham-daemon", "rns")]
+
+
+def test_t7_the_status_still_shows_a_shared_non_radio_claim_of_holders_on_two_radios(tmp_path):
+    with _box(tmp_path, (*MESHTASTIC, "r1", "433"), (*RNS, "r2", "868")) as svc:
+        assert sorted((c.resource_key, *sorted(c.holders)) for c in svc.observed_conflicts()
+                      if c.resource_key == "spi.bus.0.unlocked") == [("spi.bus.0.unlocked", "meshtastic", "rns")]
+
+
+def test_a_holder_with_a_process_no_instance_claims_holds_the_whole_band(tmp_path):
+    # elsewhere's fail-safe, kept by the shared _told: rns@r2 is told by its record, but a second rns process no record
+    # or token claims runs too, so rns is not told on r2 alone and daemon@r4 is blocked (the status reads the same _told)
+    with _box(tmp_path, (*RNS, "r2", "868"), (*RNS, "r2", "868", False)) as svc:
+        assert _conflicts(svc, DAEMON, "r4") == [
+            "rns (exclusive) vs loraham-daemon (provider) on loraham.radio.868 (radios r2, r4) — both running; "
+            "stop reticulum@r2 or use another radio"]
