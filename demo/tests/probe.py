@@ -95,7 +95,8 @@ try:
     # simulated daemon: a running 433 stack brings the 433 daemon up (READY) with live stats;
     # 868 has no running stack so its daemon stays offline (per-band).
     dv = svc.daemon_view("433")
-    assert dv.reachable and dv.ready and dv.stats.get("RSSI") and dv.channel.get("FREQ")
+    assert dv.reachable and dv.ready and dv.stats.get("RSSI") and dv.channel.get("LIVERSSI")
+    assert not {"FREQ", "SF", "BW", "POWER"} & set(dv.channel), ("CHANNEL has no radio params (1.5.0: RADIO)", dv.channel)
     assert svc.daemon_feed("433", 10) and svc.daemon_view("868").reachable is False
     # every RX-TX Monitor key the console reads must be present (the "?"-cell fix): server-
     # rendered LIVERSSI/CADRSSI + the dash.js-polled CADSTATE/PACKETRSSI/TX/RX/TXOK/UPTIME.
@@ -251,6 +252,26 @@ try:
     assert _u.request("/tmp/loraconf433.sock", b"GET STATUS\n", 1.0, 4096) == b""      # the 0.13 band socket: none
     _j = c.get("/api/daemon/r1").get_json()
     assert _j["reachable"] and _j["stats"], _j
+    # Daemon 1.5.0's GET RADIO (daemon plan v17 §13): STATUS carries RADIOERR (Guard A), RADIO answers its eleven fields
+    # in order, the Monitor's RADIO view gets them, and a radio param SET is confirmed by it in the daemon's print form.
+    _rl = _u.request("/tmp/loraconf-r1.sock", b"GET RADIO\n", 1.0, 4096).decode()
+    assert [t.split("=")[0] for t in _rl.split()] == ["RADIO", "RADIO", "MODE", *_dc._RADIO_FIELDS[2:]] \
+        and _rl.endswith("\n") and "RADIOERR" in _v.status, ("GET RADIO", _rl, _v.status)
+    _jr = c.get("/api/daemon/r1?radio=1").get_json()                       # the RADIO view; every other poll asks none
+    assert _j["radio"] == {} and _jr["radio"] == _dc.read_radio(svc._system, "r1", _v.status) \
+        and _jr["radio"]["FREQ"] == "433.775", (_j, _jr)
+    assert _u.request("/tmp/loraconf-r2.sock", b"GET RADIO\n", 1.0, 4096) == b"", "GET RADIO: a down radio answers none"
+    _u.request("/tmp/loraconf-r2.sock", b"SET POWER=5\n", 1.0, 64)
+    assert "r2" not in svc._radio_sets, "a down daemon keeps no SET"
+    for _k, _set, _shown in (("FREQ", "433.900", "433.9"), ("SYNC", "18", "0x12"), ("BW", "62.5", "62.5"),
+                             ("LDRO", "auto", "AUTO"), ("POWER", "10", "10")):
+        _ok, _conf, _det = _dc.apply_set(svc._system, "r1", _k, _set)
+        assert (_ok, _conf) == (True, True) and c.get("/api/daemon/r1?radio=1").get_json()["radio"][_k] == _shown, (_k, _det)
+    assert _dc.read_view(svc._system, "r1").status["FREQ"] == "433.9", "STATUS reports the SET FREQ too"
+    assert _u.request("/tmp/loraconf-r1.sock", b"SET SF=x\n", 1.0, 64) == b"OK\n" \
+        and _dc.read_radio(svc._system, "r1", _v.status)["SF"] == "12", "a value the daemon would refuse is not kept"
+    svc._radio_sets.clear()
+    R["get_radio"] = "1.5.0 STATUS RADIOERR, GET RADIO 11 fields, SETs confirmed by RADIO, 868 down answers none"
     _badge = lambda: _re.search(r'id="rd-badge-r1"[^>]*>([^<]*)<', c.get("/").get_data(as_text=True)).group(1)  # noqa: E731
     assert _badge() == "daemon READY", _badge()                                # the Home card
     assert _u.request("/tmp/loraconf-r1.sock", b"SET CADWAIT 1500\n", 1.0, 64) == b"OK\n"   # the stock fake's SET

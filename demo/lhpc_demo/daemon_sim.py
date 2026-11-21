@@ -1,7 +1,7 @@
 """In-memory simulated LoRaHAM daemon telemetry for the demo — the one piece that makes the
 console feel LIVE without a real radio or daemon process. Produces time-varying STATUS/STATS/
-CHANNEL dicts and a rolling RX/TX packet feed, in the shape the real daemon's CONF socket
-returns (so the dashboard's live monitor renders it unchanged). No sockets, no processes."""
+CHANNEL dicts, the RADIO reply (daemon 1.5.0) and a rolling RX/TX packet feed, in the shape the
+real daemon's CONF socket returns (so the dashboard's live monitor renders it unchanged). No sockets, no processes."""
 from __future__ import annotations
 
 import math
@@ -33,10 +33,11 @@ def _live_rssi(band: str) -> int:
     return int(-92 + 14 * math.sin(e / 4.0 + ph))
 
 
-def status(band: str, rid: str = "", chipfamily: str = "") -> dict:
-    """STATUS as a 1.2+ daemon answers it. With its radio (`rid`, `chipfamily` in the daemon's own spelling) it also
-    names itself (ID), its chip (CHIPFAMILY), the high-power permission it runs with (HIGHPOWER=0, the default) and
-    its channel (FREQ/SF/POWER, the values `channel` reports)."""
+def status(band: str, rid: str = "", chipfamily: str = "", sets: dict | None = None) -> dict:
+    """STATUS as a daemon answers it. With its radio (`rid`, `chipfamily` in the daemon's own spelling) it is a 1.5.0
+    daemon: it names itself (ID), its chip (CHIPFAMILY), the high-power permission it runs with (HIGHPOWER=0, the
+    default), its radio-error mode (RADIOERR=retry, a USB stick's default: LHPC asks `GET RADIO` only then) and its
+    channel (FREQ/SF/POWER, the values `radio` reports, `sets` included)."""
     e = _elapsed()
     # TX active: mostly idle, a brief burst every ~11 s (matches the beacon cadence in feed()).
     tx_active = "1" if int(e) % 11 == 0 else "0"
@@ -44,10 +45,46 @@ def status(band: str, rid: str = "", chipfamily: str = "") -> dict:
            "TXQUEUE": "0", "CADMONITOR": "1", "CADRSSI": "-90", "CADTXAFTERTIMEOUT": "0",
            "CADWAIT": "1500", "CADIDLE": "28"}
     if rid:
-        ch = channel(band)
-        out.update({"HIGHPOWER": "0", "CHIPFAMILY": chipfamily, "ID": rid,
-                    "FREQ": ch["FREQ"], "SF": ch["SF"], "POWER": ch["POWER"]})
+        r = radio(band, sets)
+        out.update({"HIGHPOWER": "0", "CHIPFAMILY": chipfamily, "ID": rid, "RADIOERR": "retry",
+                    "FREQ": r["FREQ"], "SF": r["SF"], "POWER": r["POWER"]})
     return out
+
+
+RADIO_KEYS = ("FREQ", "SF", "BW", "CR", "PREAMBLE", "SYNC", "CRC", "LDRO", "POWER")
+
+
+def radio(band: str, sets: dict | None = None) -> dict:
+    """`GET RADIO` as a 1.5.0 daemon answers it (daemon plan v17 §A4.2), in its field order: the health, LoRa mode and
+    the nine radio params in effect, each the last acked SET (`sets`, in the daemon's print form) else the band
+    default."""
+    d = {"FREQ": "433.775" if band == "433" else "868.1", "SF": "12", "BW": "125.0", "CR": "5", "PREAMBLE": "8",
+         "SYNC": "0x12", "CRC": "1", "LDRO": "1" if band == "433" else "AUTO", "POWER": "17", **(sets or {})}
+    return {"RADIO": "READY", "MODE": "LORA", **{k: d[k] for k in RADIO_KEYS}}
+
+
+def _decimal(v: str) -> str:
+    """MHz / kHz as the daemon prints them, 1-6 places: 433.900 -> 433.9, 125 -> 125.0."""
+    f = float(v)
+    if not math.isfinite(f):
+        raise ValueError(v)
+    s = f"{f:.6f}".rstrip("0")
+    return s + "0" if s.endswith(".") else s
+
+
+def printed(key: str, value: str) -> str | None:
+    """A radio param's SET value in the daemon's print form (§A4.2), or None for a key `radio` has not or a value the
+    daemon would refuse (it then keeps the old one, and the read-back says so)."""
+    try:
+        if key in ("FREQ", "BW"):
+            return _decimal(value)
+        if key == "SYNC":
+            return f"0x{int(value, 16 if value[:2].lower() == '0x' else 10):02X}"
+        if key == "LDRO":
+            return value.upper()
+        return str(int(value)) if key in RADIO_KEYS else None
+    except ValueError:
+        return None
 
 
 def channel(band: str) -> dict:
@@ -56,10 +93,8 @@ def channel(band: str) -> dict:
     cadstate = "DETECTED" if int(e) % 5 == 0 else "IDLE"
     # Last received packet RSSI — stronger than the noise floor, drifting on its own phase.
     pktrssi = int(-74 + 9 * math.sin(e / 3.3 + (0.0 if band == "433" else 0.9)))
-    return {"FREQ": "433.775000" if band == "433" else "868.100000", "SF": "12",
-            "BW": "125.0", "CR": "5", "CRC": "1", "PREAMBLE": "8", "SYNC": "0x12",
-            "POWER": "17", "LDRO": "AUTO", "LIVERSSI": str(_live_rssi(band)),
-            "CADSTATE": cadstate, "PACKETRSSI": str(pktrssi)}
+    # No radio params: the real CHANNEL has none (they are in `radio`, daemon plan v17 §13).
+    return {"LIVERSSI": str(_live_rssi(band)), "CADSTATE": cadstate, "PACKETRSSI": str(pktrssi)}
 
 
 def stats(band: str) -> dict:

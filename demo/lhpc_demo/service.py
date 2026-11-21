@@ -13,9 +13,11 @@ from lhpc.core.services import ControllerService
 
 
 class _DaemonSocket:
-    """The demo daemons' CONF sockets: GET STATUS / GET STATS on a radio's loraconf-<rid>.sock (under /run/loraham or
-    /tmp) answer daemon_sim's line while that radio's daemon is up (DemoService._radio_up), else nothing, as a socket
-    nobody serves. Every other request (SET included) and send() go to the stock fake unchanged."""
+    """The demo daemons' CONF sockets: GET STATUS / GET STATS / GET RADIO on a radio's loraconf-<rid>.sock (under
+    /run/loraham or /tmp) answer daemon_sim's line while that radio's daemon is up (DemoService._radio_up), else
+    nothing, as a socket nobody serves. Every other request (SET included) and send() go to the stock fake unchanged;
+    a radio param SET it acks (OK) is what that radio's RADIO and STATUS report from then on (DemoService._radio_set)."""
+    _GETS = (b"GET STATUS\n", b"GET STATS\n", b"GET RADIO\n")
     _PATH = re.compile(r"/(?:run/loraham|tmp)/loraconf-(r[0-9]+)\.sock")
 
     def __init__(self, svc, inner):
@@ -23,14 +25,22 @@ class _DaemonSocket:
 
     def request(self, path, payload, timeout, max_bytes):
         m = self._PATH.fullmatch(path)
-        if not (m and payload in (b"GET STATUS\n", b"GET STATS\n")):
-            return self._inner.request(path, payload, timeout, max_bytes)
+        if not (m and payload in self._GETS):
+            reply = self._inner.request(path, payload, timeout, max_bytes)
+            if m and payload.startswith(b"SET ") and reply.startswith(b"OK"):
+                self._svc._radio_set(m.group(1), payload)
+            return reply
         band = self._svc._radio_up(m.group(1))
         if not band:
             return b""
         from . import daemon_sim
         key = payload.split()[1].decode()
-        fields = self._svc._sim_status(band, m.group(1)) if key == "STATUS" else daemon_sim.stats(band)
+        if key == "STATUS":
+            fields = self._svc._sim_status(band, m.group(1))
+        elif key == "STATS":
+            fields = daemon_sim.stats(band)
+        else:
+            fields = daemon_sim.radio(band, self._svc._radio_sets.get(m.group(1)))
         return f"{key} {' '.join(f'{k}={v}' for k, v in fields.items())}\n".encode()[:max_bytes]
 
     def send(self, path, payload, timeout):
@@ -101,6 +111,7 @@ class DemoService(ControllerService):
         self._system.fs = _DemoFs(self, self._system.fs)              # ... and their unix sockets
         self._demo: dict[str, dict] = {}
         self._comp2stack: dict[str, str] | None = None
+        self._radio_sets: dict[str, dict[str, str]] = {}               # rid -> the radio params its daemon acked
 
     # --- model access (robust to untrusted/partial localStorage state) -----------------
     def _d(self, sid) -> dict:
@@ -388,7 +399,20 @@ class DemoService(ControllerService):
 
         from . import daemon_sim
         fam = (radio_start.chip_family(self, rid) or "") if rid else ""
-        return daemon_sim.status(band, rid, next((k for k, v in daemon_control._STATUS_FAMILY.items() if v == fam), ""))
+        return daemon_sim.status(band, rid, next((k for k, v in daemon_control._STATUS_FAMILY.items() if v == fam), ""),
+                                 self._radio_sets.get(rid))
+
+    def _radio_set(self, rid: str, payload: bytes) -> None:
+        """A radio param SET (`SET KEY=VALUE`) radio `rid`'s daemon acked: kept in the daemon's print form
+        (daemon_sim.printed); a value the daemon would refuse is not kept, so the read-back says NOT applied, and a
+        daemon that is down keeps nothing."""
+        from . import daemon_sim
+        if not self._radio_up(rid):
+            return
+        key, _, value = payload.decode(errors="replace")[4:].strip().partition("=")
+        v = daemon_sim.printed(key, value)
+        if v is not None:
+            self._radio_sets.setdefault(rid, {})[key] = v
 
     def daemon_view(self, band: str, rid: str = ""):          # the core's signatures: the console passes the rid
         from lhpc.core.daemon_control import DaemonView
