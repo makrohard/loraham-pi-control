@@ -572,6 +572,11 @@ class DemoService(ControllerService):
             d.update({k: v[k] for k in ("version", "head_short", "update_available", "identity", "origin_line")})
         return d
 
+    def self_update_check(self):                              # service_selfupdate.py:310 runs `git fetch` (no network)
+        """"Check for updates": the simulated view's answer, as a box's up-to-date check flashes it."""
+        v = self._selfupdate_view()
+        return ActionResult(True, f"Up to date (simulated): the demo runs its bundled build. {v['origin_line']}", data=v)
+
     def source_check_view(self) -> dict:                      # service_maintenance.py:255, read by stackupdates.verdicts
         """The cached freshness view a box's last "Check for updates" leaves: each installed component current, on the
         head and lane key the snapshot reads (stackupdates.effective_status honours an entry only on those)."""

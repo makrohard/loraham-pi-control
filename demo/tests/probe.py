@@ -406,6 +406,8 @@ try:
     _st = " ".join(_re.sub(r"<[^>]+>", " ", _page("/stacks", "")).split())
     assert _sha and f"Commit @{_sha} {_sha}" in _st and f"@{_sha}" in _page("/", "t"), \
         ("self-update: the bundled commit on the LHPC row and in the footer", _sha)
+    _chk = c.post("/self-update/check", data={"_csrf": _csrf()}, follow_redirects=True).get_data(as_text=True)
+    assert "Up to date (simulated)" in _chk and "no origin URL" not in _chk, "self-update: Check for updates is simulated"
     _ai = c.get("/auto-install").get_data(as_text=True)                # #21: every stack installed, binary where offered
     _opts = {sid: _re.findall(r">([^<]+)</option>", _re.search(rf'name="version:{sid}"[^>]*>(.*?)</select>', _ai, _re.DOTALL)
                               .group(1)) for sid in ("daemon", "meshtastic", "meshcom", "kiss", "graywolf")}
