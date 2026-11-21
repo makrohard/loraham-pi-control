@@ -11,7 +11,7 @@ import sys
 
 import radios_fixture
 
-from lhpc.core import instances
+from lhpc.core import instances, radios
 from lhpc.core.outcomes import Outcome
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -26,9 +26,9 @@ ARGV = {"loraham-daemon": lambda rid, band: ["loraham_daemon", "--radio", band, 
 
 
 @contextlib.contextmanager
-def _box(tmp_path, *holders):
-    """A Box H service with `holders` running: (stack, component, rid, band[, record=True[, argv]])."""
-    radios_fixture.write(tmp_path, radios_fixture.BOX_H)
+def _box(tmp_path, *holders, rows=radios_fixture.BOX_H):
+    """A Box H service (`rows`) with `holders` running: (stack, component, rid, band[, record=True[, argv]])."""
+    radios_fixture.write(tmp_path, rows)
     procs = [subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
              for _ in holders]
     try:
@@ -152,3 +152,21 @@ def test_a_holder_with_a_process_no_instance_claims_holds_the_whole_band(tmp_pat
         assert _conflicts(svc, DAEMON, "r4") == [
             "rns (exclusive) vs loraham-daemon (provider) on loraham.radio.868 (radios r2, r4) — both running; "
             "stop reticulum@r2 or use another radio"]
+
+
+# ---- box H as it is (11-21): r1-r5, r5 an ELECROW Meshstick 868 on USB -----------------------------------------------
+
+BOX_H_NOW = (*radios_fixture.BOX_H, radios.Radio("r5", "mstick 868", "meshstick-1262", "868", usb_serial="MSTK0868"))
+
+
+def test_box_h_meshtastic_on_r2_starts_beside_the_daemons_on_r4_and_r5(tmp_path):
+    # box H 11-21 22:18Z: "[blocked] meshtastic: resource conflict" while daemon@r4 (868) ran; red-before (a63276de)
+    with _box(tmp_path, (*DAEMON, "r4", "868"), (*DAEMON, "r5", "868"), rows=BOX_H_NOW) as svc:
+        assert _conflicts(svc, MESHTASTIC, "r2") == []
+
+
+def test_box_h_meshtastic_on_r2_beside_a_daemon_on_r2_is_blocked_with_its_way_out(tmp_path):
+    with _box(tmp_path, (*DAEMON, "r2", "868"), (*DAEMON, "r4", "868"), (*DAEMON, "r5", "868"), rows=BOX_H_NOW) as svc:
+        assert _conflicts(svc, MESHTASTIC, "r2") == [
+            "loraham-daemon (provider) vs meshtastic (exclusive) on loraham.radio.868 (radios r2, r4, r5) — both "
+            "running; stop daemon@r2 or use another radio"]

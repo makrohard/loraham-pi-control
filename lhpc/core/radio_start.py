@@ -450,7 +450,8 @@ def hardware_view(svc) -> dict:
                      "usb_port": r.usb_port, "reachable": v.reachable, "ready": v.ready, "radio_state": v.radio_state,
                      "choices": usb_flow.usb_choices(found, m) if usb else None,
                      "activity": radio_activity(svc, r, procs), "problems": (pr := _problems(r, usb, v, found)),
-                     "attention": _attention(pr, _radio_users(svc, r))})
+                     "attention": _attention(pr, [u for u in _radio_users(svc, r)       # an "spi" stack needs no daemon
+                                                  if getattr(svc.stack(u.partition("@")[0]), "radio_access", "") != "spi"])})
     addable = [(m.id, c) for m in models.values() if m.transport != "spi"
                for c in usb_flow.usb_choices(found, m).items if c.selectable and not _holder(state.radios, c)]
     box = None

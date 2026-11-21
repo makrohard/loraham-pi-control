@@ -267,6 +267,18 @@ def test_the_settings_run_is_never_a_start_on_a_usb_radio_its_stop_stays(tmp_pat
     assert "meshtastic-cli@r2" in _forms(r2, "start")
 
 
+@pytest.mark.parametrize("sid,cid,shown", [("meshtastic", "meshtastic", False), ("kiss", "loraham-kiss-tnc", True)])
+def test_needs_attention_names_a_down_daemon_only_for_a_stack_that_needs_it(tmp_path, web, sid, cid, shown):
+    # box H 11-21: "r2: daemon offline while meshtastic@r2 needs it" on Home, while meshtastic drives r2 itself
+    # (radio_access "spi"); a daemon client on r2 (kiss) still names it. red-before (9f4da541): meshtastic named
+    import re
+    svc = _svc(tmp_path)
+    with _running(svc, "r2", "868", sid=sid, cid=cid):
+        page = web(service_factory=lambda: svc).get("/", headers={"Host": "localhost:8443"}).get_data(as_text=True)
+    text = " ".join(re.sub(r"<[^>]+>", " ", page).split())
+    assert (f"Needs attention r2: daemon offline while {sid}@r2 needs it" in text) is shown, text[:2000]
+
+
 def test_the_settings_run_without_a_page_radio_selects_over_the_start_radios_only(tmp_path, web):
     # G2-SPI NOTE2 (THEORETICAL): with no page radio the optional Run is a selector; it lists start_on (instances.
     # eligible), never a running USB radio of run_on, whose Stop selector keeps it. Rendered directly: no measured page

@@ -148,7 +148,7 @@ class LifecycleOpsMixin:
         conflicts = resources_mod.interpret_conflicts([*self._keyed(instances.off_radio(self, running, inst), inst), target], running_ids | {comp.id}, lambda b: radio_start.radio_name(self._paths, b))
         # Advisory conflicts (e.g. the Companion client slot) never block a start: arbitration is at runtime (the WebUI
         # yields to a running CLI via a lock), so admission lets it through; observed_conflicts() shows them (banner).
-        return [f"{c.message}; {instances.way_out(self, next(h for h in c.holders if h != comp.id), c.resource_key, band)}"
+        return [f"{c.message}; {instances.way_out(self, next(h for h in c.holders if h != comp.id), c.resource_key, band, getattr(inst, 'rid', ''))}"
                 for c in conflicts if comp.id in c.holders and c.observed and not c.advisory]
 
     def gps_feed_state(self, comp, inst=None) -> dict:
