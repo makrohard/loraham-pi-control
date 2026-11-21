@@ -165,20 +165,30 @@ class DemoService(ControllerService):
     # --- dependencies: present a satisfied box. Mark every NON-GUI system dependency
     #     satisfied (mandatory + runtime), leaving GUI-only deps as reported, so the
     #     dashboard banner is green and install/build are never dep-blocked. --------------
+    @staticmethod
+    def _satisfy(d: dict) -> dict:
+        """THE dependency normalization of every view (stack deps, the overview, LHPC's own): a non-GUI dependency
+        reads satisfied, and a status detail the probe left ("missing: …") reads "present", as on box H."""
+        if not d.get("gui"):
+            d["satisfied"] = True
+            if str(d.get("detail") or "").startswith("missing"):
+                d["detail"] = "present"
+        return d
+
     def system_deps(self, target: str):
-        deps = super().system_deps(target)
-        for d in deps:
-            if not d.get("gui"):
-                d["satisfied"] = True
-        return deps
+        return [self._satisfy(d) for d in super().system_deps(target)]
+
+    def controller_system_deps(self) -> list:                    # service_selfupdate.py:115, LHPC's own (the LHPC row)
+        groups = super().controller_system_deps()
+        for g in groups:
+            g["deps"] = [self._satisfy(d) for d in g.get("deps", [])]
+        return groups
 
     def dependency_overview(self):
         ov = super().dependency_overview()
         secs = ov.get("sections", [])
         for sec in secs:
-            for d in sec.get("deps", []):
-                if not d.get("gui"):
-                    d["satisfied"] = True
+            sec["deps"] = [self._satisfy(d) for d in sec.get("deps", [])]
         ov["mandatory_missing"] = sum(1 for s in secs for d in s["deps"]
                                       if not d["satisfied"] and d.get("mandatory"))
         ov["optional_missing"] = sum(1 for s in secs for d in s["deps"]
