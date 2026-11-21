@@ -570,7 +570,7 @@ def test_the_way_out_names_the_one_instance_whose_ui_is_held(tmp_path, monkeypat
 
 
 def test_the_way_out_of_an_untold_holder_of_a_named_ui_is_the_stack(tmp_path, monkeypatch, set_call, real_spawn):
-    # a25 N2: a hand-started terminal variant (no record, no token: it holds every instance's UI) beside a told
+    # Q6b N2: a hand-started terminal variant (no record, no token: it holds every instance's UI) beside a told
     # voice@r2 GTK app; voice@r1's GTK start is blocked on voice.ui-r1, and stopping voice@r2 would not free it
     # (red-before a63276de: "stop voice@r2")
     from lhpc.core.lifecycle import Lifecycle

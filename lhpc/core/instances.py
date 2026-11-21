@@ -595,7 +595,7 @@ def _told(svc, held, stack_id, comp) -> set:
 
 
 def apart(svc, conflict) -> bool:
-    """Q9 (his word: per radio): `conflict` is on a radio key and its two running holders are each told on radios
+    """The status per radio (Q9): `conflict` is on a radio key and its two running holders are each told on radios
     (elsewhere's rule) and share none, so the status does not show it."""
     if not conflict.resource_key.startswith(resources.RADIO_KEY_PREFIX):
         return False

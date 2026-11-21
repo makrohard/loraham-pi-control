@@ -1,4 +1,4 @@
-"""Q6c (i), his word "Both checks use the per-radio rule": the check inside the run (_running_conflicts) takes the
+"""Q6c (i), both start checks use the per-radio rule: the check inside the run (_running_conflicts) takes the
 pre-start rule (run_blockers, instances.elsewhere): a holder told on ANOTHER radio of the band does not block, the
 same radio does, and a holder no record tells still holds the whole band. Box H: r1 loraham 433 (SPI), r2 loraham
 868 (SPI), r3 CH341-RFM98 433 and r4 PineDio 868 (USB). Holders run as real sleep processes under the argv their
@@ -116,7 +116,7 @@ def test_n2_the_daemon_on_the_same_radio_as_a_running_rns_is_still_blocked(tmp_p
             "stop reticulum@r2 or use another radio"]
 
 
-# ---- step 2, the status (his Q9 "Yes spi per-radio"): observed_conflicts, every UI's one source -------------------
+# ---- step 2, the status per radio too (Q9): observed_conflicts, every UI's one source ------------------------------
 
 def _radio_conflicts(svc):
     return sorted((c.resource_key, *sorted(c.holders)) for c in svc.observed_conflicts()
