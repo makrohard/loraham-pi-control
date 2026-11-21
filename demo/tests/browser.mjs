@@ -226,7 +226,7 @@ try {
   if (!closedPin) throw new Error("the closed Monitor node's pin is shown");
   ok("a closed Monitor node keeps its pin hidden");
 
-  // ---- the parity features (each fails on an older bundle on its widget): #7, #13, CAD, #23 ----
+  // ---- the parity features (each fails on an older bundle on its widget): #7, #13, CAD, #23, #18 ----
   await render(page, "/", "#sysbox");
   await sysOpen(); await sysLive();
   // (b) #7: the POWER row and the host line's core count, both system.js's own branches.
@@ -316,6 +316,18 @@ try {
   ok("a CSRF-protected form after the remembered row is accepted");
 
 
+  // G2 #18: a program's log page streams: the product's logs.js polls /api/logs/<target> through the bridge (the page's
+  // first lines are the server's; the poll is the stream) and the box holds the daemon's start-log lines.
+  await page.evaluate(() => { const real = window.demoFetch; window.__polls = 0;
+    window.demoFetch = (u, o) => { if (String(u).startsWith("/api/logs/loraham-daemon")) window.__polls++; return real(u, o); };
+    window.__realFetch = real; });
+  await render(page, "/logs/loraham-daemon?radio=r1", "#logbox");
+  await page.waitForFunction(() => {
+    const t = ((doc().getElementById("logbox") || {}).textContent || "").trim();
+    return window.__polls > 0 && t !== "" && t !== "(no output yet)";
+  }, { timeout: 3500 });
+  await page.evaluate(() => { window.demoFetch = window.__realFetch; });
+  ok("the daemon's log page streams its start-log lines");
   // ---- frame-only checks (the new mechanism; not red-before evidence) ----
   // (i) every product script of the page is loaded from the index directory by a RELATIVE src (on Pages that
   // directory is the repo's path: a root-relative /static/ would 404 there even where a server root makes it pass).
