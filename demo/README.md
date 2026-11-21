@@ -79,6 +79,8 @@ simulated:
   position, nine satellites, seven used). Its synthetic NMEA goes through the real parser
   (`gps.NmeaSnapshot`), which fills the fields, Skyview and NMEA stream. The GPS Settings form
   is the real one.
+- **Log windows** — a fixed, anonymized copy of real box logs (`lhpc_demo/fixtures/`, its README
+  names the rules and what is kept). A stack started in the demo writes its own start and RF logs.
 
 The demo shows operating the box — install/build, start/stop with one-stack-per-band handoff,
 a live radio — but not the stacks' own software or web UIs; for those use the

@@ -1,0 +1,4 @@
+[check] /home/user/loraham-pi-control/src/lxmf/.venv runs the node's Reticulum wheel
+rns-wheel: check: .venv runs RNS 1.5.5 from /home/user/loraham-pi-control/src/lxmf/.venv/lib/python3.13/site-packages/RNS/__init__.py
+
+[progress] longest quiet 0.2 s

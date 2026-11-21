@@ -1,0 +1,15 @@
+[install] openHop repeater (pinned checkout) into /home/user/loraham-pi-control/src/openhop-core/.venv — same pinned core as the node
+Looking in indexes: https://pypi.org/simple, https://www.piwheels.org/simple
+Processing /home/user/loraham-pi-control/src/openhop-repeater
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: openhop_repeater
+  Building wheel for openhop_repeater (pyproject.toml): started
+  Building wheel for openhop_repeater (pyproject.toml): finished with status 'done'
+  Created wheel for openhop_repeater: filename=openhop_repeater-1.1.5.dev179-py3-none-any.whl size=3837638 sha256=d10f8f7599920bf8cf92dd77d8af51ac348995edebd0c4d46ab379111e792d3b
+  Stored in directory: /home/user/loraham-pi-control/build/tool-cache/pip/wheels/2f/df/39/04ee2e2f7e1cce7c9a05efc9ae06974db2533babbfcd481093
+Successfully built openhop_repeater
+Installing collected packages: openhop_repeater
+Successfully installed openhop_repeater-1.1.5.dev179
+
+[progress] longest quiet 3.0 s

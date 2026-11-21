@@ -1,0 +1,4 @@
+[configure] enable Sideband's plugin loader (otherwise only reachable through its GUI settings)
+sideband plugins enabled -> /home/user/loraham-pi-control/state/sideband/plugins
+
+[progress] longest quiet 0.2 s

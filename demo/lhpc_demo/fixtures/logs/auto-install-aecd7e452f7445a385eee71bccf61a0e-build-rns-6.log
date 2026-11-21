@@ -1,0 +1,4 @@
+[probe] verify the built environment imports before marking it complete
+reticulum venv OK 1.5.5
+
+[progress] longest quiet 0.6 s

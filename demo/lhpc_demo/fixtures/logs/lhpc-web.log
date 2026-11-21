@@ -1,0 +1,74 @@
+ERROR:lhpc.adapters.web.app:unexpected error handling /hardware/detect
+Traceback (most recent call last):
+  File "/home/user/loraham-pi-control/venv/lhpc/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/home/user/loraham-pi-control/venv/lhpc/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/adapters/web/app.py", line 2720, in hardware_detect
+    key, res = f.get("rid", ""), run.detect_radio(service, f.get("rid", ""))
+                                 ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/run.py", line 143, in detect_radio
+    return _run(rid, model.chip, _open_spi(svc, dict(variant.pins), model.chip))
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/run.py", line 79, in _run
+    bus = open_bus()
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/run.py", line 99, in <lambda>
+    return lambda: spi_bus(pins, chip, _lock_path(svc))
+                   ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/spi.py", line 55, in __init__
+    self._lines = (gpio_request or _gpiod_request)(gpiochip, outputs, inputs) if outputs or inputs else None
+                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/spi.py", line 150, in _gpiod_request
+    import gpiod
+ModuleNotFoundError: No module named 'gpiod'
+ERROR:lhpc.adapters.web.app:unexpected error handling /hardware/detect
+Traceback (most recent call last):
+  File "/home/user/loraham-pi-control/venv/lhpc/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/home/user/loraham-pi-control/venv/lhpc/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/adapters/web/app.py", line 2720, in hardware_detect
+    key, res = f.get("rid", ""), run.detect_radio(service, f.get("rid", ""))
+                                 ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/run.py", line 143, in detect_radio
+    return _run(rid, model.chip, _open_spi(svc, dict(variant.pins), model.chip))
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/run.py", line 79, in _run
+    bus = open_bus()
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/run.py", line 99, in <lambda>
+    return lambda: spi_bus(pins, chip, _lock_path(svc))
+                   ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/spi.py", line 55, in __init__
+    self._lines = (gpio_request or _gpiod_request)(gpiochip, outputs, inputs) if outputs or inputs else None
+                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/spi.py", line 150, in _gpiod_request
+    import gpiod
+ModuleNotFoundError: No module named 'gpiod'
+ERROR:lhpc.adapters.web.app:unexpected error handling /hardware/detect
+Traceback (most recent call last):
+  File "/home/user/loraham-pi-control/venv/lhpc/lib/python3.13/site-packages/flask/app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+  File "/home/user/loraham-pi-control/venv/lhpc/lib/python3.13/site-packages/flask/app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/adapters/web/app.py", line 2720, in hardware_detect
+    key, res = f.get("rid", ""), run.detect_radio(service, f.get("rid", ""))
+                                 ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/run.py", line 143, in detect_radio
+    return _run(rid, model.chip, _open_spi(svc, dict(variant.pins), model.chip))
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/run.py", line 79, in _run
+    bus = open_bus()
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/run.py", line 99, in <lambda>
+    return lambda: spi_bus(pins, chip, _lock_path(svc))
+                   ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/spi.py", line 55, in __init__
+    self._lines = (gpio_request or _gpiod_request)(gpiochip, outputs, inputs) if outputs or inputs else None
+                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/loraham-pi-control/src/loraham-pi-control/lhpc/core/radio_detect/spi.py", line 150, in _gpiod_request
+    import gpiod
+ModuleNotFoundError: No module named 'gpiod'
+download failed: <urlopen error [Errno -3] Temporary failure in name resolution> — retrying in 0 s
+download failed: <urlopen error [Errno -3] Temporary failure in name resolution> — retrying in 5 s
+WARNING:waitress.queue:Task queue depth is 1
+WARNING:waitress.queue:Task queue depth is 1
+WARNING:waitress.queue:Task queue depth is 2

@@ -1,0 +1,78 @@
+[install] meshcore-webui backend (FastAPI/uvicorn/sqlalchemy/meshcore, fully version-pinned) into /home/user/loraham-pi-control/src/meshcore-webui/backend/.venv — pip is quiet off-TTY; progress: watch /home/user/loraham-pi-control/src/meshcore-webui/backend/.venv/lib grow
+Looking in indexes: https://pypi.org/simple, https://www.piwheels.org/simple
+Processing ./backend
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Requirement already satisfied: fastapi>=0.118 in ./backend/.venv/lib/python3.13/site-packages (from meshcore-webui-backend==0.1.0) (0.141.1)
+Requirement already satisfied: uvicorn>=0.30 in ./backend/.venv/lib/python3.13/site-packages (from uvicorn[standard]>=0.30->meshcore-webui-backend==0.1.0) (0.52.4)
+Requirement already satisfied: pydantic>=2.7 in ./backend/.venv/lib/python3.13/site-packages (from meshcore-webui-backend==0.1.0) (2.13.5)
+Requirement already satisfied: pydantic-settings>=2.4 in ./backend/.venv/lib/python3.13/site-packages (from meshcore-webui-backend==0.1.0) (2.15.0)
+Requirement already satisfied: sqlalchemy>=2.0.38 in ./backend/.venv/lib/python3.13/site-packages (from sqlalchemy[asyncio]>=2.0.38->meshcore-webui-backend==0.1.0) (2.0.52)
+Requirement already satisfied: aiosqlite>=0.20 in ./backend/.venv/lib/python3.13/site-packages (from meshcore-webui-backend==0.1.0) (0.22.1)
+Requirement already satisfied: alembic>=1.13 in ./backend/.venv/lib/python3.13/site-packages (from meshcore-webui-backend==0.1.0) (1.19.1)
+Requirement already satisfied: pywebpush>=2.3.0 in ./backend/.venv/lib/python3.13/site-packages (from meshcore-webui-backend==0.1.0) (2.4.0)
+Requirement already satisfied: cryptography>=42 in ./backend/.venv/lib/python3.13/site-packages (from meshcore-webui-backend==0.1.0) (50.0.1)
+Requirement already satisfied: meshcore>=2.3.7 in ./backend/.venv/lib/python3.13/site-packages (from meshcore-webui-backend==0.1.0) (2.3.9.1)
+Requirement already satisfied: python-multipart>=0.0.9 in ./backend/.venv/lib/python3.13/site-packages (from meshcore-webui-backend==0.1.0) (0.0.32)
+Requirement already satisfied: httpx>=0.27 in ./backend/.venv/lib/python3.13/site-packages (from meshcore-webui-backend==0.1.0) (0.28.1)
+Requirement already satisfied: Pillow<13,>=12.2 in ./backend/.venv/lib/python3.13/site-packages (from meshcore-webui-backend==0.1.0) (12.3.0)
+Requirement already satisfied: starlette>=1.0.1 in ./backend/.venv/lib/python3.13/site-packages (from meshcore-webui-backend==0.1.0) (1.6.0)
+Requirement already satisfied: Mako in ./backend/.venv/lib/python3.13/site-packages (from alembic>=1.13->meshcore-webui-backend==0.1.0) (1.4.1)
+Requirement already satisfied: typing-extensions>=4.12 in ./backend/.venv/lib/python3.13/site-packages (from alembic>=1.13->meshcore-webui-backend==0.1.0) (4.16.0)
+Requirement already satisfied: cffi>=2.0.0 in ./backend/.venv/lib/python3.13/site-packages (from cryptography>=42->meshcore-webui-backend==0.1.0) (2.1.1)
+Requirement already satisfied: pycparser in ./backend/.venv/lib/python3.13/site-packages (from cffi>=2.0.0->cryptography>=42->meshcore-webui-backend==0.1.0) (3.0)
+Requirement already satisfied: typing-inspection>=0.4.2 in ./backend/.venv/lib/python3.13/site-packages (from fastapi>=0.118->meshcore-webui-backend==0.1.0) (0.4.4)
+Requirement already satisfied: annotated-doc>=0.0.2 in ./backend/.venv/lib/python3.13/site-packages (from fastapi>=0.118->meshcore-webui-backend==0.1.0) (0.0.5)
+Requirement already satisfied: anyio in ./backend/.venv/lib/python3.13/site-packages (from httpx>=0.27->meshcore-webui-backend==0.1.0) (4.14.2)
+Requirement already satisfied: certifi in ./backend/.venv/lib/python3.13/site-packages (from httpx>=0.27->meshcore-webui-backend==0.1.0) (2026.7.22)
+Requirement already satisfied: httpcore==1.* in ./backend/.venv/lib/python3.13/site-packages (from httpx>=0.27->meshcore-webui-backend==0.1.0) (1.0.9)
+Requirement already satisfied: idna in ./backend/.venv/lib/python3.13/site-packages (from httpx>=0.27->meshcore-webui-backend==0.1.0) (3.19)
+Requirement already satisfied: h11>=0.16 in ./backend/.venv/lib/python3.13/site-packages (from httpcore==1.*->httpx>=0.27->meshcore-webui-backend==0.1.0) (0.16.0)
+Requirement already satisfied: bleak in ./backend/.venv/lib/python3.13/site-packages (from meshcore>=2.3.7->meshcore-webui-backend==0.1.0) (3.0.2)
+Requirement already satisfied: pycayennelpp in ./backend/.venv/lib/python3.13/site-packages (from meshcore>=2.3.7->meshcore-webui-backend==0.1.0) (2.4.0)
+Requirement already satisfied: pycryptodome in ./backend/.venv/lib/python3.13/site-packages (from meshcore>=2.3.7->meshcore-webui-backend==0.1.0) (3.23.0)
+Requirement already satisfied: pyserial-asyncio-fast in ./backend/.venv/lib/python3.13/site-packages (from meshcore>=2.3.7->meshcore-webui-backend==0.1.0) (0.16)
+Requirement already satisfied: annotated-types>=0.6.0 in ./backend/.venv/lib/python3.13/site-packages (from pydantic>=2.7->meshcore-webui-backend==0.1.0) (0.8.0)
+Requirement already satisfied: pydantic-core==2.46.5 in ./backend/.venv/lib/python3.13/site-packages (from pydantic>=2.7->meshcore-webui-backend==0.1.0) (2.46.5)
+Requirement already satisfied: python-dotenv>=0.21.0 in ./backend/.venv/lib/python3.13/site-packages (from pydantic-settings>=2.4->meshcore-webui-backend==0.1.0) (1.2.3)
+Requirement already satisfied: aiohttp in ./backend/.venv/lib/python3.13/site-packages (from pywebpush>=2.3.0->meshcore-webui-backend==0.1.0) (3.14.3)
+Requirement already satisfied: http-ece>=1.1.0 in ./backend/.venv/lib/python3.13/site-packages (from pywebpush>=2.3.0->meshcore-webui-backend==0.1.0) (1.2.1)
+Requirement already satisfied: requests>=2.21.0 in ./backend/.venv/lib/python3.13/site-packages (from pywebpush>=2.3.0->meshcore-webui-backend==0.1.0) (2.34.2)
+Requirement already satisfied: py-vapid>=1.7.0 in ./backend/.venv/lib/python3.13/site-packages (from pywebpush>=2.3.0->meshcore-webui-backend==0.1.0) (1.9.4)
+Requirement already satisfied: charset_normalizer<4,>=2 in ./backend/.venv/lib/python3.13/site-packages (from requests>=2.21.0->pywebpush>=2.3.0->meshcore-webui-backend==0.1.0) (3.5.1)
+Requirement already satisfied: urllib3<3,>=1.26 in ./backend/.venv/lib/python3.13/site-packages (from requests>=2.21.0->pywebpush>=2.3.0->meshcore-webui-backend==0.1.0) (2.7.0)
+Requirement already satisfied: greenlet>=1 in ./backend/.venv/lib/python3.13/site-packages (from sqlalchemy>=2.0.38->sqlalchemy[asyncio]>=2.0.38->meshcore-webui-backend==0.1.0) (3.5.5)
+Requirement already satisfied: click>=7.0 in ./backend/.venv/lib/python3.13/site-packages (from uvicorn>=0.30->uvicorn[standard]>=0.30->meshcore-webui-backend==0.1.0) (8.5.0)
+Requirement already satisfied: httptools>=0.8.0 in ./backend/.venv/lib/python3.13/site-packages (from uvicorn[standard]>=0.30->meshcore-webui-backend==0.1.0) (0.8.0)
+Requirement already satisfied: pyyaml>=5.1 in ./backend/.venv/lib/python3.13/site-packages (from uvicorn[standard]>=0.30->meshcore-webui-backend==0.1.0) (6.0.3)
+Requirement already satisfied: uvloop>=0.15.1 in ./backend/.venv/lib/python3.13/site-packages (from uvicorn[standard]>=0.30->meshcore-webui-backend==0.1.0) (0.22.1)
+Requirement already satisfied: watchfiles>=0.20 in ./backend/.venv/lib/python3.13/site-packages (from uvicorn[standard]>=0.30->meshcore-webui-backend==0.1.0) (1.2.0)
+Requirement already satisfied: websockets>=13.0 in ./backend/.venv/lib/python3.13/site-packages (from uvicorn[standard]>=0.30->meshcore-webui-backend==0.1.0) (17.1)
+Requirement already satisfied: aiohappyeyeballs>=2.5.0 in ./backend/.venv/lib/python3.13/site-packages (from aiohttp->pywebpush>=2.3.0->meshcore-webui-backend==0.1.0) (2.7.1)
+Requirement already satisfied: aiosignal>=1.4.0 in ./backend/.venv/lib/python3.13/site-packages (from aiohttp->pywebpush>=2.3.0->meshcore-webui-backend==0.1.0) (1.4.0)
+Requirement already satisfied: attrs>=17.3.0 in ./backend/.venv/lib/python3.13/site-packages (from aiohttp->pywebpush>=2.3.0->meshcore-webui-backend==0.1.0) (26.1.0)
+Requirement already satisfied: frozenlist>=1.1.1 in ./backend/.venv/lib/python3.13/site-packages (from aiohttp->pywebpush>=2.3.0->meshcore-webui-backend==0.1.0) (1.8.0)
+Requirement already satisfied: multidict<7.0,>=4.5 in ./backend/.venv/lib/python3.13/site-packages (from aiohttp->pywebpush>=2.3.0->meshcore-webui-backend==0.1.0) (6.7.1)
+Requirement already satisfied: propcache>=0.2.0 in ./backend/.venv/lib/python3.13/site-packages (from aiohttp->pywebpush>=2.3.0->meshcore-webui-backend==0.1.0) (0.5.2)
+Requirement already satisfied: yarl<2.0,>=1.17.0 in ./backend/.venv/lib/python3.13/site-packages (from aiohttp->pywebpush>=2.3.0->meshcore-webui-backend==0.1.0) (1.24.5)
+Requirement already satisfied: dbus-fast>=1.83.0 in ./backend/.venv/lib/python3.13/site-packages (from bleak->meshcore>=2.3.7->meshcore-webui-backend==0.1.0) (5.0.22)
+Requirement already satisfied: MarkupSafe>=2.0 in ./backend/.venv/lib/python3.13/site-packages (from Mako->alembic>=1.13->meshcore-webui-backend==0.1.0) (3.0.3)
+Requirement already satisfied: pyserial in ./backend/.venv/lib/python3.13/site-packages (from pyserial-asyncio-fast->meshcore>=2.3.7->meshcore-webui-backend==0.1.0) (3.5)
+Building wheels for collected packages: meshcore-webui-backend
+  Building wheel for meshcore-webui-backend (pyproject.toml): started
+  Building wheel for meshcore-webui-backend (pyproject.toml): finished with status 'done'
+  Created wheel for meshcore-webui-backend: filename=meshcore_webui_backend-0.1.0-py3-none-any.whl size=163168 sha256=1d51ef50510a7fcd6187fb9751bf8697bd64f8f09f4002ad3c29644a59d0d2b2
+  Stored in directory: /tmp/pip-ephem-wheel-cache-ln17d55i/wheels/f9/6b/8a/e6eeb7a49e5824e8f31750a528fe455c6ee644f20cc2d5fa61
+Successfully built meshcore-webui-backend
+Installing collected packages: meshcore-webui-backend
+  Attempting uninstall: meshcore-webui-backend
+    Found existing installation: meshcore-webui-backend 0.1.0
+    Uninstalling meshcore-webui-backend-0.1.0:
+      Successfully uninstalled meshcore-webui-backend-0.1.0
+Successfully installed meshcore-webui-backend-0.1.0
+
+[progress] longest quiet 4.5 s

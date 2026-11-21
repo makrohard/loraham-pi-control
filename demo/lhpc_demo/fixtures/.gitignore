@@ -1,0 +1,3 @@
+# these logs ARE source (the demo's log windows); the repo root ignores logs/ and *.log
+!logs/
+!*.log

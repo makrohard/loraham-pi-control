@@ -464,6 +464,135 @@ try:
     assert _on in _txt(_home[_home.find('id="radio-r1"'):_home.find('id="radio-r2"')]), "optional: restored, still running"
     R["lifecycle"] = "ok"
     R["render_with_state"] = c.get("/stacks").status_code
+    # DEMO-LOGS (plan v3): the log windows show a fixed, anonymized copy of real box logs (lhpc_demo/fixtures).
+    # P1, PRE-START on its OWN fresh runtime root (nothing the demo writes can be newer than a fixture there): every
+    # (panel, source) pair of the 34 windows is in a rendered page and answers its fixture.
+    import html as _html
+    import ipaddress as _ip
+    import os as _os
+    from pathlib import Path as _Path
+
+    import lhpc_demo as _ld
+    from lhpc_demo.bridge import _seed as _seed1
+
+    from lhpc.core import firewall as _fw
+    from lhpc.core import rflog as _rflog
+    _FX = _Path(_ld.__file__).parent / "fixtures"                 # read by path: a red-before fails at P1, not an import
+    _run = "auto-install-aecd7e452f7445a385eee71bccf61a0e-"
+    _prog = {"log-loraham-kiss-serial": "start-loraham-kiss-serial-433.log", "log-loraham-voice": "adopt-loraham-voice.log",
+             "log-lxmd": "adopt-lxmd.log", "log-meshchat": "adopt-meshchat.log", "log-rns": "adopt-rns.log",
+             "log-sideband": "adopt-sideband.log", "log-meshcom-bridge": "start-meshcom-bridge-r3.log",
+             "log-meshcom-gps": "start-meshcom-gps-r3.log", "log-meshcom-qemu": "post-meshcom-qemu-81768-245314158461776.log",
+             "log-meshcore-cli": "adopt-meshcore-cli.log", "log-meshcore-gps": "start-meshcore-gps-r4.log",
+             "log-meshcore-node": "start-meshcore-node-r4.log", "log-meshcore-webui": "adopt-meshcore-webui.log",
+             "build-loraham-chat": "build-loraham-chat.log", "build-loraham-voice": _run + "build-loraham-voice.log",
+             "build-loraham-voice-cli": _run + "build-loraham-voice-cli.log", "build-lxmd": _run + "build-lxmd-3.log",
+             "build-meshchat": _run + "build-meshchat-2.log", "build-meshcom-qemu": "adopt-meshcom-qemu.log",
+             "build-meshcore-cli": _run + "build-meshcore-cli-2.log", "build-meshcore-node": _run + "build-meshcore-node-4.log",
+             "build-meshcore-webui": _run + "build-meshcore-webui-2.log", "build-meshtastic-web": "build-meshtastic-web.log",
+             "build-nomadnet": _run + "build-nomadnet-3.log", "build-openhop-repeater-src": "adopt-openhop-repeater-src.log",
+             "build-rns": _run + "build-rns-6.log", "build-rns-lora-interface": "adopt-rns-lora-interface.log",
+             "build-sideband": _run + "build-sideband-7.log"}
+    _prev = {("controller-logs", "controller-web"): ("/controller/logs?src=web", "lhpc-web.log"),
+             ("controller-logs", "controller-selfupdate"): ("/controller/logs?src=selfupdate", "lhpc-selfupdate.log"),
+             ("controller-logs", "controller-boot-restore"): ("/controller/logs?src=boot-restore", "lhpc-boot-restore.log"),
+             ("webserver-row--logs", "webserver-error"): ("/webserver/logs?src=error", "nginx-error.log"),
+             ("webserver-row--logs", "webserver-access"): ("/webserver/logs?src=access", "nginx-access.log"),
+             ("firewall-row--log", "firewall"): ("/firewall/logs", "firewall.log")}
+    assert len(_prog) + len(_prev) == 34
+    _root0 = _os.environ["LHPC_RUNTIME_ROOT"]
+    _os.environ["LHPC_RUNTIME_ROOT"] = "/tmp/lhpcroot-p1"          # under the /tmp/lhpcroot prefix (dev redirect)
+    _os.makedirs("/tmp/lhpcroot-p1", exist_ok=True)
+    try:
+        _app1, _svc1 = build_app()
+    finally:
+        _os.environ["LHPC_RUNTIME_ROOT"] = _root0
+    _seed1(_svc1)
+    _svc1.seed_all_installed()
+    _c1 = _app1.test_client()
+    _panels = {}                                                    # panel id -> [source url, ...] as rendered
+    for _p in ["/stacks"] + [f"/stacks/{s}" for s in _sids]:
+        _h = _c1.get(_p, follow_redirects=True).get_data(as_text=True)
+        for _m in _re.finditer(r'<details class="advcfg logpanel" id="([^"]+)"[^>]*data-src="([^"]+)"(.*?)</details>', _h, _re.DOTALL):
+            _panels.setdefault(_m.group(1), [_html.unescape(u) for u in
+                                             [_m.group(2), *_re.findall(r'<option value="([^"]+)"', _m.group(3))]])
+    for _pid, _name in _prog.items():
+        assert _pid in _panels, ("demo-logs: panel not rendered", _pid)
+        _j = _c1.get(_panels[_pid][0]).get_json()
+        assert _j["lines"] and _j["path"].endswith("/logs/" + _name), ("demo-logs: window", _pid, _j["path"], len(_j["lines"]))
+    for (_pid, _src), (_page, _name) in _prev.items():
+        _url = f"/api/logpreview/{_src}"
+        assert _pid in _panels and _url in _panels[_pid], ("demo-logs: preview source not rendered", _pid, _src)
+        _pv = _c1.get(_url).get_json()["lines"]
+        _ph = _c1.get(_page).get_data(as_text=True)
+        _path = _html.unescape(_re.search(r'<p class="muted logpath">([^<]*)</p>', _ph).group(1))
+        _box = _html.unescape(_re.search(r'<pre id="logbox" class="logbox">(.*?)</pre>', _ph, _re.DOTALL).group(1)).splitlines()
+        assert _pv and _path.endswith("/" + _name) and _pv == _box[-30:], ("demo-logs: preview vs page", _src, _path, len(_pv))
+    # Boot: the firewall fixture sits under the demo-owned prefix (app.py), never a host /run; it has no mtime in the
+    # MANIFEST and the build installed it anyway.
+    _fwlog = _Path(_fw.RECEIPT_PATH).parent / "firewall.log"
+    assert str(_fwlog).startswith("/tmp/lhpcroot/fw/") and not _fw.RECEIPT_PATH.startswith("/run/") and _fwlog.is_file(), \
+        ("demo-logs: firewall fixture outside the demo prefix", str(_fwlog))
+    _man = json.loads((_FX / "MANIFEST.json").read_text())
+    assert _man["firewall.log"]["mtime"] is None and _c1.get("/api/logpreview/firewall").get_json()["lines"]
+    # P2 generic residue over the INSTALLED files: only documentation addresses, the placeholders, no stop class.
+    _inst = {r: (_svc1._paths.under("logs", *r.split("/")[1:]) if r != "firewall.log"
+                 else _Path(_fw.RECEIPT_PATH).parent / "firewall.log") for r in _man}
+    assert len(_man) == 34 == len(list(_FX.rglob("*.log"))) and all(p.is_file() for p in _inst.values())
+    for _r, _p in _inst.items():
+        for _ln in _p.read_text(errors="replace").splitlines():
+            for _m in _re.finditer(r"(?<![\w.])(\d{1,3}(?:\.\d{1,3}){3})(?![\w.])", _ln):
+                _a = _m.group(1)
+                _ver = (_ln[:_m.start(1)].endswith("Chrome/") and _a.endswith(".0.0.0")) or (
+                    _ln.startswith("Requirement already satisfied: ") and _ln.endswith(f"({_a})"))
+                assert _a in ("127.0.0.1", "0.0.0.0") or _a.startswith("192.0.2.") or _ver, ("demo-logs: IPv4", _r, _a)
+            for _t in _re.findall(r"[0-9A-Fa-f:]{2,39}", _ln):
+                if _t.count(":") >= 2:
+                    try:
+                        assert _ip.IPv6Address(_t).is_loopback, ("demo-logs: IPv6", _r, _t)
+                    except _ip.AddressValueError:
+                        pass
+            for _rx, _what in ((r"(?i)\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b", "MAC"),
+                               (r"(?i)\b[a-z]{1,2}\d[a-z]{1,4}(?:-\d{1,2})?\b", "callsign"),
+                               (r"/home/[a-z_][\w-]*", "home path"),
+                               (r"-?\d{1,2}\.\d{4,}\s*[,; /]\s*-?\d{1,3}\.\d{4,}", "decimal lat/lon"),
+                               (r"(?i)\b(lat|lon|lng|latitude|longitude)\b\s*[=:\"]", "lat/lon key"),
+                               (r"\$G[PNL][A-Z]{3},", "NMEA"), (r"\b[A-R]{2}\d{2}[a-x]{2}\b", "grid locator"),
+                               (r"[\w.+-]+@[\w-]+\.[A-Za-z]{2,}", "e-mail"),
+                               (r"(?i)\b(ssid|serial(?:number|_no)?|cookie|set-cookie|authorization|bearer|passw\w*|token"
+                                r"|secret|api[_-]?key|psk|pin)\b\s*[=:]\s*\S+", "secret keyword"),
+                               (r"(?i)[?&](key|token|auth|sig|signature|password|pass|secret|sess(?:ion)?|sid)=", "query secret"),
+                               (r"(?i)/dev/serial/by-id/\S+", "USB serial")):
+                for _m in _re.finditer(_rx, _ln):
+                    _v = _m.group(0)
+                    assert (_what == "MAC" and _v.upper().startswith("00:00:5E:00:53:")) or (
+                        _what == "callsign" and _re.fullmatch(r"N0CALL(-\d{1,2})?", _v)) or (
+                        _what == "home path" and _v == "/home/user"), ("demo-logs: " + _what, _r, _v[:40])
+    # P3 no override, POST-START (main app): a name the demo can write for ANY radio id is no fixture's (static), and
+    # after every stack started on 433 and 868 (+ its optional parts) each such file holds the demo's own lines.
+    _bandless = {e.job() for e in _rflog.REGISTRY if e.job()}
+    _demo_shape = lambda n: bool(_re.fullmatch(r"start-[a-z0-9-]+-(433|868)-r\d+\.log|r\d+/rf-[a-z]+\.log", n)) or n in _bandless  # noqa: E731
+    assert not [r for r in _man if _demo_shape(r.split("/", 1)[1] if r.startswith("logs/") else r)], "demo-logs: fixture in a demo name"
+    _seed1(svc)                                     # its own state: identities + every stack installed, none running
+    svc.seed_all_installed()
+    for _s in svc.stacks():
+        if _s.id in ("daemon", "loraham-pi-control"):
+            continue
+        for _b in ("433", "868"):
+            if not svc.start(_s.id, apply=True, band=_b).ok:
+                svc.stop("daemon", apply=True)
+                svc.start(_s.id, apply=True, band=_b, stop_owners=True)
+            for _cp in _s.components:
+                if _cp.optional and _cp.process is not None:
+                    svc.start(_cp.id, apply=True)
+            svc.stop(_s.id, apply=True)
+    _logs = svc._paths.under("logs")
+    _written = [p for p in _logs.rglob("*.log") if _demo_shape(str(p.relative_to(_logs)))]
+    assert len(_written) >= 40 and all(("[demo]" in p.read_text() or "demo pkt" in p.read_text()) for p in _written), \
+        ("demo-logs: a demo-written log does not hold the demo's lines", len(_written))
+    _kj = c.get("/api/logs/loraham-kiss-tnc").get_json()      # a no-radio window MAY now show the newer demo log
+    assert _kj["path"].split("/logs/")[-1].startswith("start-loraham-kiss-tnc-"), _kj["path"]
+    R["demo_logs"] = f"{len(_prog)} program/build + {len(_prev)} preview windows, {len(_written)} demo logs own"
 except Exception:
     R["FATAL"] = traceback.format_exc()[-2500:]
 _report = "DEMO_BOOT " + json.dumps(R, indent=2, default=str)

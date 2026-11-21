@@ -1,0 +1,4 @@
+[install] MeshChat's prebuilt browser UI (upstream gitignores it; no npm on the box)
+[meshchat] browser UI installed at public (63 files)
+
+[progress] longest quiet 0.0 s

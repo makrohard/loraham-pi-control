@@ -1,0 +1,19 @@
+[gps-bridge] waiting for UART socket (FileNotFoundError); retry in 2s
+[gps-bridge] serving meshcom via unix from source=gpsd
+[gps-bridge] stopped (0 bytes out)
+[gps-bridge] waiting for UART socket (FileNotFoundError); retry in 2s
+[gps-bridge] serving meshcom via unix from source=gpsd
+[gps-bridge] stopped (0 bytes out)
+[gps-bridge] waiting for UART socket (FileNotFoundError); retry in 2s
+[gps-bridge] serving meshcom via unix from source=gpsd
+[gps-bridge] stopped (0 bytes out)
+[gps-bridge] waiting for UART socket (FileNotFoundError); retry in 2s
+[gps-bridge] serving meshcom via unix from source=gpsd
+[gps-bridge] stopped (0 bytes out)
+[gps-bridge] waiting for UART socket (FileNotFoundError); retry in 2s
+[gps-bridge] serving meshcom via unix from source=gpsd
+[gps-bridge] waiting for UART socket (ConnectionRefusedError); retry in 2s
+[gps-bridge] serving meshcom via unix from source=gpsd
+[gps-bridge] stopped (0 bytes out)
+[gps-bridge] waiting for UART socket (FileNotFoundError); retry in 2s
+[gps-bridge] serving meshcom via unix from source=gpsd

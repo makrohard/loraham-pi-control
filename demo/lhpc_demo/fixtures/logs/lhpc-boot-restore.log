@@ -1,0 +1,53 @@
+OK    Boot restore: nothing to restore.
+[log] meshcom-bridge -> tail -f /home/user/loraham-pi-control/logs/start-meshcom-bridge.log
+[log] meshcom-gps -> tail -f /home/user/loraham-pi-control/logs/start-meshcom-gps.log
+ERR   Boot restore: 0 restored, 1 failed (evidence consumed — lhpc stack start <id>), 1 skipped.
+meshcom: meshcom-qemu blocked — installed binary artifact is behind the manifest (built from 3e3c877e2, the manifest pins b99e6ee33) — update it first (lhpc update meshcom, or lhpc install meshcom --source pinned)
+OK    Boot restore: nothing to restore.
+[log] loraham-kiss-tnc -> tail -f /home/user/loraham-pi-control/logs/start-loraham-kiss-tnc-433.log
+[log] loraham-kiss-serial -> tail -f /home/user/loraham-pi-control/logs/start-loraham-kiss-serial-433.log
+OK    Boot restore: 1 restored, 1 skipped.
+[log] loraham-kiss-tnc -> tail -f /home/user/loraham-pi-control/logs/start-loraham-kiss-tnc-433.log
+OK    Boot restore: 1 restored, 1 skipped.
+OK    Boot restore: nothing to restore.
+OK    Boot restore: 1 restored.
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+[log] loraham-kiss-tnc -> tail -f /home/user/loraham-pi-control/logs/start-loraham-kiss-tnc-433.log
+[log] rns -> tail -f /home/user/loraham-pi-control/logs/start-rns-868.log
+OK    Boot restore: 2 restored, 1 skipped.
+  units-compatible: the managed units are a newer release's — boot restore runs on them; `lhpc self-update --repair-integration` rewrites this version's
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+  units-compatible: the managed units are another release's — boot restore runs on them; `lhpc self-update --repair-integration` rewrites this version's
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+  units-compatible: the managed units are a newer release's — boot restore runs on them; `lhpc self-update --repair-integration` rewrites this version's
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+  units-compatible: the managed units are another release's — boot restore runs on them; `lhpc self-update --repair-integration` rewrites this version's
+OK    Boot restore: nothing to restore.
+  units-compatible: the managed units are another release's — boot restore runs on them; `lhpc self-update --repair-integration` rewrites this version's
+OK    Boot restore: nothing to restore.
+OK    Boot restore: nothing to restore.
+  units-compatible: the managed units are another release's — boot restore runs on them; `lhpc self-update --repair-integration` rewrites this version's
+OK    Boot restore: 2 restored, 2 skipped.
+[log] meshcom-bridge -> tail -f /home/user/loraham-pi-control/logs/start-meshcom-bridge-r3.log
+[log] meshcom-gps -> tail -f /home/user/loraham-pi-control/logs/start-meshcom-gps-r3.log
+[log] meshcom-qemu -> tail -f /home/user/loraham-pi-control/logs/start-meshcom-qemu-r3.log
+[log] meshcom-qemu -> tail -f /home/user/loraham-pi-control/logs/post-meshcom-qemu-1292-22604349810.log
+OK    Boot restore: 1 restored.
+OK    Boot restore: 1 restored.
+OK    Boot restore: nothing to restore.

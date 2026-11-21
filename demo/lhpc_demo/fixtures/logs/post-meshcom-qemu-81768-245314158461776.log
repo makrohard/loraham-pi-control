@@ -1,0 +1,4 @@
+log_wait firmware boot: ready after 8 s
+log_wait provisioning verified: ready after 0 s
+tcp_send 127.0.0.1:12589: probe matched -> already set, skipping
+tcp_send 127.0.0.1:12589: acknowledged on attempt 1

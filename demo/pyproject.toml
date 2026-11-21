@@ -11,3 +11,6 @@ dependencies = []          # lhpc is loaded as its own wheel in Pyodide; no PyPI
 
 [tool.setuptools]
 packages = ["lhpc_demo"]
+
+[tool.setuptools.package-data]
+lhpc_demo = ["fixtures/*", "fixtures/logs/*"]

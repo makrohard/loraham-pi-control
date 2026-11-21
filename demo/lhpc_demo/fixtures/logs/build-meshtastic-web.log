@@ -1,0 +1,6 @@
+[fetch] Meshtastic web client v2.7.2 (LHPC pin, sha256-verified) into /home/user/loraham-pi-control/build/tools/meshtastic-web/web
+[meshtastic] fetching web client v2.7.2 — https://github.com/meshtastic/web/releases/download/v2.7.2/build.tar
+[meshtastic] web client v2.7.2 sha256 VERIFIED against the manifest pin
+[meshtastic] web client v2.7.2 installed at /home/user/loraham-pi-control/build/tools/meshtastic-web/web
+
+[progress] longest quiet 0.7 s
