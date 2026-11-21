@@ -233,6 +233,48 @@ try:
     assert svc.restart("graywolf", apply=True, stop_owners=True).ok
     assert svc.stack_running("graywolf") and not svc.stack_running("meshcom")
     R["restart_takeover"] = "restart of graywolf refused while meshcom holds 433; confirmed one stops it"
+    # One daemon per radio, on the CONF socket every card reads (daemon_control.read_view, the real parser) and in the
+    # demo's own views: r1 (433) up after a start, r2 (868) not; a second enabled 433 radio reads offline everywhere.
+    from lhpc.core import daemon_control as _dc
+    from lhpc.core import radios as _radios
+    svc.seed_all_installed()
+    svc._set_dbands(set())
+    _u = svc._system.unix
+    assert not _dc.read_view(svc._system, "r1").reachable, "socket: band down -> offline"
+    assert svc.start("kiss", apply=True, band="433").ok
+    _v = _dc.read_view(svc._system, "r1")
+    assert _v.reachable and _v.ready and "RX" in _v.stats, ("socket: r1 up", _v.status, _v.stats)
+    assert not _dc.read_view(svc._system, "r2").reachable and not _dc.read_view(svc._system, "r99").reachable
+    for _p in ("/run/loraham/loraconf-r1.sock", "/tmp/loraconf-r1.sock"):        # either socket dir the daemon uses
+        assert _u.request(_p, b"GET STATUS\n", 1.0, 4096).startswith(b"STATUS "), _p
+    assert len(_u.request("/tmp/loraconf-r1.sock", b"GET STATS\n", 1.0, 8)) == 8, "socket: the read cap"
+    assert _u.request("/tmp/loraconf433.sock", b"GET STATUS\n", 1.0, 4096) == b""      # the 0.13 band socket: none
+    _j = c.get("/api/daemon/r1").get_json()
+    assert _j["reachable"] and _j["stats"], _j
+    _badge = lambda: _re.search(r'id="rd-badge-r1"[^>]*>([^<]*)<', c.get("/").get_data(as_text=True)).group(1)  # noqa: E731
+    assert _badge() == "daemon READY", _badge()                                # the Home card
+    assert _u.request("/tmp/loraconf-r1.sock", b"SET CADWAIT 1500\n", 1.0, 64) == b"OK\n"   # the stock fake's SET
+    _u.send("/tmp/other.sock", b"PING\n", 1.0)
+    assert _u._inner.sent[-2:] == [("/tmp/loraconf-r1.sock", b"SET CADWAIT 1500\n"), ("/tmp/other.sock", b"PING\n")]
+    _u._inner.unix_errors["/tmp/other.sock"] = "refused"
+    try:
+        _u.request("/tmp/other.sock", b"GET STATUS\n", 1.0, 64)
+        raise AssertionError("socket: a configured error must raise")
+    except OSError:
+        pass
+    del _u._inner.unix_errors["/tmp/other.sock"]
+    _st = _radios.load(svc._paths)
+    _r3 = _radios.Radio("r3", "rfm98 433", "ch341-rfm98pw-433", "433", usb_serial="CHE1W433")
+    assert _radios.save(svc._paths, (*_st.radios, _r3)) == []
+    assert [r.id for r in _radios.load(svc._paths).radios] == ["r1", "r2", "r3"]
+    for _rid in ("r1", "r3"):
+        assert not _dc.read_view(svc._system, _rid).reachable and not svc.daemon_view("433", _rid).reachable \
+            and svc.daemon_channel("433", _rid) == {} and svc.daemon_channel_scan("433", _rid) == {}, \
+            ("a second 433 radio: offline everywhere", _rid)
+    assert not c.get("/api/daemon/r1").get_json()["reachable"] and _badge() == "daemon offline"
+    assert svc.daemon_view("433", "").reachable, "no radio: the band view, as before"
+    assert _radios.save(svc._paths, _st.radios) == []                           # the seeded list back
+    R["daemon_socket"] = "r1 up on its socket after a start (read_view, /api/daemon/r1, Home card); r2, r99 offline"
     R["lifecycle"] = "ok"
     R["render_with_state"] = c.get("/stacks").status_code
 except Exception:

@@ -6,8 +6,35 @@ post-processed so Start/Stop are actually visible. No git, gcc, processes, or ha
 everything else (rendering, config, CSRF, routing) is the unmodified lhpc app."""
 from __future__ import annotations
 
+import re
+
 from lhpc.core.service_base import ActionResult
 from lhpc.core.services import ControllerService
+
+
+class _DaemonSocket:
+    """The demo daemons' CONF sockets: GET STATUS / GET STATS on a radio's loraconf-<rid>.sock (under /run/loraham or
+    /tmp) answer daemon_sim's line while that radio's daemon is up (DemoService._radio_up), else nothing, as a socket
+    nobody serves. Every other request (SET included) and send() go to the stock fake unchanged."""
+    _PATH = re.compile(r"/(?:run/loraham|tmp)/loraconf-(r[0-9]+)\.sock")
+
+    def __init__(self, svc, inner):
+        self._svc, self._inner = svc, inner
+
+    def request(self, path, payload, timeout, max_bytes):
+        m = self._PATH.fullmatch(path)
+        if not (m and payload in (b"GET STATUS\n", b"GET STATS\n")):
+            return self._inner.request(path, payload, timeout, max_bytes)
+        band = self._svc._radio_up(m.group(1))
+        if not band:
+            return b""
+        from . import daemon_sim
+        key = payload.split()[1].decode()
+        fields = (daemon_sim.status if key == "STATUS" else daemon_sim.stats)(band)
+        return f"{key} {' '.join(f'{k}={v}' for k, v in fields.items())}\n".encode()[:max_bytes]
+
+    def send(self, path, payload, timeout):
+        return self._inner.send(path, payload, timeout)
 
 _KEYS = ("installed", "built", "running")
 
@@ -15,6 +42,7 @@ _KEYS = ("installed", "built", "running")
 class DemoService(ControllerService):
     def __init__(self, *a, **k):
         super().__init__(*a, **k)
+        self._system.unix = _DaemonSocket(self, self._system.unix)    # the cards read the daemon on its socket
         self._demo: dict[str, dict] = {}
         self._comp2stack: dict[str, str] | None = None
 
@@ -170,9 +198,23 @@ class DemoService(ControllerService):
         return any(self._d(o)["running"] and self._band(o) == band
                    for o in list(self._demo) if o != "daemon")
 
+    def _radio_up(self, rid: str) -> str:
+        """The band of radio `rid` while its daemon is up, else "": ONE rule for every reader (the CONF socket, and
+        daemon_view / daemon_channel / daemon_channel_scan on a radio). An enabled radio of the hardware list, the only
+        enabled one of its band, whose band the model has up. The demo models one daemon per band, so a second radio
+        on a band reads offline everywhere (a demo limit)."""
+        from lhpc.core import radios
+        on = [r for r in radios.load(self._paths).radios if r.enabled]
+        band = next((r.band for r in on if r.id == rid), "")
+        return band if band and [r.band for r in on].count(band) == 1 and self._daemon_up_on(band) else ""
+
+    def _up(self, band: str, rid: str) -> bool:
+        """A radio's daemon (`rid`), or without one the band, as before."""
+        return bool(self._radio_up(rid)) if rid else self._daemon_up_on(band)
+
     def daemon_view(self, band: str, rid: str = ""):          # the core's signatures: the console passes the rid
         from lhpc.core.daemon_control import DaemonView
-        if not self._daemon_up_on(band):
+        if not self._up(band, rid):
             return DaemonView(band=band, reachable=False)
         from . import daemon_sim
         v = DaemonView(band=band, reachable=True)
@@ -187,7 +229,7 @@ class DemoService(ControllerService):
         answer here too or the dashboard's RSSI telemetry simply vanishes in the browser. No scan
         is simulated: `CADSCAN=0` and the state says no verdict was taken, exactly as the daemon
         answers it."""
-        if not self._daemon_up_on(band):
+        if not self._up(band, rid):
             return {}
         from . import daemon_sim
         ch = dict(daemon_sim.channel(band))
@@ -199,7 +241,7 @@ class DemoService(ControllerService):
     def daemon_channel_scan(self, band: str, rid: str = "") -> dict:
         """Operator-invoked scan — what "Scan now" calls. Here it is where the simulated CAD
         verdict actually appears, since that is the only thing a real scan buys."""
-        if not self._daemon_up_on(band):
+        if not self._up(band, rid):
             return {}
         from . import daemon_sim
         ch = dict(daemon_sim.channel(band))
