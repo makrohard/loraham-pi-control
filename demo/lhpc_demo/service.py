@@ -111,7 +111,20 @@ class DemoService(ControllerService):
         for k in _KEYS:
             if not isinstance(d.get(k), bool):
                 d[k] = False
+        if not (isinstance(d.get("opt"), list) and all(isinstance(x, str) for x in d["opt"])):
+            d["opt"] = []                            # the optional parts it runs (a restored state is checked too)
         return d
+
+    def _mark_stopped(self, sid) -> None:
+        """THE stop transition of a stack: not running, and none of its optional parts either (a later start brings
+        only its required ones back). Every stop path uses it: stop, cascades, takeovers, clean, uninstall."""
+        d = self._d(sid)
+        d["running"], d["opt"] = False, []
+
+    def _opt_running(self, sid, cid) -> bool:
+        """Optional part `cid` of stack `sid` runs: started on its own (Run) while its stack runs."""
+        d, comp = self._d(sid), self.stack(sid).component(cid) if self.stack(sid) else None
+        return bool(d["running"] and comp is not None and comp.optional and cid in d["opt"])
 
     def seed_all_installed(self) -> None:
         """Default demo state: every stack installed + built, none running — so a visitor
@@ -121,7 +134,7 @@ class DemoService(ControllerService):
                 if s.id == "loraham-pi-control":
                     continue
                 d = self._d(s.id)
-                d["installed"], d["built"], d["running"] = True, True, False
+                d["installed"], d["built"], d["running"], d["opt"] = True, True, False, []
                 d.pop("band", None)                  # no stale per-band state: nothing runs, nothing is placed
             self._set_dbands(set())
         except Exception:
@@ -211,7 +224,7 @@ class DemoService(ControllerService):
                 optional = bool(getattr(comp, "optional", False)) if comp else False
                 if not d["installed"]:
                     cs.run_state = RunState.NOT_INSTALLED
-                elif d["running"] and not optional:
+                elif d["running"] and (not optional or self._opt_running(ss.stack.id, cid)):
                     # A running stack runs its REQUIRED components. Optional parts are opt-in
                     # extras (e.g. the mutually-exclusive kiss-serial, or meshcom's GPS) and
                     # stay stopped — the demo has no per-component control, so it must not show
@@ -300,7 +313,7 @@ class DemoService(ControllerService):
                                        and self._band_rid(r.band) == r.id):
                     continue
                 for c in stk.components:
-                    if c.process is None or c.optional:
+                    if c.process is None or (c.optional and not self._opt_running(sid, c.id)):
                         continue
                     p, inst = c.process, commands.Instance(r.id)
                     argv = [p.exec_path or p.exec_name, *(("-m", p.entry) if p.entry else ()), *p.all_args,
@@ -609,7 +622,7 @@ class DemoService(ControllerService):
                                stop_owners=stop_owners)
                 if not r.ok:
                     for s in started:              # roll back this call's partial starts
-                        self._d(s)["running"] = False
+                        self._mark_stopped(s)
                     return ActionResult(False, f"Cannot start {sid}: its dependency "
                                         f"'{dep}' failed to start ({r.summary})."), []
                 started.append(dep)
@@ -655,8 +668,7 @@ class DemoService(ControllerService):
         if raw and raw != sid and self.stack(sid) is not None:
             comp = self.stack(sid).component(raw)
             if comp is not None and getattr(comp, "optional", False):
-                return ActionResult(False, f"'{raw}' is an optional component — the demo "
-                                    "starts stacks, not individual optional parts.")
+                return self._run_optional(sid, raw, True, apply)
         if sid == "daemon":
             bands = self._daemon_start_bands(k)
             if apply:
@@ -695,7 +707,7 @@ class DemoService(ControllerService):
             # One stack per radio band: stop whoever currently holds it (lhpc's stop-owners),
             # so e.g. starting meshcom stops a running graywolf on 433 first.
             for o in owners:
-                self._d(o)["running"] = False
+                self._mark_stopped(o)
             d["running"] = True
         note = ""
         if started_deps:
@@ -717,6 +729,19 @@ class DemoService(ControllerService):
         return [o for o in list(self._demo)
                 if o != "daemon" and self._d(o)["running"] and self._band(o) in bands]
 
+    def _run_optional(self, sid, cid, on: bool, apply: bool):
+        """Run (`on`) or Stop optional part `cid` of stack `sid`, as the card's own Run/Stop does: it runs only inside its
+        running stack (a box starts it as a process of that instance)."""
+        d = self._d(sid)
+        if on and not d["running"]:
+            return ActionResult(False, f"'{cid}' runs inside {sid}: start {sid} first.")
+        if apply:
+            d["opt"] = sorted(set(d["opt"]) | {cid}) if on else [x for x in d["opt"] if x != cid]
+            if on:
+                self._write_logs()
+        verb = ("Started" if on else "Stopped") if apply else ("Would start" if on else "Would stop")
+        return ActionResult(True, f"{verb} {cid} (simulated).")
+
     def stop(self, target: str, apply: bool = False, **k):
         sid = self._sid(target)
         # An optional component can't be stopped on its own in the stack-level model — refuse
@@ -725,8 +750,7 @@ class DemoService(ControllerService):
         if raw and raw != sid and self.stack(sid) is not None:
             comp = self.stack(sid).component(raw)
             if comp is not None and getattr(comp, "optional", False):
-                return ActionResult(False, f"'{raw}' is an optional component — the demo "
-                                    "stops stacks, not individual optional parts.")
+                return self._run_optional(sid, raw, False, apply)
         if sid == "daemon":
             b = self._req_band(k)
             # The daemon is 'up' on a band via an explicit start OR a stack running there.
@@ -738,7 +762,7 @@ class DemoService(ControllerService):
             if apply:
                 self._set_dbands(self._dbands() - set(bands))
                 for o in cascaded:
-                    self._d(o)["running"] = False
+                    self._mark_stopped(o)
             verb = "Stopped" if apply else "Would stop"
             note = f" (also stopped {', '.join(cascaded)})" if cascaded else ""
             if not bands:                           # nothing was served — don't claim "all bands"
@@ -747,9 +771,9 @@ class DemoService(ControllerService):
                                 f"{verb} the daemon on {' + '.join(bands)} MHz{note} (simulated).")
         dependents = self._dependents(sid)          # stacks that lose their provider
         if apply:
-            self._d(sid)["running"] = False
+            self._mark_stopped(sid)
             for dep in dependents:
-                self._d(dep)["running"] = False
+                self._mark_stopped(dep)
         note = ""
         if dependents:
             note = (f" (also stopped {', '.join(dependents)})" if apply
@@ -800,7 +824,7 @@ class DemoService(ControllerService):
         pending = started_deps if apply else self._deps_needing_start(sid, band)
         if apply:
             for o in self._band_owners(sid, band):
-                self._d(o)["running"] = False
+                self._mark_stopped(o)
             d["running"] = True
         note = (f" (also started {', '.join(pending)})" if (apply and pending)
                 else (f" (will also start {', '.join(pending)})" if pending else ""))
@@ -842,9 +866,10 @@ class DemoService(ControllerService):
         dependents = self._cascade_targets(sid)     # daemon -> all band-stacks; else dependents
         if apply:
             d = self._d(sid)
-            d["installed"] = d["built"] = d["running"] = False
+            d["installed"] = d["built"] = False
+            self._mark_stopped(sid)
             for dep in dependents:
-                self._d(dep)["running"] = False
+                self._mark_stopped(dep)
             if sid == "daemon":
                 self._set_dbands(set())
         note = ""
@@ -874,11 +899,12 @@ class DemoService(ControllerService):
         dependents = self._cascade_targets(sid)
         if apply:
             d = self._d(sid)
-            d["built"] = d["running"] = False
+            d["built"] = False
+            self._mark_stopped(sid)
             if purge:
                 d["installed"] = False
             for dep in dependents:
-                self._d(dep)["running"] = False
+                self._mark_stopped(dep)
             if sid == "daemon":
                 self._set_dbands(set())
         note = ""

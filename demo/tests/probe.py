@@ -393,6 +393,26 @@ try:
     _post = json.loads(_br.handle("POST", "/action", json.dumps({"_csrf": _tokn, "op": "start", "target": "kiss@r1"}), ""))
     assert _post["status"] == 200 and _br._svc.stack_running("kiss"), \
         ("cookie: a CSRF form posts after the cookie pass (the session survives)", _post["status"])
+    # An optional part runs on its own inside its running stack (PLAN-DEMO2 L13): the card's Run and Stop; every stop
+    # path of its stack clears it; a restored state keeps it.
+    _txt = lambda h: " ".join(_re.sub(r"<[^>]+>", " ", h).split())  # noqa: E731
+    _off, _on = "stopped KISS serial (PTY) opt Run", "running KISS serial (PTY) opt Stop"
+    svc.seed_all_installed()
+    _action(op="start", target="kiss@r1")
+    assert _off in _txt(_card("r1")), "optional: kiss@r1 up -> serial stopped + Run"
+    _action(op="start", target="loraham-kiss-serial@r1")
+    assert _on in _txt(_card("r1")), "optional: Run -> serial running + Stop"
+    _action(op="stop", target="loraham-kiss-serial@r1", confirmed="yes")
+    assert _off in _txt(_card("r1")), "optional: Stop -> serial stopped + Run"
+    _action(op="start", target="loraham-kiss-serial@r1")
+    _action(op="stop", target="daemon@r1", confirmed="yes", **{"from": "dash"})      # a cascade stops kiss
+    _action(op="start", target="kiss@r1")
+    assert _off in _txt(_card("r1")), "optional: a daemon-stop cascade clears it (kiss back without it)"
+    _br.boot("")
+    assert _br._svc.start("kiss", apply=True, band="433").ok and _br._svc.start("loraham-kiss-serial", apply=True).ok
+    _br.boot(_br.dump_state())
+    _home = json.loads(_br.handle("GET", "/"))["body"]
+    assert _on in _txt(_home[_home.find('id="radio-r1"'):_home.find('id="radio-r2"')]), "optional: restored, still running"
     R["lifecycle"] = "ok"
     R["render_with_state"] = c.get("/stacks").status_code
 except Exception:
