@@ -253,7 +253,12 @@ def test_the_monitor_pages_view_asks_from_load(flask_page):
                               api={f"/api/daemon/{RID}": _REPLY[""]})
     _wait_text(page, "status", "RADIO=READY")
     assert page.locator(".daemonview").count() == 1                         # F7: one view
-    assert page.locator(_sel("status") + " .dbadge").count() == 1           # c4: the shown view carries the badge
+    assert page.locator(_sel("status") + " .dbadge").count() == 0           # F15: no pin after the view heading
+    page.wait_for_function("s => !document.querySelector(s + ' > summary .dbadge').hidden", arg=_MON, timeout=15000)
+    assert page.locator(".dbadge").count() == 1 and page.locator(".pagehead").count() == 0   # F15: the node's pin only
+    tops = page.evaluate("() => [...document.querySelectorAll('.monitor-pins .tabs')]"
+                         ".map(t => t.getBoundingClientRect().top)")
+    assert len(tops) == 2 and tops[1] > tops[0], tops                       # F15b: radio pins, then view pins below
 
 
 def test_a_reply_to_a_hidden_run_is_dropped(flask_page):
@@ -415,7 +420,7 @@ def test_the_monitor_pages_one_view_repeats_every_3_s_status_and_stats_included(
         status = page.text_content(_sel(kind) + " .daemonview-status")
         assert (re.fullmatch(r"updated \d\d:\d\d:\d\d", status) if kind in ("status", "stats")
                 else status == ""), (kind, status)
-        assert page.locator(".pagehead .pagepill .dbadge").count() == 1    # the pill upper right
+        assert page.locator(".dbadge").count() == 1 and page.locator(".pagehead").count() == 0   # F15: the node's pin
         page.context.close()
 
 
@@ -565,7 +570,7 @@ def test_a_full_pages_pill_keeps_an_answer_that_lands_in_a_hidden_tab(flask_page
     page, _posts = flask_page(path=MONITOR, unix_replies=_READY)
     state = {"up": True}
     _seen, settled, _held = _serve(page, state)
-    pill, ready = ".pagehead .pagepill .dbadge", ["daemon READY", "badge badge-running dbadge"]
+    pill, ready = _MON + " > summary .dbadge", ["daemon READY", "badge badge-running dbadge"]   # F15: its one pin
 
     def read():
         return page.evaluate("p => { const b = document.querySelector(p); return [b.textContent, b.className]; }", pill)

@@ -174,7 +174,9 @@ def test_the_monitor_and_live_header_pins_are_rendered_hidden_and_the_page_pills
         [pin] = doc.within(doc.within(node).find("summary")[0]).find("span", class_="dbadge")
         assert pin.has_attr("hidden"), node_id
     doc = _doc(c, "/stacks/daemon/menu/stack-settings-daemon--monitor?radio=r1")    # F7: the Monitor's page
+    [pin] = doc.find("span", class_="dbadge")                                     # F15: only its node's pin (hidden)
+    assert pin.has_attr("hidden") and not doc.find("div", class_="pagehead")
+    doc = _doc(c, "/stacks/daemon/menu/stack-settings-daemon--r1-live?radio=r1")    # Live's page pill: from the load
     [head] = doc.find("div", class_="pagehead")
-    [view] = doc.find("div", class_="daemonview")
-    pills = doc.within(head).find("span", class_="dbadge") + doc.within(view).find("span", class_="dbadge")
-    assert len(pills) == 2 and not any(p.has_attr("hidden") for p in pills)        # the page pill + the view's own
+    [pill] = doc.within(head).find("span", class_="dbadge")
+    assert not pill.has_attr("hidden")

@@ -75,13 +75,20 @@ def test_the_monitor_page_shows_the_pins_and_one_view_of_the_chosen_kind_and_rad
             assert [(p["id"], p["data-rid"], p["data-kind"]) for p in panels] == [(_mid(kind), rid, kind)], kind
             assert panels[0]["data-up"] == "1" and doc.find("div", class_="menupage")[0]["data-fullpage"] == "1"
             head = doc.within(panels[0]).find("h4", class_="daemonview-head")[0]
-            assert _text(head) == f"{name} · {rid} daemon READY"                 # Q8 A heading, the page's badge
-            assert [b["data-rid"] for b in doc.within(head).find("span", class_="dbadge")] == [rid]
+            assert _text(head) == f"{name} · {rid}"                              # Q8 A heading; F15: no pin after it
+            [pin] = doc.find("span", class_="dbadge")                             # F15: the page's ONE pin,
+            [summary] = doc.within(doc.by_id(_MON)).find("summary")               # the Monitor node's
+            assert [doc.index(b) for b in doc.within(summary).find("span", class_="dbadge")] == [doc.index(pin)]
+            assert pin["data-rid"] == rid
+            assert not doc.find("div", class_="pagehead")                         # F15: no page-header pin
             assert not doc.find("button", class_="daemonview-reload")           # F6: no Reload on the page
             assert doc.within(panels[0]).find("pre", class_="stream22")
             assert _text(doc.find("nav", class_="crumbs")[0]).endswith("› Settings › Monitor")
             assert not doc.find("nav", class_="rswitch")                         # the pins replace the switch
             [radios, views] = doc.find("span", class_="tabs")
+            [pins_p] = doc.find("p", class_="monitor-pins")                      # F15b: two lines, a <br> between
+            [br] = doc.within(pins_p).find("br")
+            assert doc.index(radios) < doc.index(br) < doc.index(views)
             pins = {_text(a): (a["href"], a.has_class("mono")) for a in doc.within(radios).find("a")}
             assert pins == {f"{rid} · {band}": (f"/stacks/daemon/menu/{_MON}?radio={rid}&view={kind}", True),
                             f"{other[0]} · {other[1]}": (f"/stacks/daemon/menu/{_MON}?radio={other[0]}&view={kind}",

@@ -1,9 +1,9 @@
 {#- DAEMON-MONITOR-TREE + F7: the daemon's ONE Monitor (Q1 B / Q3), on the radio the Settings switch picks (`radio`).
     In the tree: its four live views (submenus.daemon_views: STATUS, STATS, SOCKET, RX/TX View), each its OWN closed
     node (F14) with its Reload and its own "Daemon not running" (F8), and no page of their own. On its own page (`monitor_view`
-    = the shown view's kind): the radio pins and the view pins (as the Webserver logs' tabs; each a link to this page
-    with its radio / view), then that ONE view (F6: no Reload, no "every N s" line: it repeats every 3 s,
-    data-fullpage). Always present; daemon not running: views paused (daemoncfg.js resumes them when the badge's poll,
+    = the shown view's kind): the radio pins and, on a line of their own (F15b), the view pins (as the Webserver logs'
+    tabs; each a link to this page with its radio / view), then that ONE view (F6: no Reload, no "every N s" line: it
+    repeats every 3 s, data-fullpage). Always present; daemon not running: views paused (daemoncfg.js resumes them when the badge's poll,
     dash.js, sees the daemon up). -#}
 {% from "_macros.html" import daemon_badge -%}
 <details class="advcfg dblock" id="stack-settings-{{ stack.id }}--monitor" data-rid="{{ radio.rid }}" data-up="{{ '1' if radio.reachable else '0' }}">
@@ -15,7 +15,7 @@
         {%- if view.live_radios | length > 1 %}<span class="tabs">{% for rid, _name, band in view.live_radios %}
           <a href="{{ url_for('menu_page', owner=stack.id, mid=menu_id, radio=rid, view=monitor_view) }}"
              class="pill{{ ' mono' if rid == radio.rid else '' }}">{{ rid }} · {{ band }}</a>{% endfor %}
-        </span> {% endif -%}
+        </span><br>{% endif -%}
         <span class="tabs">{% for dv in daemon_views(stack.id, radio.rid) %}
           <a href="{{ url_for('menu_page', owner=stack.id, mid=menu_id, radio=radio.rid, view=dv.kind) }}"
              class="pill{{ ' mono' if dv.kind == monitor_view else '' }}">{{ 'RX TX' if dv.kind == 'rxtx' else dv.kind | upper }}</a>{% endfor %}

@@ -3,13 +3,12 @@
     shown when it and every <details> around it are open. daemoncfg.js asks while it is shown: STATUS / STATS one read of
     /api/daemon/<rid> per show and per Reload; SOCKET polls /api/daemon/<rid>/socket each second (a rolling 22
     lines), RX/TX View /api/daemon/<rid>/feed every 3 s. Daemon not running: paused, Reload off. Text only, in a fixed
-    22-line window. F7: the view the Monitor page shows (`dv.page`) carries the daemon badge and the own-page state
-    (data-up) and has no Reload (F6); every view draws its own "Daemon not running" (F8). `dv`: {id, rid, kind,
-    label[, page]}; `radio`. -#}
-{% from "_macros.html" import daemon_badge -%}
+    22-line window. F7: the view the Monitor page shows (`dv.page`) carries the own-page state (data-up), no daemon
+    badge (F15: the page's one pin is the Monitor's) and no Reload (F6); every view draws its own "Daemon not
+    running" (F8). `dv`: {id, rid, kind, label[, page]}; `radio`. -#}
 {%- if dv.page %}
 <div class="daemonview" id="{{ dv.id }}" data-rid="{{ dv.rid }}" data-kind="{{ dv.kind }}" data-up="{{ '1' if radio.reachable else '0' }}">
-  <h4 class="daemonview-head">{{ dv.label }} {{ daemon_badge(radio, live=True, rid=dv.rid) }}</h4>
+  <h4 class="daemonview-head">{{ dv.label }}</h4>
 {%- else %}
 <details class="advcfg dblock daemonview" id="{{ dv.id }}" data-rid="{{ dv.rid }}" data-kind="{{ dv.kind }}">
   <summary>{{ dv.label }}</summary>
