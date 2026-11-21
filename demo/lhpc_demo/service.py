@@ -503,6 +503,19 @@ class DemoService(ControllerService):
     def binary_target(self) -> str:                  # service_binary_channel.py:36 reads platform.machine()
         return "aarch64-trixie"
 
+    def on_binary_channel(self, stack_id: str) -> bool:      # service_binary_channel.py:128 reads the binary receipt
+        """An installed stack whose prebuilt binary this target is offered sits on the binary channel: the demo's install
+        is the default one a box makes (binary where available, service_binary_channel default_channel). binary_covers
+        and every binary gate read it."""
+        return bool(self._d(stack_id)["installed"] and self.binary_available(stack_id)[0])
+
+    def _inputs_current(self, comp) -> bool:                  # service_build.py:737 reads the build-input sidecars
+        """A built component's build inputs are the ones it was built from (the demo builds nothing to drift)."""
+        return self._d(self._sid(comp))["built"]
+
+    def fetched_artifacts_present(self, stack_id: str) -> bool:     # a fetched package's tree on disk (app.py:1200)
+        return self._d(self._sid(stack_id))["installed"]
+
     def _auto_install_stack_installed(self, st) -> bool:   # service_auto_install.py:767 reads the source leaves
         return self._d(st.id)["installed"]
 
@@ -512,13 +525,12 @@ class DemoService(ControllerService):
 
     def _installed_version(self, sid, comp) -> tuple:
         """(source state, version) of an installed component, as a box's install leaves it: covered by its stack's
-        prebuilt binary on this target (binary_available + the spec's `covers`), BINARY "binary@<9 hex>"; else its
+        prebuilt binary (binary_covers, the product's one primitive), BINARY "binary@<9 hex>"; else its
         manifest pin (the tag, else the short commit). The demo has no artifact index (no network), so the 9 hex
         are the manifest pin commit's, standing in for the artifact sha a box records (status.py:255-275)."""
         from lhpc.core.model import SourceState
         pin = comp.source
-        spec = self.binary_spec(sid) if self.binary_available(sid)[0] else None
-        if spec is not None and comp.id in spec.covers:
+        if self.binary_covers(comp.id):
             return SourceState.BINARY, f"binary@{pin.pin_commit[:9]}"
         return SourceState.MATCH, pin.pin_tag or pin.pin_commit[:7]
 
