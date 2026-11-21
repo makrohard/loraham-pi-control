@@ -569,6 +569,25 @@ def test_the_way_out_names_the_one_instance_whose_ui_is_held(tmp_path, monkeypat
         (cli.outcome, cli.summary)
 
 
+def test_the_way_out_of_an_untold_holder_of_a_named_ui_is_the_stack(tmp_path, monkeypatch, set_call, real_spawn):
+    # a25 N2: a hand-started terminal variant (no record, no token: it holds every instance's UI) beside a told
+    # voice@r2 GTK app; voice@r1's GTK start is blocked on voice.ui-r1, and stopping voice@r2 would not free it
+    # (red-before a63276de: "stop voice@r2")
+    from lhpc.core.lifecycle import Lifecycle
+    svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=True)
+    _config_written(monkeypatch, svc)
+    set_call(svc)
+    rec = {"stack": "voice", "component": "loraham-voice", "role": "", "band": "868", "rid": "r2", "pid": 4711}
+    monkeypatch.setattr(svc._system.procfs, "cmdlines", lambda: {4711: ["/x/LoRaHAM_Voice/loraham_voice"],
+                                                                 4712: ["/x/LoRaHAM_Voice/loraham_voice_cli"]})
+    monkeypatch.setattr(Lifecycle, "owned_inventory", lambda self: ([dict(rec)], [], "ok"))
+    monkeypatch.setattr(Lifecycle, "verify_owned", lambda self, r: (r.get("pid") == 4711, ""))
+    res = _start(svc, "voice@r1")
+    gtk = next(r for r in res.results if r.component == "loraham-voice")
+    assert (gtk.outcome, gtk.summary) == (Outcome.BLOCKED, "resource conflict: loraham-voice-cli (exclusive) vs "
+                                          "loraham-voice (exclusive) on voice.ui-r1 — both running; stop voice"), outcomes(res)
+
+
 def test_voice_r2s_terminal_variant_is_allowed_while_voice_r1s_gtk_app_runs(tmp_path, monkeypatch, set_call,
                                                                              real_spawn):
     svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)

@@ -85,7 +85,7 @@
             <span class="actgroup">
               <span class="grouplabel">{{ opt.name }}</span>
               {# a radio it may not START on (in run_on, not in start_on: instances.eligible) has no Run; its Stop stays #}
-              {% if view.radio not in g.run_on or view.radio in g.start_on %}{{ instance_btn('start', opt.id, 'Run', g.run_on, view.radio) }}{% endif %}
+              {% if view.radio not in g.run_on or view.radio in g.start_on %}{{ instance_btn('start', opt.id, 'Run', g.start_on, view.radio) }}{% endif %}
               {{ instance_btn('stop', opt.id, 'Stop', g.run_on, view.radio) }}
             </span>
           {% endfor %}

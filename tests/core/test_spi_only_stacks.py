@@ -79,7 +79,7 @@ def test_t1_an_unknown_radio_access_is_a_manifest_error():
 
 def test_t1_the_shipped_spi_stacks_are_reticulum_and_meshtastic_every_other_is_daemon(tmp_path):
     svc = _svc(tmp_path)
-    access = {s.id: s.radio_access for s in svc.stacks()}
+    access = {s.id: getattr(s, "radio_access", "daemon") for s in svc.stacks()}     # red-before: no stack is "spi"
     assert {k for k, v in access.items() if v == "spi"} == {"reticulum", "meshtastic"}
     assert set(access.values()) == {"spi", "daemon"}
 
@@ -265,6 +265,25 @@ def test_the_settings_run_is_never_a_start_on_a_usb_radio_its_stop_stays(tmp_pat
     r4, r2 = (_page(web, svc, f"/stacks?open=meshtastic&radio={r}") for r in ("r4", "r2"))
     assert "meshtastic-cli@r4" not in _forms(r4, "start") and "meshtastic-cli@r4" in _forms(r4, "stop")
     assert "meshtastic-cli@r2" in _forms(r2, "start")
+
+
+def test_the_settings_run_without_a_page_radio_selects_over_the_start_radios_only(tmp_path, web):
+    # G2-SPI NOTE2 (THEORETICAL): with no page radio the optional Run is a selector; it lists start_on (instances.
+    # eligible), never a running USB radio of run_on, whose Stop selector keeps it. Rendered directly: no measured page
+    # reaches an empty page radio (/stacks?open=<stack> without ?radio= shows the first radio). red-before (b38f349f):
+    # the Run selector listed meshtastic-cli@r4
+    import types
+
+    import flask
+    app = web(service_factory=lambda: _svc(tmp_path)).application
+    opt = {"id": "meshtastic-cli", "name": "Meshtastic CLI", "running": False, "startable": False, "autostart": False}
+    with app.test_request_context("/stacks"):
+        html = flask.render_template("_settings_config.html", stack=types.SimpleNamespace(id="meshtastic"),
+                                     view={"radio": "", "optional": [opt]}, config_groups=[],
+                                     g={"run_on": ["r1", "r2", "r4"], "start_on": ["r1", "r2"]})
+    sel = _selects(parse(html), "")
+    assert sel["Run meshtastic-cli on radio"] == ["meshtastic-cli@r1", "meshtastic-cli@r2"], sel
+    assert sel["Stop meshtastic-cli on radio"] == ["meshtastic-cli@r1", "meshtastic-cli@r2", "meshtastic-cli@r4"], sel
 
 
 @pytest.mark.parametrize("target", ["reticulum@r4", "meshtastic@r3", "nomadnet@r4"])
