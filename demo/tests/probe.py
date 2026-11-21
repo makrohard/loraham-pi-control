@@ -323,6 +323,13 @@ try:
         ("#14", "/stacks/kiss/menu/stackrow-kiss", "t", True, _re.compile(r"PIDs \d+")),
         ("#14", "/stacks/daemon/menu/stackrow-daemon", "t", True, "loraconf-r1.sock (unix) — RADIO=READY"),
         ("#14", "/stacks/daemon/menu/stackrow-daemon", "t", True, "Instances daemon@r1 running"),
+        ("#5", "/", "r1t", True, "RF log: daemon r1 (433) · graywolf r1"),
+        ("#18", "/logs/loraham-daemon?radio=r1", "t", True, "process running"),
+        ("#18", "/logs/loraham-daemon?radio=r1", "t", True, "logs/start-loraham-daemon-433-r1.log"),
+        ("#18", "/logs/loraham-daemon?radio=r1", "t", False, "(no log file yet)"),
+        ("#18", "/logs/loraham-kiss-tnc?radio=r1", "t", True, "logs/start-loraham-kiss-tnc-433-r1.log"),
+        ("#5", "/logs/loraham-daemon?job=r1/rf-daemon.log&radio=r1", "t", True, "logs/r1/rf-daemon.log"),
+        ("#5", "/logs/loraham-daemon?job=r1/rf-daemon.log&radio=r1", "t", False, "(no log file yet)"),
     ]
     _seen = {}
 
@@ -334,6 +341,17 @@ try:
              if bool(txt.search(_page(path, scope)) if hasattr(txt, "search") else txt in _page(path, scope)) != want]
     assert not _miss, ("parity with box H", _miss)
     R["parity"] = f"{len(PARITY)} box-H rows hold"
+    # A restored state (a returning visitor's localStorage) shows its running instances' logs as their starts left them.
+    import shutil as _sh
+
+    from lhpc_demo import bridge as _br
+    _br.boot("")
+    assert _br._svc.start("kiss", apply=True, band="433").ok
+    _saved = _br.dump_state()
+    _sh.rmtree(_br._svc._paths.under("logs"))
+    _br.boot(_saved)
+    assert "logs/start-loraham-kiss-tnc-433-r1.log" in json.loads(_br.handle("GET", "/logs/loraham-kiss-tnc?radio=r1"))["body"], \
+        "restore: the running kiss@r1's start log is there again"
     R["lifecycle"] = "ok"
     R["render_with_state"] = c.get("/stacks").status_code
 except Exception:

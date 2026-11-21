@@ -74,6 +74,7 @@ def boot(state_json: str = "") -> str:
             restored = None
     if restored is not None:
         _svc._demo = restored           # returning visitor's saved (current-schema) state
+        _svc._write_logs()              # its running instances' logs, as their starts wrote them
     else:
         _svc.seed_all_installed()       # fresh or stale-schema: a fully installed, not-running box
     return "ok"

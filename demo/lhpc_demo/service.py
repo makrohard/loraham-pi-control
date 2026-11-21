@@ -303,6 +303,30 @@ class DemoService(ControllerService):
                                 argv, eps))
         return out
 
+    def _write_logs(self) -> None:
+        """The start log and RF log of each projected process, as files under logs/ by the product's own names
+        (radio_start.start_log_name; the rflog registry's `<rid>/<file>`), written once and kept after a stop, as a
+        box's launches leave them. The log pages tail them through runtime_fs like a box's. Called after every applied
+        start/restart and after a state restore."""
+        import time
+
+        from lhpc.core import radio_start, rflog
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        for sid, rid, band, cid, _pid, _argv, _eps in self._projection():
+            logs = {radio_start.start_log_name(cid, band, rid): [
+                f"{ts} [demo] {cid} started for {sid}@{rid} on {band} MHz (simulated; no radio in the browser)",
+                f"{ts} [demo] {cid}: ready"]}
+            for e in self._rflog_entries():
+                if e.writer == cid:
+                    name = f"{rid}/{rflog.RADIO_FILE}" if e.per_radio else f"{rid}/{e.job()}" if e.instanced else e.job()
+                    logs[name] = [f'{ts} RX rssi=-8{i}.00 snr=8.00 len=9 band={band} hex=64656d6f20706b74{i:02x} '
+                                  f'ascii="demo pkt{i}"' for i in range(3)]
+            for name, lines in logs.items():
+                f = self._paths.under("logs", *name.split("/"))
+                if not f.exists():
+                    f.parent.mkdir(parents=True, exist_ok=True)
+                    f.write_text("\n".join(lines) + "\n")
+
     def _lifecycle(self):
         """lhpc's Lifecycle with the launch records lhpc would have written for the projected processes, read through
         like the procfs and verified while projected: a daemon names its radio only by its record (no instance argv),
@@ -618,6 +642,7 @@ class DemoService(ControllerService):
             bands = self._daemon_start_bands(k)
             if apply:
                 self._set_dbands(self._dbands() | set(bands))
+                self._write_logs()
             verb = "Started" if apply else "Would start"
             return ActionResult(True, f"{verb} the daemon on "
                                 f"{' + '.join(bands)} MHz (simulated).")
@@ -663,6 +688,8 @@ class DemoService(ControllerService):
             note += (f" (stopped {who} on band {band})" if apply
                      else f" (will stop {who} on band {band} — one stack per band)")
         verb = "Started" if apply else "Would start"
+        if apply:
+            self._write_logs()
         return ActionResult(True, f"{verb} {sid} (simulated).{note}",
                             data={} if apply else plan_data)
 
@@ -730,6 +757,7 @@ class DemoService(ControllerService):
             bands = self._daemon_start_bands(k)
             if apply:
                 self._set_dbands(self._dbands() | set(bands))
+                self._write_logs()
             verb = "Restarted" if apply else "Would restart"
             return ActionResult(True, f"{verb} the daemon on "
                                 f"{' + '.join(bands)} MHz (simulated).")
@@ -757,6 +785,8 @@ class DemoService(ControllerService):
             d["running"] = True
         note = (f" (also started {', '.join(pending)})" if (apply and pending)
                 else (f" (will also start {', '.join(pending)})" if pending else ""))
+        if apply:
+            self._write_logs()
         return ActionResult(True, f"Restarted {sid} (simulated).{note}" if apply
                             else f"Would restart {sid} (simulated).{note}",
                             data={} if apply else plan_data)
