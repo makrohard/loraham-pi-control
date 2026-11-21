@@ -363,6 +363,8 @@ try:
         ("#14", "/stacks/daemon/menu/stackrow-daemon", "t", True, "Instances daemon@r1 running"),
         ("#5", "/", "r1t", True, "RF log: daemon r1 (433) · graywolf r1"),
         ("#16", "/stacks/daemon/menu/stackrow-daemon", "t", True, "Save running daemon: permission OFF (sx127x)"),
+        ("#21", "/auto-install", "t", True, "Update all Stacks"),
+        ("#21", "/auto-install", "t", False, "Install and Build all Stacks"),
         ("#18", "/logs/loraham-daemon?radio=r1", "t", True, "process running"),
         ("#18", "/logs/loraham-daemon?radio=r1", "t", True, "logs/start-loraham-daemon-433-r1.log"),
         ("#18", "/logs/loraham-daemon?radio=r1", "t", False, "(no log file yet)"),
@@ -379,6 +381,14 @@ try:
     _miss = [(row, path, getattr(txt, "pattern", txt)) for row, path, scope, want, txt in PARITY
              if bool(txt.search(_page(path, scope)) if hasattr(txt, "search") else txt in _page(path, scope)) != want]
     assert not _miss, ("parity with box H", _miss)
+    _ai = c.get("/auto-install").get_data(as_text=True)                # #21: every stack installed, binary where offered
+    _opts = {sid: _re.findall(r">([^<]+)</option>", _re.search(rf'name="version:{sid}"[^>]*>(.*?)</select>', _ai, _re.DOTALL)
+                              .group(1)) for sid in ("daemon", "meshtastic", "meshcom", "kiss", "graywolf")}
+    assert all("Binary (prebuilt)" in _opts[x] for x in ("daemon", "meshtastic", "meshcom")) \
+        and not any("Binary (prebuilt)" in _opts[x] for x in ("kiss", "graywolf")), ("auto-install: Binary options", _opts)
+    _ait = " ".join(_re.sub(r"<[^>]+>", " ", _ai).split())
+    _no = [st.name for st in svc.stacks() if st.id != "loraham-pi-control" and f"{st.name} yes" not in _ait]
+    assert not _no, ("auto-install: INSTALLED yes for every stack", _no)
     R["parity"] = f"{len(PARITY)} box-H rows hold"
     # A restored state (a returning visitor's localStorage) shows its running instances' logs as their starts left them.
     import shutil as _sh

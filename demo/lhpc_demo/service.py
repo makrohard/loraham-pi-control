@@ -494,6 +494,18 @@ class DemoService(ControllerService):
             pass
         return out
 
+    # --- auto-install and the binary channel, from the model: the demo models a Raspberry Pi 5 on Trixie (box H), whose
+    #     binary target offers the manifest's prebuilt stacks; Pyodide's own platform (wasm32) is not a target. ---------
+    def binary_target(self) -> str:                  # service_binary_channel.py:36 reads platform.machine()
+        return "aarch64-trixie"
+
+    def _auto_install_stack_installed(self, st) -> bool:   # service_auto_install.py:767 reads the source leaves
+        return self._d(st.id)["installed"]
+
+    def auto_install_mode(self) -> str:              # service_auto_install.py:1693, the same three answers
+        got = {self._d(st.id)["installed"] for st in self.stacks() if st.id != "loraham-pi-control"}
+        return "update" if got == {True} else "install" if got <= {False} else "mixed"
+
     def auto_install_welcome(self):
         # A pre-provisioned demo box is never "fresh" — suppress the first-run
         # "Nothing is installed yet" banner (it reads the real filesystem, which the demo
