@@ -158,7 +158,6 @@
           {{ daemon_badge(r.daemon, "rd-badge-" ~ key) }}
         </header>
         <div class="body">
-          {% if r.rid %}<p class="muted"><a href="{{ url_for('hardware_radio', rid=r.rid) }}">{{ r.name }}</a> ({{ r.model }})</p>{% endif %}
 
           {% if r.daemon.high_power and r.daemon.high_power.warn %}
             {# daemon 1.2.0: keyed on the RUNNING family + permission (STATUS), never the saved
@@ -247,6 +246,9 @@
               {{ links }}{# dash plan c1: the daemon starts from "Start a stack on rX" ("daemon <band>", first entry) #}
             {% endif %}
           {% endif %}
+
+          {# dash plan c2: the radio's hardware page, below the RX-TX Monitor (daemon up) or above "Running on" (stopped) #}
+          {% if r.rid %}<p class="hwlink"><a class="logslink" id="rd-hw-{{ key }}" href="{{ url_for('hardware_radio', rid=r.rid) }}">Hardware</a></p>{% endif %}
 
           {# --- running stack(s) on this radio (W2: its rid; a stray band's card: the band) --- #}
           <h3>Running on {{ r.rid }}</h3>
