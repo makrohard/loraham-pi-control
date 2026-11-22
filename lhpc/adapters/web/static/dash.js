@@ -223,12 +223,13 @@
   // could pop the collapsed System box open and start its polling unrequested. Elements
   // without an id are deliberately not persisted; anything but an id-keyed object is
   // ignored and removed.
+  var snapshot = {};                               // ids the signature-reload snapshot set (they win over a stored choice)
   try {
     var saved = JSON.parse(sessionStorage.getItem("dashDetails") || "null");
     sessionStorage.removeItem("dashDetails");
     if (saved && typeof saved === "object" && !Array.isArray(saved)) {
       document.querySelectorAll("details").forEach(function (el) {
-        if (el.id && typeof saved[el.id] === "number") el.open = saved[el.id] === 1;
+        if (el.id && typeof saved[el.id] === "number") { el.open = saved[el.id] === 1; snapshot[el.id] = true; }
       });
     }
   } catch (e) { /* ignore */ }
@@ -294,17 +295,23 @@
       });
     });
 
-  // Webserver box open-state persists across ORDINARY reloads too (the id-keyed sessionStorage
-  // restore above only survives dash.js's own signature reloads). Server renders it collapsed;
-  // we reopen if the operator left it open. Mirrors the System box's localStorage contract.
-  (function () {
-    var box = document.getElementById("wsbox");
+  // A box's open-state persists across ORDINARY reloads too (the id-keyed sessionStorage restore above only survives
+  // dash.js's own signature reloads, and wins over the stored choice): the Webserver box (rendered collapsed) and,
+  // dash plan c10, each radio card (rendered open; key lhpc:radiobox-<rid or band>). The stored "1" opens, "0"
+  // closes. The toggle listener is attached after the restore; the restore's own toggle event only writes the state
+  // the box now shows. Mirrors the System box's localStorage contract.
+  function remember(box, KEY) {
     if (!box) return;
-    var KEY = "lhpc:wsbox";
-    try { if (localStorage.getItem(KEY) === "1" && !box.open) box.open = true; }
-    catch (e) { /* private mode */ }
+    if (!snapshot[box.id]) {
+      try {
+        var v = localStorage.getItem(KEY);
+        if (v === "1" || v === "0") box.open = v === "1";
+      } catch (e) { /* private mode */ }
+    }
     box.addEventListener("toggle", function () {
       try { localStorage.setItem(KEY, box.open ? "1" : "0"); } catch (e) { /* private mode */ }
     });
-  })();
+  }
+  remember(document.getElementById("wsbox"), "lhpc:wsbox");
+  document.querySelectorAll("details.radiobox[id^='radiobox-']").forEach(function (box) { remember(box, "lhpc:" + box.id); });
 })();

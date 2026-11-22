@@ -707,6 +707,15 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
    the summary only reserves room for it. */
 .wsbox .fwline .hdrlogs { margin-left: auto; }
 .wsbox > details > summary { padding-right: 4rem; }
+/* dash plan c10: a radio card collapses like Webserver / System: the title and the daemon pill in the summary row */
+.radio-col > details.radiobox > summary { cursor: pointer; padding: .8rem 1rem; color: var(--ink); list-style: none;
+                                          display: flex; align-items: baseline; gap: .5rem; }
+.radio-col > details.radiobox > summary::-webkit-details-marker { display: none; }
+.radio-col > details.radiobox > summary::before { content: "▸"; color: var(--muted); }
+.radio-col > details.radiobox[open] > summary::before { content: "▾"; }
+.radio-col > details.radiobox > summary h2 { margin: 0; font-size: 1.05rem; display: inline; }
+.radio-col > details.radiobox > summary .badge { margin-left: auto; }
+.radio-col > details.radiobox[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 0; }
 .systab { table-layout: fixed; width: 100%; border-collapse: collapse; }
 .systab th { width: 4.6rem; text-align: left; font-weight: 600; font-size: .88rem;
              padding: .3rem .4rem .3rem 0; }

@@ -157,10 +157,12 @@
       {# dash plan c3: the same RF-log links (target/job/radio, error pill) in the daemon component row, logslink look #}
       {% set rfline %}<span class="rfline">RF log: {% for l in r.rflogs %}{% if not loop.first %} · {% endif %}{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a class="logslink" href="{{ url_for('logs_view', target=l.target, job=l.job, radio=r.rid or None) }}">{{ l.label }}</a>{% endif %}{% endfor %}</span>{% endset %}
       <div class="card radio-col{{ ' radio-stray' if r.stray }}" id="radio-{{ key }}" data-radio-band="{{ r.band }}"{% if r.rid %} data-radio-rid="{{ r.rid }}"{% endif %}>
-        <header>
+       {# dash plan c10: collapsible like Webserver / System (default open; dash.js restores the operator's choice) #}
+       <details class="radiobox" id="radiobox-{{ key }}" open>
+        <summary>
           <h2>{% if r.rid %}{{ r.name }} ({{ r.rid }}, {{ r.band }} MHz){% else %}{{ where }}{% endif %}{% if r.stray %} <span class="pill">no listed radio</span>{% endif %}</h2>
           {{ daemon_badge(r.daemon, "rd-badge-" ~ key) }}
-        </header>
+        </summary>
         <div class="body">
 
           {% if r.daemon.high_power and r.daemon.high_power.warn %}
@@ -365,6 +367,7 @@
 
           {% endif %}{# /r.stray else #}
         </div>
+       </details>
       </div>
     {% endfor %}
   </div>
