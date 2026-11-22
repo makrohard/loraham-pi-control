@@ -1192,6 +1192,13 @@ class LifecycleOpsMixin:
             if note:
                 out.append(f"    ({note})")
 
+        skipped = run.skipped            # Q11b: "if component is optional, warn only but start the rest"
+        def _refuse(comp, stack, why):   # a stack start skips an optional part; a direct start or a required part blocks
+            if not (_target_is_stack and stack.skippable(comp.id)):
+                return record(comp, stack, Outcome.BLOCKED, why)
+            skipped.append(f"{comp.id}: {why} — not started; the rest of {stack.id} starts")
+            record(comp, stack, Outcome.SKIPPED, skipped[-1].split(": ", 1)[1])
+
         # Config generation + launch config are COMPONENT-scoped so a direct component start never
         # writes a sibling's config nor leaks the target's run params into a dependency: each
         # component renders its OWN saved/default values (plus its own inherited identity).
@@ -1314,7 +1321,7 @@ class LifecycleOpsMixin:
                        "(start it from the desktop, not over SSH)")
                 continue
             if comp.source and not self._source_present(comp) and (_why := self.install_blocker(comp)):
-                record(comp, stack, Outcome.BLOCKED, _why)
+                _refuse(comp, stack, _why)
                 continue
             if comp.interactive:
                 # Never auto-start an interactive TUI — the operator runs it in a terminal.
@@ -1397,7 +1404,7 @@ class LifecycleOpsMixin:
                                " (note: interactive marker could not be persisted — the "
                                "dashboard may not show its command block)")
                 if blocker:
-                    record(comp, stack, Outcome.BLOCKED, f"interactive but {blocker}")
+                    _refuse(comp, stack, f"interactive but {blocker}")
                 else:
                     # For a CLI/SSH operator this result IS the surface — there is no dashboard
                     # card in a terminal — so the copy-paste command is printed for the
@@ -1430,7 +1437,7 @@ class LifecycleOpsMixin:
                 record(comp, stack, Outcome.BLOCKED, "resource conflict: " + "; ".join(_held))
                 continue
             if (_why := self.install_blocker(comp)):
-                record(comp, stack, Outcome.BLOCKED, _why)
+                _refuse(comp, stack, _why)
                 continue
             # Regenerate any config file this component reads (per the chosen band). A
             # generation FAILURE for this component blocks the launch — never start with
@@ -1576,10 +1583,10 @@ class LifecycleOpsMixin:
             # `auto` could not get a fix. Never gating, but never silent either: the node is
             # on the air without a position and the operator has to be able to see that.
             out = [*out, f"  [gps] {prep.position_note}"]
-        warned = {}
+        warned = {"optional_skipped": run.skipped} if run.skipped else {}   # Q11b: the start note shows each skip
         if ok and (_spi := self._spi_shared_warning(target, band, radio, prep.inst)):
             out = [*out, f"  [warning] {_spi}"]   # only once the new side came up
-            warned = {"spi_warning": _spi}        # the console's start banner shows it too
+            warned = {**warned, "spi_warning": _spi}   # the console's start banner shows it too
         if ok and (_ohw := _ohs.start_warnings(self, target, prep.inst)):
             out = [*out, *(f"  [warning] {w}" for w in _ohw)]
             warned = {**warned, "openhop_warnings": _ohw}   # the stack page's start note too
@@ -3110,6 +3117,7 @@ class LifecycleOpsMixin:
         if (result.data or {}).get("spi_warning"):
             out.append(result.data["spi_warning"])
         out += list((result.data or {}).get("openhop_warnings") or ())
+        out += list((result.data or {}).get("optional_skipped") or ())
         return out
 
     @invalidates_snapshot

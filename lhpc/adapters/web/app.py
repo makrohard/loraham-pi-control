@@ -1216,7 +1216,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     "system_deps": service.system_deps(stack.id),
                     "deps_report": service.deps_report(stack.id),
                     # U8: what refuses a start ([(cid, reason)]) and what starts but has a rebuild available
-                    "start_ready": (_sr := service.start_readiness(stack.id, _view_inst)),   # its shown radio's run order
+                    # Q11b: an optional part that may not start is skipped with a warning (start_optional), never
+                    # "required to start"; the required refusals and the rebuild list are the readiness' own
+                    "start_ready": ((_sr := service.start_readiness(stack.id, _view_inst))   # its shown radio's run order;
+                                    and ([b for b in _sr[0] if not stack.skippable(b[0])], _sr[1])),   # a 2-tuple: truthy
+                    "start_optional": [b for b in _sr[0] if stack.skippable(b[0])],
                     # a provider to build BEFORE the main, and only one whose start refusal is a source build (N1)
                     "needs_build_deps": [c for c in service.unbuilt_build_deps(stack.id)
                                          if dict(_sr[0]).get(c, "").startswith("not built")],
@@ -2293,6 +2297,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # The start readiness names each refusal with its own remedy (a build, the binary
             # reinstall, an unsafe install to resolve); changed build inputs alone start.
             blocked, _rebuild = service.start_readiness(target, inst)     # the radio it starts on
+            blocked = [b for b in blocked if not service.stack(target).skippable(b[0])]   # Q11b: skipped, warned
             if blocked:
                 flash(f"'{target}' cannot start yet — "
                       + "; ".join(f"{cid}: {why}" for cid, why in blocked) + ".", "warn")

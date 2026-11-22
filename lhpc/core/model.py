@@ -577,6 +577,12 @@ class Stack:
                 return c
         return None
 
+    def skippable(self, component_id: str) -> bool:
+        """Q11b: whether a stack start may skip this component when it may not start (warn, start the rest): it is
+        optional and no component of the stack is built from it (a build provider's blocker stays a refusal)."""
+        c = self.component(component_id)
+        return bool(c and c.optional) and not any(component_id in (x.build_requires or ()) for x in self.components)
+
     @property
     def main_component(self) -> Component | None:
         return self.component(self.main) if self.main else (

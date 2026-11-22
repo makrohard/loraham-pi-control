@@ -229,7 +229,9 @@ def test_a_required_component_whose_checkout_is_gone_refuses_the_start(box, web,
 
 def test_an_unticked_optional_component_does_not_refuse_the_start(box, web, csrf, tmp_path, monkeypatch):
     """meshcore's web UI (optional, not ticked, so not in the run order) present and unbuilt: the start does
-    not launch it, so it neither refuses the start nor offers a rebuild. Ticked on r2 only, it refuses meshcore@r2, not r3.
+    not launch it, so it neither refuses the start nor offers a rebuild. Ticked on r2 only, its readiness names it on
+    r2, not r3, and (Q11b, his word 11-22: "if component is optional, warn only but start the rest") the web start of
+    meshcore@r2 is not refused for it either: the start skips it with a warning.
     Red before: [("meshcore-webui", "not built — ...")] refused the web start of meshcore@r3."""
     box((R1, R2_868, R3))
     svc = _built(tmp_path, monkeypatch, "meshcore", "")
@@ -248,5 +250,5 @@ def test_an_unticked_optional_component_does_not_refuse_the_start(box, web, csrf
     c = web()                                                                # the start gate, on the radio it starts on:
     resp = c.post("/action", data={"_csrf": csrf(c), "op": "start", "target": "meshcore@r2"})
     page = c.get(resp.location.split("#")[0]).get_data(as_text=True)
-    assert "inst=meshcore" in resp.location and "cannot start yet — meshcore-webui: not built" in page, resp.location
+    assert "#stack-install-" not in resp.location and "cannot start yet" not in page, resp.location   # Q11b
     assert "cannot start yet" not in _start_flash(web(), csrf, "meshcore@r3")
