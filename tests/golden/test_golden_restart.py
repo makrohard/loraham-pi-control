@@ -20,9 +20,11 @@ LOCKS = ["admission", "lock:controller-task-admission", "config-stable", "rechec
          "lock:claim.loraham.radio.r1", "lock:claim.tcp.port.8001", "lock:lifecycle.kiss",
          "lock:source.src/loraham-daemon", "lock:source.src/loraham-kiss-tnc"]
 STOP_LEG = ["mutate:signal:loraham-kiss-serial", "mutate:signal:loraham-kiss-tnc",
-            "lock:claim.tcp.port.12323", "lock:claim.tcp.port.18083", "lock:claim.tcp.port.7000",
+            "lock:claim.tcp.port.12323", "lock:claim.tcp.port.18083",
+            "lock:claim.tcp.port.37428", "lock:claim.tcp.port.37429", "lock:claim.tcp.port.4242",   # reti B1: Reticulum
+            "lock:claim.tcp.port.7000",                                     # is a daemon client by default (backend daemon)
             "lock:claim.tcp.port.8080", "lock:claim.voice.ui-r1", "lock:lifecycle.chat",       # DEC-W351; K8f: voice@r1's own
-            "lock:lifecycle.daemon", "lock:lifecycle.graywolf", "lock:lifecycle.meshcom",
+            "lock:lifecycle.daemon", "lock:lifecycle.graywolf", "lock:lifecycle.meshcom", "lock:lifecycle.reticulum",
             "lock:lifecycle.voice", "mutate:signal:loraham-daemon", "mutate:feed-floor:433",
             "final:clear-restart-marker:kiss@r1"]                         # K5: per instance
 START_LEG = ["recheck:start", "mutate:feed-floor:433", "mutate:config-files:loraham-kiss-tnc",  # RADIO-POWER 3a

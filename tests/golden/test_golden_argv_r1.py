@@ -50,6 +50,7 @@ K4B_PATHS = {
                          # RADIO-POWER 3b: the TNC reads its instance's conf file (its `power`), not the example
                          "loraham_kiss_tnc.conf.example": "/rt/config/files/r1/loraham_kiss_tnc.conf"},
     "meshcom-bridge": {"/rt/logs/rf-meshcom.log": "/rt/logs/r1/rf-meshcom.log"},
+    "rns": {"LoRa": "LoRa r1"},     # reti B3: the node's runner names its owner radio's interface, `LoRa <rid>`
 }
 
 
@@ -80,7 +81,8 @@ def _resolve() -> dict:
                 continue
             src = str(svc._paths.resolve_source(c.source.path)) if c.source else str(RT)
             # stage L5 (W3): a daemon client runs as its radio's instance, here r1's
-            inst = commands.Instance("r1") if any("{rid}" in str(p.default or "") for p in c.run_params) else commands.TEMPLATE
+            inst = commands.Instance("r1") if (any("{rid}" in str(p.default or "") for p in c.run_params)
+                                               or any("{rid}" in t for t in c.run_argv)) else commands.TEMPLATE   # reti B3
             argv = commands.expand_argv(c.run_argv, c, svc.stack_config(c.id, c.band),
                                         Config().operator, str(RT), src, c.band, inst=inst, daemon={"power": "14"})
             out[c.id] = ["<python>" if t == python else t.replace(pkg, "<lhpc>") for t in argv]

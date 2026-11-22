@@ -18,10 +18,14 @@ pytestmark = pytest.mark.needs_session
 STOP_LOCKS = ["lock:claim.loraham.daemon-socket.r1", "lock:claim.loraham.radio.r1",
               "lock:claim.tcp.port.8001", "lock:lifecycle.kiss"]
 SIGNAL = ["mutate:signal:loraham-kiss-serial", "mutate:signal:loraham-kiss-tnc"]
-RELEASE_DAEMON = ["lock:claim.tcp.port.12323", "lock:claim.tcp.port.18083", "lock:claim.tcp.port.7000",
+# reti B1: Reticulum is a daemon client by default (backend = daemon), so the daemon release locks its node too
+RELEASE_DAEMON = ["lock:claim.tcp.port.12323", "lock:claim.tcp.port.18083",
+                  "lock:claim.tcp.port.37428", "lock:claim.tcp.port.37429", "lock:claim.tcp.port.4242",   # reti B1
+                  "lock:claim.tcp.port.7000",
                   "lock:claim.tcp.port.8080", "lock:claim.voice.ui-r1",       # DEC-W351: voice's UI claim; K8f: voice@r1's own
                   "lock:lifecycle.chat", "lock:lifecycle.daemon",
-                  "lock:lifecycle.graywolf", "lock:lifecycle.meshcom", "lock:lifecycle.voice",
+                  "lock:lifecycle.graywolf", "lock:lifecycle.meshcom", "lock:lifecycle.reticulum",   # reti B1
+                  "lock:lifecycle.voice",
                   "mutate:signal:loraham-daemon", "mutate:feed-floor:433"]
 FINAL = ["final:clear-restart-marker:kiss@r1", "final:stop-intent:['kiss@r1']"]      # K5: per instance
 APPLIED = {"ok": True, "summary": "Stop applied for 'kiss'.", "data_keys": [],
@@ -34,7 +38,7 @@ def test_plan_is_read_only(kiss_box, run_op):
     plan = run_op(box.root, lambda: box.svc.stop("kiss"))
     assert plan.fields == {
         "ok": True, "summary": "Stop plan for 'kiss': 2 component(s).",
-        "data_keys": ["changes", "commands", "dependents", "other_bands"],
+        "data_keys": ["changes", "commands", "dependents", "members", "other_bands"],   # reti B6: the node's members
         "next_commands": ["lhpc stack stop kiss@r1 --yes"],
         "heads": ["[stop] loraham-kiss-serial", "[stop] loraham-kiss-tnc"], "outcomes": []}
     assert plan.phases == [] and plan.files == {"added": [], "removed": [], "changed": []}
