@@ -746,6 +746,12 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 #sysbox .sysgroup .actrow { margin: 0; }
 #sysbox .sysgroup .sysautostart form { margin-bottom: 0; }
 @media (max-width: 480px) { #sysbox .sysgroup { padding: .3rem .35rem; } }
+/* dash plan c12 S11: each Webserver entry its own box (the same look), boxes .45rem apart, no separator lines inside */
+#wsbox > .body { display: flex; flex-direction: column; gap: .45rem; }
+#wsbox .wsgroup { border: 1px solid var(--line); border-radius: 6px; padding: .45rem .6rem;
+                  background: color-mix(in srgb, var(--line) 18%, transparent); }
+#wsbox .wsgroup .wsline { border-bottom: 0; padding: .15rem 0; }
+@media (max-width: 480px) { #wsbox .wsgroup { padding: .3rem .35rem; } }
 /* Net renders as a FIXED two-line value (JS joins with \n): constant row height — a one-line
    string wrapped and unwrapped as the rate text length changed, bouncing the box height. */
 /* Net value: everything right-aligned; the rate lives in a FIXED-WIDTH block so the arrow

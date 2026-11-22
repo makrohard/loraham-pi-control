@@ -388,7 +388,9 @@
         {% if security_pill %}<span class="pill pill-{{ security_pill.level }}" title="{{ security_pill.title }}">{{ security_pill.label }}</span>{% endif %}
       </summary>
     <div class="body">
+      {# dash plan c12 S11 (his word): each entry its own box (div.wsgroup), the Firewall's follow-up lines inside its box #}
       {% if firewall %}
+      <div class="wsgroup">
       <div class="wsline fwline">
         <a class="wsname" href="{{ url_for('stacks_overview', open='firewall') ~ '#firewall-row' }}">Firewall</a>
         <span class="pill pill-{{ firewall.level }}" title="Managed firewall — declared/persistent/live are independent; green needs a verified current-boot live check">{{ firewall.line | replace('Firewall: ', '') }}</span>
@@ -405,6 +407,7 @@
             the two commands it shows.</span></div>
         {% endif %}
       {% endif %}
+      </div>
       {% endif %}
       {# A raw no-auth listener's pills: its own line, or the line of the page it is the same listener as (U3, K2). #}
       {% macro raw_pills(w) %}
@@ -427,6 +430,7 @@
       {% for w in webservers if not w.merged %}
         {# U3 (K2): every link names the row's radio, so the Stacks page renders that radio's panels #}
         {% set wl = url_for('stacks_overview', open=w.sid, cfg=w.cfg or None, radio=w.rid or None) ~ w.anchor %}
+        <div class="wsgroup">
         <div class="wsline">
           {% if w.kind == 'console' %}
             <a class="wsname" href="{{ url_for('stacks_overview') ~ '#webserver-row' }}">{{ w.name }}</a>
@@ -461,6 +465,7 @@
           {% if w.stopped %}<span class="pill pill-warn" title="This radio's instance is stopped, but its page still listens — start the instance, or disable its proxy and Apply." data-state="instance-stopped">instance stopped</span>{% endif %}
           {% if w.radio_off %}<span class="pill pill-warn" title="This radio is {{ w.radio_off }} in the hardware list, but its page still listens until Apply." data-state="radio-off">radio {{ w.radio_off }} — page still served until Apply</span>{% endif %}
           {% if w.raw %}{{ raw_pills(w.raw) }}{% endif %}
+        </div>
         </div>
       {% endfor %}
     </div>
