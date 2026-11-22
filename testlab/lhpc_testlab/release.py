@@ -14,9 +14,11 @@ import pathlib
 import re
 import signal
 import socket
+import ssl
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import warnings
 from pathlib import Path
@@ -37,6 +39,7 @@ MESHCHAT_UI = 8790
 REPEATER_DASHBOARD = 8000
 MESHCOM_UI = 18083
 MESHTASTIC_API = 4403
+MESHTASTIC_WEB = 9443                        # meshtasticd's own web server: HTTPS, self-signed
 
 STACK_REGRESSION_PHASES = ("install", "build", "start", "readiness")
 _STACK_ID_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
@@ -893,6 +896,66 @@ def readiness_failed(env: dict, stack: str, component: str, what: str) -> str:
     mark = f"{stack_regression(stack, 'readiness')}\n" if state in _GONE else ""
     logs = sorted(Path(env["LHPC_RUNTIME_ROOT"], "logs").glob(f"start-{component}*.log"))
     return f"{mark}{what} (LHPC reports {component}: {state}){_log_tails(logs)}"
+
+
+def _http_get(url: str, ctx) -> tuple:
+    """`(status, body)` of one bounded GET; `(0, b"")` when nothing answered."""
+    try:
+        with urllib.request.urlopen(url, timeout=5, context=ctx) as r:
+            return r.status, r.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, b""
+    except OSError:
+        return 0, b""
+
+
+def _web_ui_wrong(url: str, page, api, ctx) -> str:
+    """What is wrong with the web UI at `url` right now; "" when nothing is."""
+    status, body = _http_get(url, ctx)
+    if status != 200:
+        return f"answered {status or 'nothing'}"
+    if isinstance(page, bytes) and body != page:
+        return f"served {len(body)} bytes that are not the installed page ({len(page)} bytes)"
+    if isinstance(page, str) and page not in body.decode("utf-8", "replace"):
+        return f"served a page without {page!r}"
+    if api is None:
+        return ""
+    path, predicate = api
+    status, body = _http_get(urllib.parse.urljoin(url, path), ctx)
+    if status != 200:
+        return f"{path} answered {status or 'nothing'}"
+    if predicate is None:
+        return ""
+    try:
+        doc = json.loads(body)
+    except ValueError:
+        return f"{path} answered no JSON"
+    return "" if predicate(doc) else f"{path} answered {json.dumps(doc)[:300]}"
+
+
+def assert_web_ui(env: dict, stack: str, component: str, url: str, *, timeout: float, page=None,
+                  api=None, tls: bool = False, every: float = 2.0) -> None:
+    """The component's web UI really runs: `url` answers 200 UNAUTHENTICATED (a 401/403 is a
+    failure — a login page proves a server, not the UI), with its own page — `page` is a
+    substring of it (str) or the installed file's exact bytes — and, when `api = (path,
+    predicate)` is given, `path` answers 200 too and its JSON satisfies `predicate` (None: the
+    200 alone). Polled until it holds or `timeout` passes, at least once.
+
+    A check that did not pass is reported through `readiness_failed`: marked only when LHPC
+    reports `component` gone, so a wrong page from a component that still runs blames no stack.
+    It proves the page and one API answer, not that the page's scripts load.
+
+    `tls`: the lab's loopback endpoint serves the component's own self-signed certificate, so it
+    is not verified — this reaches 127.0.0.1 inside the lab only."""
+    ctx = None
+    if tls:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    deadline = time.monotonic() + timeout
+    while (wrong := _web_ui_wrong(url, page, api, ctx)) and time.monotonic() < deadline:
+        time.sleep(every)
+    assert not wrong, readiness_failed(env, stack, component, f"{component}'s web UI {url} {wrong}")
 
 
 def gui_startable(svc, stack_id: str, comp_id: str) -> bool:
