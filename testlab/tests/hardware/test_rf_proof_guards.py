@@ -400,6 +400,27 @@ def _rs(tmp_path, before, after, rns, want, box_env="", extra=""):
         assert "RS-DONE" in r.stdout, r.stdout + r.stderr
 
 
+@pytest.mark.parametrize("after, grew", [
+    ("RX 4\\nTX 7\\n", True),     # its RX, the announce and the exchange's proof or send
+    ("RX 4\\nTX 6\\n", False),    # one TX: the announce alone, the exchange went over the owner
+    ("RX 3\\nTX 9\\n", False),    # no RX
+    ("RX 4\\nTX x\\n", False),    # a count not a number
+])
+def test_row_13_member_leg_needs_an_rx_and_two_tx_on_the_members_own_log(tmp_path, after, grew):
+    r, _ = source_only(tmp_path, f'printf "RX 3\\nTX 5\\n" > "$EVD/a.txt"; printf "{after}" > "$EVD/b.txt"; '
+                                 'if rfgrew a.txt b.txt 2; then echo GREW; else echo NOT; fi')
+    assert r.stdout.strip() == ("GREW" if grew else "NOT"), r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("legacy, want", [
+    pytest.param(_l(RUN), "FAIL r1 UNREADABLE|", id="tx-in-run"),    # a TX of the run in a pre-85fa9df5 node-wide log
+    pytest.param(_l(PRE), "r1 0|", id="tx-before-run"),               # its lines from before the run: not this run's
+])
+def test_a_tx_in_the_node_wide_reticulum_log_makes_the_box_unreadable(tmp_path, legacy, want):
+    # red-before (82730d2d): the node-wide log was not read: r1 0 for both
+    _rs(tmp_path, BASE, {"logs/rf-reticulum.log": legacy}, "", want)
+
+
 BIG = "".join(f"daemon line {i:05d}\n" for i in range(400))      # 7200 bytes: a run log over 4 KiB at R0
 
 

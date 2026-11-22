@@ -142,7 +142,8 @@ RUNSET="cd {RT} && ./venv/lhpc/bin/python -c '$RUNSET_PY'"
 # (the copy-truncate roll): F <rid> <kind> <file> <records> <oldest record|-> <TX records with ts >= T0, plus every line
 # that does not parse after the last record before T0 (safe side)>. kind: daemon (rf-daemon.log: the frames the radio
 # aired), mirror (rf-kiss/-meshcom/-meshcore.log: the same frames again, logged on the daemon result), rns (rf-reticulum.log:
-# each radio of the node its own, product 85fa9df5), direct (any other rf-*.log of the radio: meshtastic over SPI). L <rid> <size>
+# each radio of the node its own, product 85fa9df5; a TX since T0 in the node-wide logs/rf-reticulum.log of an older product
+# makes every radio's count LEGACY: UNREADABLE), direct (any other rf-*.log of the radio: meshtastic over SPI). L <rid> <size>
 # <sha of the first <head bytes>> <transmit ERRORs> <prev state>: the daemon run log (no time stamps; daemon pin
 # f9b16468 daemon_tx.cpp:212 is the one airing path, its RF line is written only on success (:223), an error that may
 # have aired prints "transmit ERROR" (:219) to this log only); prev state = its cut file (inode:size:mtime_ns) or absent.
@@ -172,7 +173,7 @@ def selfnums(path):   # meshtastic: a packet to the node itself is handled local
                     if j and j.get("from") == j.get("to") and j.get("to") not in (None, 0, 4294967295):
                         out.add(j["to"])
     return out
-def count(rid, kind, path):
+def count(rid, kind, path, out=True):
     seen = False; recs = tx = loose = 0; old = None; own = selfnums(path)
     for p in (path + ".1", path):
         if not os.path.exists(p):
@@ -191,8 +192,9 @@ def count(rid, kind, path):
                     loose = 0
                 elif r["dir"] == "TX" and not (own and (jline(ln) or {}).get("to") in own):
                     tx += 1
-    if seen:
+    if seen and out:
         print("F", rid, kind, os.path.basename(path), recs, "-" if old is None else old, tx + loose)
+    return tx + loose
 for a in sys.argv[2:]:
     rid, band, hb = a.split(":"); d = "logs/" + rid
     for n in sorted(os.listdir(d)) if os.path.isdir(d) else []:
@@ -203,7 +205,11 @@ for a in sys.argv[2:]:
     q = "logs/" + runtime_fs.prev_log_name(os.path.basename(p))
     s = os.stat(q) if os.path.exists(q) else None
     print("L", rid, len(b), hashlib.sha256(b[:int(hb)]).hexdigest()[:16], b.count(b" transmit ERROR:"),
-          "absent" if s is None else "%d:%d:%d" % (s.st_ino, s.st_size, s.st_mtime_ns))'
+          "absent" if s is None else "%d:%d:%d" % (s.st_ino, s.st_size, s.st_mtime_ns))
+# the node-wide Reticulum log of a product before 85fa9df5 names no radio: a TX in it since T0 -> every radio UNREADABLE
+if count("-", "rns", "logs/rf-reticulum.log", out=False):
+    for a in sys.argv[2:]:
+        print("F", a.split(":")[0], "rns", "rf-reticulum.log", 0, "-", "LEGACY")'
 RUNTX="cd {RT} && ./venv/lhpc/bin/python -c '$TXC_PY'"
 USBLIST='for d in /sys/bus/usb/devices/[0-9]*-*; do case $d in *:*) continue;; esac; echo "${d##*/} $(cat $d/idVendor 2>/dev/null):$(cat $d/idProduct 2>/dev/null) dev=$(cat $d/devnum 2>/dev/null) ser=$(cat $d/serial 2>/dev/null)"; done'
 USBEV='USB disconnect|new (full|high|low|super)-speed USB|reset (full|high|low|super)-speed USB|over-current'
@@ -1125,8 +1131,8 @@ MCREADY='for i in $(seq 1 15); do (exec 3<>/dev/tcp/127.0.0.1/8790) 2>/dev/null 
 rnslog() { echo "for d in RX TX; do echo \"\$d \$(grep -cF -- \" \$d \" {RT}/logs/$1/rf-reticulum.log 2>/dev/null)\"; done"; }   # rnslog <rid>: its RF log's RX and TX lines
 ifis() { local n u; n=$(body "$1" | grep -cE "^IF .*LoRa $2(]|\$)"); u=$(body "$1" | grep -cE "^IF up .*LoRa $2(]|\$)")   # ifis <file> <rid> <up|gone>
   case $3 in up) [ "$n" = 1 ] && [ "$u" = 1 ];; *) [ "$n" = 0 ];; esac; }
-rfgrew() { local d a c; for d in RX TX; do a=$(body "$1" | sed -n "s/^$d //p"); c=$(body "$2" | sed -n "s/^$d //p")   # rfgrew <before> <after>
-  [[ $a =~ ^[0-9]+$ && $c =~ ^[0-9]+$ ]] && [ "$c" -gt "$a" ] || return 1; done; }
+rfgrew() { local d a c m; for d in RX TX; do a=$(body "$1" | sed -n "s/^$d //p"); c=$(body "$2" | sed -n "s/^$d //p")   # rfgrew <before> <after> [min TX]
+  m=1; [ "$d" = RX ] || m=${3:-1}; [[ $a =~ ^[0-9]+$ && $c =~ ^[0-9]+$ ]] && [ $((c - a)) -ge "$m" ] || return 1; done; }
 rnsnode() {   # rnsnode <tag> <box> <member rid> <up|gone> [meshchat]: the node kept its pid and start time (13-pid0.txt), the
   # member's interface is up in it (or gone from it: the radio is free), and (meshchat) MeshChat still answers
   must "$2" "$1-pid.txt" "$(rnspid)"; must "$2" "$1-if.txt" "$RNSIF"; [ -z "${5:-}" ] || X "$2" "$1-meshchat.txt" "$MCREADY"; [ "$MODE" = dry ] && return 0
@@ -1158,9 +1164,11 @@ row_13() {   # Reticulum: two radios, one node: the owner (A) opens as row 12 do
   must "$b" 13-member-rf0.txt "$(rnslog "$rm")"; must "$b" 13-member-mstop.txt "$(gstop "meshchat@$ro")"
   rnsx 13 13-member "$b" "$ro" "$pk" "$q" "$qm"; rnsback 13-member
   must "$b" 13-member-rf1.txt "$(rnslog "$rm")"
-  [ "$MODE" = dry ] || rfgrew 13-member-rf0.txt 13-member-rf1.txt || fail "row 13 member: no new RX and TX line on $rm's own RF log in the exchange (13-member-rf0/1.txt)"
+  # TX >= 2: MeshChat's announce goes out on every interface; the exchange's proof or send over the member is the second (the
+  # node relays nothing: enable_transport = No), so an exchange that went over the owner fails here
+  [ "$MODE" = dry ] || rfgrew 13-member-rf0.txt 13-member-rf1.txt 2 || fail "row 13 member: no new RX line, or fewer than 2 new TX lines (announce + the exchange), on $rm's own RF log (13-member-rf0/1.txt)"
   undo_to "$mp" || stop "row 13: the owner's power restore failed (UNRESOLVED.txt)"   # with the exchange's MeshChat stop
-  REPORT 13 "$(rowname 13)" "$b ($rm)" "$bd" "$rn" "$(dirtext member)" "yes: LXMF delivered and stored, RX and TX on $rm's RF log$RNSB" "$ro at $STICK_MIN dBm (minimum, restored); $rm $(getk "P_$qm" as-is) dBm (as-is)" PASS
+  REPORT 13 "$(rowname 13)" "$b ($rm)" "$bd" "$rn" "$(dirtext member)" "yes: LXMF delivered and stored, RX and >= 2 TX (announce + the exchange) on $rm's RF log$RNSB" "$ro at $STICK_MIN dBm (minimum, restored); $rm $(getk "P_$qm" as-is) dBm (as-is)" PASS
   leg leave; must "$b" 13-leave.txt "$(form stop inst="reticulum@$rm")"; rnsnode 13-leave "$b" "$rm" gone
   must "$b" 13-leave-mstop.txt "$(gstop "meshchat@$ro")"; rnsx 13 13-leave "$b" "$ro" "$pk" "$q"; rnsback 13-leave
   REPORT 13 "$(rowname 13)" "$b ($ro)" "$bd" "$rn" "$(dirtext leave)" "yes: the node's pid unchanged, LoRa $rm gone, LXMF delivered over $ro$RNSB" "$ro $(getk "P_$q" as-is) dBm (as-is)" PASS

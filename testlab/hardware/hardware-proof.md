@@ -53,8 +53,8 @@ Row 5's prerequisite (an operator step before the run): save `backend = spi` on 
 (`lhpc config reticulum@<rid> backend spi`); the product's default is `daemon`, and row 5 stops on it.
 Row 13 opens the node on the owner as row 12 does (one exchange), then joins the member (`lhpc stack start
 reticulum@<rid> --join`): the node keeps its pid and start time, the member's interface is up and MeshChat answers. One
-exchange over the member follows with the owner at its minimum (restored after; the member's own RF log must gain RX and TX
-lines), then the member's stop (the node keeps its pid, the member's interface is gone) and one exchange over the owner, the
+exchange over the member follows with the owner at its minimum (restored after; the member's own RF log must gain an RX
+line and at least 2 TX lines: MeshChat's announce and the exchange, which the node relays over no other radio), then the member's stop (the node keeps its pid, the member's interface is gone) and one exchange over the owner, the
 member's join again, and the owner's stop (no node process, no Reticulum instance left). The member is the row's third
 endpoint (`member=H:HMS` in the `ROWS` flags): absent, the row is NOT RUN.
 Rows 3 and 4, peer -> box: the word must also show up inside the app on the box, not only in its radio log: a Meshtastic
