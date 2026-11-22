@@ -1625,6 +1625,8 @@ main = "meshtastic"
     kind = "tcp"
     address = "127.0.0.1:{port:9443}"
     proxy_name = "Meshtastic UI"
+    # F25: the Home card shows this web GUI on the "Meshtastic web client" row (the UI it serves), not on meshtasticd's.
+    card_component = "meshtastic-web"
     # Managed Firewall DENY-DEFAULT (see 4403): the stack web proxy (suggested :8447) is the sanctioned path.
     firewall = { auth = "none", deny = true }
     role = "listener"

@@ -20,8 +20,8 @@ def test_home_shows_meshcoms_web_link_while_its_console_is_still_deaf(tmp_path, 
     r = web(service_factory=lambda: svc).get("/", headers={"Host": "localhost:8443"})
     assert r.status_code == 200
     doc = parse(r.get_data(as_text=True))
-    cards = [doc.within(d) for d in doc.find("div", class_="runstack")
-             if doc.within(d).find("p", **{"data-stack": "meshcom"})]
+    cards = [doc.within(d) for d in doc.find("details", class_="runstack")
+             if doc.within(d).find("summary", **{"data-stack": "meshcom"})]
     assert cards, "no MeshCom card on Home"
     for card in cards:
-        assert [a["href"] for a in card.find("a", class_="iface-web")] == ["http://127.0.0.1:18083"]
+        assert [a["href"] for a in card.find("a", class_="webpill")] == ["http://127.0.0.1:18083"]

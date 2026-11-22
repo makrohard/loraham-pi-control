@@ -46,8 +46,8 @@ def _block(web, svc, headers, rid):
     r = web(service_factory=lambda: svc).get("/", headers=headers)
     assert r.status_code == 200
     doc = parse(r.get_data(as_text=True))
-    (block,) = [doc.within(d) for d in doc.find("div", class_="runstack")
-                if doc.within(d).find("p", **{"data-stack": f"meshcom@{rid}"})]
+    (block,) = [doc.within(d) for d in doc.find("details", class_="runstack")
+                if doc.within(d).find("summary", **{"data-stack": f"meshcom@{rid}"})]
     return block
 
 
@@ -64,8 +64,8 @@ def _row(block, cid):
 
 def test_a_local_viewer_gets_each_instances_own_web_ui(tmp_path, web):
     svc = _svc(tmp_path)
-    assert _hrefs(_block(web, svc, LOCAL, "r3"), "iface-web") == ["http://127.0.0.1:18349"]
-    assert _hrefs(_block(web, svc, LOCAL, "r1"), "iface-web") == ["http://127.0.0.1:18083"]
+    assert _hrefs(_block(web, svc, LOCAL, "r3"), "webpill") == ["http://127.0.0.1:18349"]
+    assert _hrefs(_block(web, svc, LOCAL, "r1"), "webpill") == ["http://127.0.0.1:18083"]
 
 
 def test_config_and_logs_name_the_instances_radio(tmp_path, web):
@@ -78,15 +78,15 @@ def test_config_and_logs_name_the_instances_radio(tmp_path, web):
 def test_a_lan_viewer_gets_an_exposed_instance_at_the_host_it_reached(tmp_path, web):
     _remote(tmp_path)
     svc = _svc(tmp_path, exposed=(WEB["r3"],))
-    assert _hrefs(_block(web, svc, LAN, "r3"), "iface-web") == ["http://198.51.100.7:18349/"]
+    assert _hrefs(_block(web, svc, LAN, "r3"), "webpill") == ["http://198.51.100.7:18349/"]
     r1 = _block(web, svc, LAN, "r1")                                  # r1's listener stays on loopback
-    assert _hrefs(r1, "iface-web") == [] and _hrefs(r1, "iface-local") == [SETTINGS.format("r1")]
+    assert _hrefs(r1, "webpill") == [] and _hrefs(r1, "iface-local") == [SETTINGS.format("r1")]
 
 
 def test_a_client_network_viewer_gets_the_access_point_address(tmp_path, web):
     _remote(tmp_path)
     svc = _svc(tmp_path, exposed=(WEB["r3"],))
-    assert _hrefs(_block(web, svc, AP, "r3"), "iface-web") == ["http://10.42.0.1:18349/"]
+    assert _hrefs(_block(web, svc, AP, "r3"), "webpill") == ["http://10.42.0.1:18349/"]
 
 
 def test_a_loopback_instance_seen_remotely_links_its_own_settings(tmp_path, web):
@@ -113,8 +113,8 @@ def test_the_instances_own_proxied_page_decides_its_link(tmp_path, web):
         svc = _svc(tmp_path, extra=[listen] if listen else [])
         _proxy(svc, "meshcom@r3", 8470)
         block = _block(web, svc, LOCAL, "r3")
-        assert (_hrefs(block, "iface-web"), _hrefs(block, "iface-local")) == (want_web, want_local), listen
-        assert _hrefs(_block(web, svc, LOCAL, "r1"), "iface-web") == ["http://127.0.0.1:18083"]   # r1: direct
+        assert (_hrefs(block, "webpill"), _hrefs(block, "iface-local")) == (want_web, want_local), listen
+        assert _hrefs(_block(web, svc, LOCAL, "r1"), "webpill") == ["http://127.0.0.1:18083"]   # r1: direct
 
 
 def test_a_proxied_instance_seen_remotely(tmp_path, web):
@@ -125,7 +125,7 @@ def test_a_proxied_instance_seen_remotely(tmp_path, web):
         svc = _svc(tmp_path, extra=[listen] if listen else [])
         _proxy(svc, "meshcom@r3", 8470)
         block = _block(web, svc, LAN, "r3")
-        assert _hrefs(block, "iface-web") == want_web, listen
+        assert _hrefs(block, "webpill") == want_web, listen
         if label:
             (local,) = block.find("a", class_="iface-local")
             assert local["href"] == SETTINGS.format("r3") and label in local.text, listen
@@ -135,7 +135,7 @@ def test_another_instances_proxied_page_does_not_decide_this_ones(tmp_path, web)
     _remote(tmp_path)
     svc = _svc(tmp_path, extra=[("0.0.0.0", 8471)])
     _proxy(svc, "meshcom@r1", 8471)                                   # r1 proxied and exposed, r3 not proxied
-    assert _hrefs(_block(web, svc, LAN, "r1"), "iface-web") == ["http://198.51.100.7:8471/"]
+    assert _hrefs(_block(web, svc, LAN, "r1"), "webpill") == ["http://198.51.100.7:8471/"]
     assert _hrefs(_block(web, svc, LAN, "r3"), "iface-local") == [SETTINGS.format("r3")]
 
 
@@ -150,7 +150,7 @@ def test_a_booting_instance_shows_the_badge_and_its_links(tmp_path, web, monkeyp
     monkeypatch.setattr(Lifecycle, "_original_ceased", lambda self, rec: False)
     block = _block(web, _svc(tmp_path), LOCAL, "r3")
     assert block.find("span", class_="badge-booting")
-    assert _hrefs(block, "iface-web") == ["http://127.0.0.1:18349"]
+    assert _hrefs(block, "webpill") == ["http://127.0.0.1:18349"]
     assert len(_hrefs(_row(block, "meshcom-qemu"), "logslink")) == 2
 
 
@@ -190,8 +190,8 @@ def _mc_block(web, svc, rid, headers=LOCAL):
     assert r.status_code == 200
     doc = parse(r.get_data(as_text=True))
     (card,) = [doc.within(d) for d in doc.find("div", class_="radio-col", **{"data-radio-rid": rid})]
-    (block,) = [card.within(d) for d in card.find("div", class_="runstack")
-                if card.within(d).find("p", **{"data-stack": f"meshcore@{rid}"})]
+    (block,) = [card.within(d) for d in card.find("details", class_="runstack")
+                if card.within(d).find("summary", **{"data-stack": f"meshcore@{rid}"})]
     return block
 
 
@@ -209,27 +209,29 @@ def test_a_stopped_web_ui_of_a_running_instance_has_its_row_and_run_on_its_card(
     assert _forms(row) == [("start", "meshcore-webui@r4")]
     assert _hrefs(row, "logslink") == ["/stacks?cfg=meshcore&radio=r4#stack-settings-meshcore",
                                        "/logs/meshcore-webui?radio=r4"]
-    assert _hrefs(row, "iface-web") == [] and _hrefs(row, "iface-local") == []          # stopped: no interface
+    assert _hrefs(row, "webpill") == [] and _hrefs(row, "iface-local") == []          # stopped: no interface
     assert _forms(_row(block, "meshcore-gps")) == [("stop", "meshcore-gps@r4")]        # running optional: Stop
     assert _forms(_row(block, "meshcore-node")) == []                                  # the main: the stack's Stop
     assert _forms(block)[-2:] == [("stop", "meshcore@r4"), ("restart", "meshcore@r4")]  # W325, kept
 
 
-def test_a_running_web_ui_has_its_stop_its_link_and_the_head_link(tmp_path, web):
+def test_a_running_web_ui_has_its_stop_and_its_link_in_its_box_header(tmp_path, web):
+    # F22: the web UI's link is a pill in its own box header only; the stack header carries no link (was layout B's
+    # head "Web UI ↗")
     block = _mc_block(web, _mc(tmp_path, {"r4": ["meshcore-node", "meshcore-webui", "meshcore-gps"]},
                                ports=[MC_NODE["r4"], MC_WEB["r4"]]), "r4")
     row = _row(block, "meshcore-webui")
     assert _forms(row) == [("stop", "meshcore-webui@r4")]
-    assert _hrefs(row, "iface-web") == [f"http://127.0.0.1:{MC_WEB['r4']}"]
-    assert _hrefs(block, "headlink") == [f"http://127.0.0.1:{MC_WEB['r4']}"]
-    head = block.within(block.find("p", **{"data-stack": "meshcore@r4"})[0])
-    assert "Web UI ↗" in head.text and head.find("a", class_="headlink")
+    head = row.within(row.find("summary", class_="shead")[0])
+    assert [a["href"] for a in head.find("a", class_="webpill")] == [f"http://127.0.0.1:{MC_WEB['r4']}"]
+    assert _hrefs(block, "webpill") == [f"http://127.0.0.1:{MC_WEB['r4']}"] and "Web UI ↗" in head.text   # once
+    assert not block.within(block.find("summary", **{"data-stack": "meshcore@r4"})[0]).find("a")
 
 
-def test_the_head_has_no_web_ui_link_while_the_web_ui_is_stopped(tmp_path, web):
+def test_no_web_ui_link_while_the_web_ui_is_stopped(tmp_path, web):
     block = _mc_block(web, _mc(tmp_path, {"r4": ["meshcore-node"]}, ports=[MC_NODE["r4"]]), "r4")
     assert _row(block, "meshcore-webui").find("span", class_="badge-stopped")           # anchor: the row is there
-    assert _hrefs(block, "headlink") == [] and "Web UI ↗" not in block.text
+    assert _hrefs(block, "webpill") == [] and "Web UI ↗" not in block.text
 
 
 def test_each_cards_rows_and_links_are_its_own_instances(tmp_path, web):
@@ -245,7 +247,7 @@ def test_each_cards_rows_and_links_are_its_own_instances(tmp_path, web):
     assert f"127.0.0.1:{MC_NODE['r4']}" in _row(r4, "meshcore-node").text                # r4's own note
     assert f"tcp: 127.0.0.1:{MC_NODE['r2']}" in _row(r2, "meshcore-node").text            # r2's own address
     assert not _shows_port(r4.text, MC_NODE["r2"]) and not _shows_port(r2.text, MC_NODE["r4"])
-    assert _hrefs(r2, "iface-web") == [f"http://127.0.0.1:{MC_WEB['r2']}"] and _hrefs(r4, "iface-web") == []
+    assert _hrefs(r2, "webpill") == [f"http://127.0.0.1:{MC_WEB['r2']}"] and _hrefs(r4, "webpill") == []
     assert _forms(_row(r2, "meshcore-webui")) == [("stop", "meshcore-webui@r2")]
     assert _forms(_row(r4, "meshcore-webui")) == [("start", "meshcore-webui@r4")]
     assert all("radio=r4" in h for h in _hrefs(r4, "logslink")) and all("radio=r2" in h for h in _hrefs(r2, "logslink"))
@@ -300,7 +302,7 @@ def test_an_unapplied_port_move_shows_the_live_port_pending_on_the_card(tmp_path
         "proxies": [{"stack_id": "meshcom@r3", "bind": "127.0.0.1", "port": 8845, "mode": "local",
                      "scheme": "http", "access_mode": "no-auth"}]}})
     block = _block(web, svc, LOCAL, "r3")
-    assert _hrefs(block, "iface-web") == ["http://127.0.0.1:8845/"] and "9000" not in block.text
+    assert _hrefs(block, "webpill") == ["http://127.0.0.1:8845/"] and "9000" not in block.text
     assert "(pending Apply)" in block.text
 
 
@@ -314,8 +316,8 @@ def test_an_orphan_keeps_its_state_stop_and_note_and_gets_no_run(tmp_path, web):
     r = web(service_factory=lambda: svc).get("/", headers=LOCAL)
     assert r.status_code == 200
     doc = parse(r.get_data(as_text=True))
-    (block,) = [doc.within(d) for d in doc.find("div", class_="runstack")
-                if doc.within(d).find("p", **{"data-stack": "meshcom"})]
+    (block,) = [doc.within(d) for d in doc.find("details", class_="runstack")
+                if doc.within(d).find("summary", **{"data-stack": "meshcom"})]
     rows = block.find("li")
     assert len(rows) > 1 and any("stopped" in li.text and "opt" in li.text for li in rows)   # a stopped optional part
     assert block.find("p", id="noinst-r1-meshcom")                                          # its note
@@ -351,24 +353,25 @@ def _orphan_meshcom(tmp_path, web):
     assert r.status_code == 200
     doc = parse(r.get_data(as_text=True))
     (card,) = [doc.within(d) for d in doc.find("div", class_="radio-col", **{"data-radio-rid": "r1"})]
-    (block,) = [card.within(d) for d in card.find("div", class_="runstack")
-                if card.within(d).find("p", **{"data-stack": "meshcom"})]
+    (block,) = [card.within(d) for d in card.find("details", class_="runstack")
+                if card.within(d).find("summary", **{"data-stack": "meshcom"})]
     return block
 
 
-def test_an_orphans_running_part_has_its_stop_on_its_rows_first_line(tmp_path, web):
-    # second read M1 (mutant X2: the Stop rendered after the row instead of on its line 1 survived)
+def test_an_orphans_running_part_has_its_stop_last_in_its_box(tmp_path, web):
+    # F18 (his word): a row's button is the LAST thing in its box, left-aligned, never in the header (was: on line 1)
     row = _row(_orphan_meshcom(tmp_path, web), "meshcom-gps")
-    (head,) = [row.within(d) for d in row.find("div", class_="chead")]
-    (act,) = [head.within(s) for s in head.find("span", class_="cact")]
+    (box,) = row.find("details", class_="cbox")
+    (act,) = [row.within(d) for d in row.find("div", class_="cact")]
     assert row.find("span", class_="badge-degraded") or row.find("span", class_="badge-running")
     assert _forms(act) == [("stop", "meshcom-gps@r1")] and _forms(row) == _forms(act)
+    (div,) = row.find("div", class_="cact")
+    assert div.end == box.end and not row.within(row.find("summary")[0]).find("form")
 
 
-def test_an_orphan_with_a_working_web_link_shows_it_in_its_head_and_offers_no_run(tmp_path, web):
-    # layout B's head link for every running entry (accepted for orphans): it adds no action; the orphan Run stays
-    # withdrawn
+def test_an_orphan_with_a_working_web_link_shows_it_in_its_box_header_and_offers_no_run(tmp_path, web):
+    # F22: the link sits in its row's box header (an orphan too); it adds no action; the orphan Run stays withdrawn
     block = _orphan_meshcom(tmp_path, web)
-    assert _hrefs(block, "headlink") == ["http://127.0.0.1:18083"] and "Web UI ↗" in block.text
-    assert _hrefs(_row(block, "meshcom-qemu"), "iface-web") == ["http://127.0.0.1:18083"]   # the row's own link
+    assert _hrefs(block, "webpill") == ["http://127.0.0.1:18083"] and "Web UI ↗" in block.text
+    assert _hrefs(_row(block, "meshcom-qemu"), "webpill") == ["http://127.0.0.1:18083"]   # the row's own link
     assert {op for op, _t in _forms(block)} == {"stop"}

@@ -307,9 +307,9 @@ def test_only_web_ui_links_open_a_new_tab(web):
     offenders, web_ui = [], 0
     for f in sorted(tdir.glob("*.html")):
         for m in re.finditer(r'<a\b[^>]*target="_blank"[^>]*>', f.read_text()):
-            # a web-UI link: a row's `iface-web`, or the stack head's "Web UI ↗" on Home (layout B: its href is the
-            # same web_href of a row's web interface)
-            if "iface-web" in m.group(0) or (f.name == "dashboard.html" and 'class="headlink"' in m.group(0)):
+            # a web-UI link: a row's `iface-web`, or a Home component box's "Web UI ↗" pill (F22: the same web_href of
+            # the row's web interface, in its header)
+            if "iface-web" in m.group(0) or (f.name == "dashboard.html" and 'class="webpill"' in m.group(0)):
                 web_ui += 1
             else:
                 offenders.append(f"{f.name}: {m.group(0)[:80]}")
@@ -2912,13 +2912,13 @@ def test_the_running_card_rules_off_one_stack_from_the_next(tmp_path, web):
     BETWEEN the entries only: never above the first, never below the last, and never in a card
     that shows a single stack (a trailing rule reads as 'something is missing here')."""
     doc, col = _band_column(web, tmp_path, ("kiss", "graywolf"))
-    stacks, rules = col.find("div", class_="runstack"), col.find("hr")
+    stacks, rules = col.find("details", class_="runstack"), col.find("hr")
     assert len(stacks) == 2 and len(rules) == 1, "one rule between two stacks"
     assert doc.index(stacks[0]) < doc.index(rules[0]) < doc.index(stacks[1]), \
         "the rule sits between the two stacks, never above the first or after the last"
 
     doc, col = _band_column(web, tmp_path, ("kiss",))
-    assert len(col.find("div", class_="runstack")) == 1
+    assert len(col.find("details", class_="runstack")) == 1
     assert not col.find("hr"), "a single running stack needs no separator"
 
 

@@ -84,10 +84,10 @@ def test_a_recorded_running_daemon_stops_from_running_on_only(web, tmp_path, mon
         opts, _form = _start_options(card)
         assert not [v for v, _t in opts if v.startswith("daemon")]
         assert not [b for b in card.find("button") if b.text.strip().startswith(("Stop daemon", "Restart daemon"))]
-        rows = [p for p in card.find("p") if p.has_attr("data-stack") and p["data-stack"].startswith("daemon")]
+        rows = [p for p in card.find("summary") if p.has_attr("data-stack") and p["data-stack"].startswith("daemon")]
         assert [p["data-stack"] for p in rows] == [f"daemon@{rid}"]          # its own instance, under "Running on <rid>"
-        runs = [d for d in card.find("div", class_="runstack") if d.index < rows[0].index <= d.end]
-        assert len(runs) == 1
+        runs = [d for d in card.find("details", class_="runstack") if d.index < rows[0].index <= d.end]
+        assert len(runs) == 1 and not runs[0].has_attr("open")                 # F18: the daemon's block starts closed
         run = card.within(runs[0])
         assert _acts(run, run.find("form", class_="act")) == [("stop", f"daemon@{rid}"), ("restart", f"daemon@{rid}")]
         assert _acts(card, _card_daemon_acts(card)) == [("stop", f"daemon@{rid}"), ("restart", f"daemon@{rid}")]  # only there
@@ -99,7 +99,7 @@ def test_an_unrecorded_running_daemon_has_no_home_stop(web, tmp_path, monkeypatc
         card = _card(doc, rid)
         opts, _form = _start_options(card)
         assert not [v for v, _t in opts if v.startswith("daemon")]
-        assert not [p for p in card.find("p") if p.has_attr("data-stack") and p["data-stack"].startswith("daemon")]
+        assert not [p for p in card.find("summary") if p.has_attr("data-stack") and p["data-stack"].startswith("daemon")]
         assert not _card_daemon_acts(card)
         assert not [b for b in card.find("button") if b.text.strip().startswith(("Stop daemon", "Restart daemon"))]
 

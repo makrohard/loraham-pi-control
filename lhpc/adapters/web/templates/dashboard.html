@@ -1,22 +1,34 @@
 {% extends "base.html" %}
 {% from "_macros.html" import cmdbox, webserver_pills, banner, daemon_badge %}
 {% block title %}dashboard — LoRaHAM Pi Control{% endblock %}
-{# U2 (K1, layout B): ONE component row for every instance's and orphan's rows (G1-C49). Line 1: state, name and the
-   row's own action on the right (`caller('act')`); line 2: the note, the addresses (non-web ports), config, logs and
-   the web UI, as the 0.13.x card linked them (A23). `rid`: an instance's radio (its Settings and log for that radio),
-   "" for an entry without an instance. `caller('extra')`: what follows the row (an interactive part's command). #}
-{% macro comp_row(c, s, rid, rf='', card_rid='') %}{% set sid = s.sid if rid else s.id %}<li class="crow">
-                    <div class="chead">{% if c.kind in ('library', 'firmware') %}<span class="badge badge-kind">{{ c.kind }}</span>{# a dependency, never run here #}{% else %}<span class="badge badge-{{ c.state }}">{{ c.state }}</span>{% endif %}
+{# U2 (K1, layout B): ONE component row for every instance's and orphan's rows (G1-C49). F18: a box that folds (its header
+   the toggle, closed by default; dash.js remembers the viewer's choice by its id `cbox-<card key>-<entry id>-<comp>`).
+   Header: the name, the web UI's working link as a pill (F22: there only), the state pill right (a library/firmware
+   row: its kind). Body: the note, the addresses (non-web ports), config, logs, RF log, a web UI that does not work for
+   this viewer (its explanation), the password link, then `caller('extra')`, and the row's own action LAST (F18: left,
+   never in the header). F25: the Meshtastic web client row (an interface moved to it, `card_component`) also shows the
+   connect steps and the address to copy. `rid`: an instance's radio, "" for an entry without an instance. #}
+{% macro comp_row(c, s, rid, rf='', card_rid='', key='') %}{% set sid = s.sid if rid else s.id %}{% set ns = namespace(href='') %}
+                  {%- for itf in c.interfaces if itf.is_web and not ns.href %}{% set ns.href = web_href(itf) | trim %}{% endfor %}<li class="crow">
+                    <details class="cbox" id="cbox-{{ key }}-{{ s.id }}-{{ c.id }}"><summary class="shead">
                       <span class="cname">{{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}</span>
-                      <span class="cact">{{ caller('act') }}</span></div>
+                      {%- if ns.href %} <a class="webpill" href="{{ ns.href }}" target="_blank" rel="noopener">Web UI ↗</a>
+                      {%- for itf in c.interfaces if itf.is_web and itf.pending and (web_href(itf) | trim) %} <a href="{{ url_for('stacks_overview') }}#webserver-row"><span class="ver ver-yellow" title="The live nginx listener does not match the saved proxy mode — run webserver Apply to reconcile.">(pending Apply)</span></a>{% endfor %}{# the link's own marker stays beside it #}{% endif %}
+                      {% if c.kind in ('library', 'firmware') %}<span class="badge badge-kind sstate">{{ c.kind }}</span>{# a dependency, never run here #}{% else %}<span class="badge badge-{{ c.state }} sstate">{{ c.state }}</span>{% endif %}</summary>
                     <div class="csub">{% if c.note %}<span class="muted" data-note="{{ c.id }}">{{ c.note }}</span>{% endif %}
                       {% for itf in c.interfaces if not itf.is_web %}{{ iface(itf, sid, rid) }}{% endfor %}
                       {% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=sid, radio=rid or None) }}#stack-settings-{{ sid }}" aria-label="{{ c.id }} config">config</a>{% endif %}
                       {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id, radio=rid or None) }}" aria-label="{{ c.id }} logs">logs</a>{% endif %}
                       {{ rf }}{# the caller's RF-log line (the daemon row only), its radio context built by the caller #}
-                      {% for itf in c.interfaces if itf.is_web %}{{ iface(itf, sid, rid) }}{% endfor %}
-                      {% if c.has_password %}<a class="logslink" href="{{ url_for('stacks_overview', open=sid, radio=(rid or card_rid) or None) }}#stack-password-{{ c.id }}" aria-label="{{ c.id }} password">password</a>{% endif %}{# after the web pill, its Apps Password section #}</div>
-                    {{ caller('extra') }}</li>{% endmacro %}
+                      {% for itf in c.interfaces if itf.is_web and not (web_href(itf) | trim) %}{{ iface(itf, sid, rid) }}{% endfor %}{# no working link: its explanation #}
+                      {% if c.has_password %}<a class="logslink" href="{{ url_for('stacks_overview', open=sid, radio=(rid or card_rid) or None) }}#stack-password-{{ c.id }}" aria-label="{{ c.id }} password">password</a>{% endif %}</div>
+                    {%- if ns.href and c.interfaces | selectattr('card_component', 'equalto', c.id) | list %}
+                    <div class="cconnect"><ul class="steps"><li>Open the web GUI</li><li><b>Add connection</b> → <b>HTTP</b></li>
+                      <li>Enter IP:PORT from the box below, with <b>Use HTTPS</b> on</li><li><b>Test connection</b>, then <b>Save connection</b></li></ul>
+                      {{ cmdbox('conn-' ~ key ~ '-' ~ s.id ~ '-' ~ c.id, ns.href | replace('https://', '') | replace('http://', '') | trim('/')) }}</div>
+                    {%- endif %}
+                    {{ caller('extra') }}
+                    {%- set act = caller('act') %}{% if act | trim %}<div class="cact">{{ act }}</div>{% endif %}</details></li>{% endmacro %}
 {# The href of a web interface that WORKS for this viewer, else "": a PROXIED web UI via the nginx proxy per its LIVE
    scope (exposed -> the reached host; loopback -> 127.0.0.1 for a LOCAL viewer only); a direct one at its endpoint
    where reachable (exposed -> the reached host; loopback -> a local viewer). #}
@@ -32,9 +44,6 @@
                       {% elif itf.port %}<span class="iface mono">{{ itf.scheme }}: 127.0.0.1:{{ itf.port }}{% if not peer_loopback %} · local only{% endif %}</span>
                       {% else %}<span class="iface mono">{{ itf.scheme }}: {{ itf.address }}</span>{% endif %}
                       {% if itf.pending %}<a href="{{ url_for('stacks_overview') }}#webserver-row"><span class="ver ver-yellow" title="The live nginx listener does not match the saved proxy mode — run webserver Apply to reconcile.">(pending Apply)</span></a>{% endif %}{% endmacro %}
-{# The stack head's "Web UI ↗" (layout B): the first working web link of its rows. Only a running row has interfaces
-   (K1: a stopped row's are []), so it shows while the web UI runs. #}
-{% macro head_web(s) %}{% set ns = namespace(href='') %}{% for c in s.components %}{% for itf in c.interfaces if itf.is_web and not ns.href %}{% set ns.href = web_href(itf) | trim %}{% endfor %}{% endfor %}{% if ns.href %} <a class="headlink" href="{{ ns.href }}" target="_blank" rel="noopener">Web UI ↗</a>{% endif %}{% endmacro %}
 {# A component's own Run or Stop on the card (`target`: `<comp>@<rid>`, or the orphan's band target). #}
 {% macro comp_act(op, target, label) %}<form method="post" action="{{ url_for('action') }}" class="act">
                           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
@@ -269,14 +278,15 @@
                  top of the list, and being emitted before each later item keeps it off the end.
                  The component rows inside each stack get their own, lighter rule (`.complist`). #}
               {% if not loop.first %}<hr class="runsep">{% endif %}
-              <div class="runstack">
+              {#- F18: the stack block folds, its title line the toggle (no link: each row keeps its config link); the daemon's
+                  starts closed, every other stack open; dash.js remembers the viewer's choice by its id. -#}
+              <details class="runstack" id="stk-{{ key }}-{{ s.id }}"{% if (s.sid or s.id) != 'daemon' %} open{% endif %}>
+                <summary class="stitle" data-stack="{{ s.id }}"><strong>{{ s.name }}</strong> <span class="pill">{{ s.id }}</span></summary>
                 {% if s.rid %}
-                <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.sid, cfg=s.sid, radio=s.rid) ~ '#stackrow-' ~ s.sid }}"><strong>{{ s.name }}</strong></a>
-                  <span class="pill">{{ s.id }}</span>{{ head_web(s) }}</p>
                 {# K1: a row per component of the instance, stopped ones too; a part's own Run/Stop names `<comp>@<rid>`;
                    W325: the instance's own Stop and Restart (target `<stack>@<rid>`) #}
                 <ul class="complist cgrid">{% for c in s.components %}
-                  {% call(part) comp_row(c, s, s.rid, rfline if c.id == 'loraham-daemon' else '') %}{% if part == 'act' %}
+                  {% call(part) comp_row(c, s, s.rid, rfline if c.id == 'loraham-daemon' else '', key=key) %}{% if part == 'act' %}
                     {% if c.state in ('running', 'degraded', 'booting') and (c.optional or c.interactive) %}{{ comp_act('stop', c.id ~ '@' ~ s.rid, 'Stop') }}
                     {% elif c.state == 'stopped' and c.runnable and not c.interactive %}{{ comp_act('start', c.id ~ '@' ~ s.rid, 'Run') }}{% endif %}
                   {% elif c.interactive and c.state not in ('running', 'degraded', 'booting') %}{{ interactive_cmd(c, s, s.rid, 'runi-' ~ c.id ~ '-' ~ key, (c.commands or {}).get(s.rid, '')) }}{% endif %}{% endcall %}{% endfor %}</ul>
@@ -290,11 +300,9 @@
                   </form>{% endfor %}
                 </p>
                 {% else %}
-                <p data-stack="{{ s.id }}"><a href="{{ url_for('stacks_overview', open=s.id) ~ '#stackrow-' ~ s.id }}"><strong>{{ s.name }}</strong></a>
-                  <span class="pill">{{ s.id }}</span>{{ head_web(s) }}</p>
                 {# the same row markup; an orphan keeps today's actions: state, Stop, note (its Run is withdrawn, his word) #}
                 <ul class="complist cgrid">{% for c in s.components %}
-                  {% call(part) comp_row(c, s, "", rfline if c.id == 'loraham-daemon' else '', r.rid) %}{% if part == 'act' %}
+                  {% call(part) comp_row(c, s, "", rfline if c.id == 'loraham-daemon' else '', r.rid, key=key) %}{% if part == 'act' %}
                     {% if c.state in ('running', 'degraded') and (c.optional or c.interactive) %}{{ comp_act('stop', c.id ~ at, 'Stop') }}{% endif %}
                   {% elif c.interactive and c.state not in ('running', 'degraded') %}{{ interactive_cmd(c, s, "", 'runc-' ~ c.id ~ '-' ~ key, (c.commands or {}).get(r.rid, '')) }}{% endif %}{% endcall %}{% endfor %}</ul>
                 <p class="muted" id="noinst-{{ key }}-{{ s.id }}">No launch record or argv names the radio {{ s.name }}
@@ -309,7 +317,7 @@
                   </form>
                 </p>
                 {% endif %}
-              </div>
+              </details>
             {% endfor %}
           {% else %}
             <p class="muted">No stack running on this radio.</p>

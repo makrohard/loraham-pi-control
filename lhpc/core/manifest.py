@@ -391,6 +391,13 @@ def _validate_graph(stacks: tuple[Stack, ...]) -> None:
             comp_of[c.id] = c
             comp_stack[c.id] = s.id
 
+    for s in stacks:                                   # F25: card_component names a component of the SAME stack
+        own = {c.id for c in s.components}
+        for c in s.components:
+            for e in c.endpoints:
+                if e.card_component and e.card_component not in own:
+                    raise ManifestError(f"component {c.id!r} endpoint {e.address!r}: card_component "
+                                        f"{e.card_component!r} is not a component of stack {s.id!r}")
     for s in stacks:                                   # main resolves to an OWN component
         if s.main and s.main not in {c.id for c in s.components}:
             raise ManifestError(f"stack {s.id!r} main {s.main!r} is not one of its "
@@ -1025,6 +1032,7 @@ def _parse_endpoint(raw: dict) -> EndpointSpec:
         proxy_deny_paths=_parse_proxy_deny_paths(raw.get("proxy_deny_paths")),
         proxy_deny_notice=_parse_deny_notice(raw.get("proxy_deny_notice", False)),
         proxy_name=str(raw.get("proxy_name", "")),
+        card_component=str(raw.get("card_component", "")),
     )
 
 

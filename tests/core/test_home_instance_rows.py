@@ -144,12 +144,12 @@ def test_home_renders_a_booting_band_card_with_its_web_link(tmp_path, monkeypatc
     r = web(service_factory=lambda: svc).get("/", headers={"Host": "localhost:8443"})
     assert r.status_code == 200
     doc = parse(r.get_data(as_text=True))
-    cards = [doc.within(d) for d in doc.find("div", class_="runstack")
-             if doc.within(d).find("p", **{"data-stack": "meshcom"})]
+    cards = [doc.within(d) for d in doc.find("details", class_="runstack")
+             if doc.within(d).find("summary", **{"data-stack": "meshcom"})]
     assert len(cards) == 3                                                       # each 433 radio's card: r1, r3, r30
     for card in cards:
         assert card.find("span", class_="badge-booting")
-        assert [a["href"] for a in card.find("a", class_="iface-web")] == ["http://127.0.0.1:18083"]
+        assert [a["href"] for a in card.find("a", class_="webpill")] == ["http://127.0.0.1:18083"]
 
 
 def test_without_its_own_page_an_instance_never_takes_a_longer_rids(tmp_path):

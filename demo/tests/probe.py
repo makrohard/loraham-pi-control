@@ -372,8 +372,10 @@ try:
         ("#2", "/", "r1", False, "No launch record or argv names the radio"),
         ("#3", "/", "r1", True, '<span class="pill">graywolf@r1</span>'),
         ("#17", "/hardware/radio/r1", "", True, "stop graywolf@r1 and stop kiss@r1"),
-        ("#3", "/", "r1t", True, "Graywolf APRS graywolf@r1 Web UI ↗"),
-        ("#3", "/", "r1t", True, "Graywolf web UI ↗"),
+        ("#3", "/", "r1t", True, "Graywolf APRS station Web UI ↗ running"),   # the web UI pill in the row's box header
+        ("#3", "/", "r1", True, '<a class="webpill" href="http://127.0.0.1:8080"'),
+        ("#3", "/", "r1", True, _re.compile(r'data-stack="graywolf@r1"(?:(?!data-stack=).)*?<a class="webpill" '
+                                            r'href="http://127\.0\.0\.1:8080"', _re.S)),   # in graywolf@r1's own block
         ("#2", "/", "r1t", True, "kiss: 127.0.0.1:8001"),
         ("#6", "/", "t", True, "LoRaHAM KISS TNC @r1 127.0.0.1:8001 · local"),
         ("#6", "/", "t", True, "Graywolf APRS @r1 http://127.0.0.1:8080 not proxied"),
@@ -464,7 +466,7 @@ try:
     # An optional part runs on its own inside its running stack (PLAN-DEMO2 L13): the card's Run and Stop; every stop
     # path of its stack clears it; a restored state keeps it.
     _txt = lambda h: " ".join(_re.sub(r"<[^>]+>", " ", h).split())  # noqa: E731
-    _off, _on = "stopped KISS serial (PTY) opt Run", "running KISS serial (PTY) opt Stop"
+    _off, _on = "KISS serial (PTY) opt stopped logs Run", "KISS serial (PTY) opt running logs Stop"   # name, state; action last
     svc.seed_all_installed()
     _action(op="start", target="kiss@r1")
     assert _off in _txt(_card("r1")), "optional: kiss@r1 up -> serial stopped + Run"

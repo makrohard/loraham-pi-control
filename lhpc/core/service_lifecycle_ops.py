@@ -2703,7 +2703,7 @@ class LifecycleOpsMixin:
                 except Exception:
                     scope = ""
             entry = {"label": label, "address": sp.address, "scheme": sp.scheme or "tcp",
-                     "link": link, "port": port, "is_web": is_web,
+                     "link": link, "port": port, "is_web": is_web, "card_component": sp.card_component,
                      "remote_ok": scope == "exposed",
                      "proxy_scope": "", "proxy_port": 0, "proxy_scheme": "", "proxy_remote": False,
                      "pending": False}
@@ -2951,8 +2951,8 @@ class LifecycleOpsMixin:
                         state="booting" if booting else (live[c.id].run_state.value if c.id in live else "unknown"),
                         interfaces=self._client_interfaces(live.get(c.id), s.id),
                         commands=radio_start.commands_by_radio(self, c, band_rids) if c.interactive else {}))
-                entry = {"id": s.id, "name": s.name, "main": s.main, "components": comps,
-                         "multi_band": multi}
+                entry = {"id": s.id, "name": s.name, "main": s.main,
+                         "components": radio_start.relocate_card_interfaces(comps), "multi_band": multi}
                 entries[s.id] = entry
                 main_comp = s.component(s.main)
                 # The command-bearing component: the interactive MAIN (chat, nomadnet), or

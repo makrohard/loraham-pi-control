@@ -260,6 +260,9 @@ class EndpointSpec:
     address_template: str = ""
     # A web UI's short name, as its proxy entry names it ("Proxy · Graywolf UI · r1"); "" = none (not a web UI).
     proxy_name: str = ""
+    # The component of the SAME stack whose Home card row shows this client interface instead of the endpoint's own
+    # row (F25: meshtasticd's web GUI on the "Meshtastic web client" row); "" = its own row.
+    card_component: str = ""
 
 
 @dataclass(frozen=True)

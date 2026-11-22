@@ -1331,6 +1331,21 @@ def component_row(svc, c, *, state: str, note: str, interfaces: list, commands: 
             **link_kinds(c), "state": state, "note": note, "interfaces": interfaces}
 
 
+def relocate_card_interfaces(rows: list) -> list:
+    """F25: move each client interface whose endpoint names a `card_component` from its own row to that row of the
+    SAME entry (the manifest guarantees the component is in the stack). ONE rule for both row builders (an instance's
+    rows and the band entries'), so no entry keeps the link on the serving component's row. Returns `rows`."""
+    by_id = {r["id"]: r for r in rows}
+    for r in rows:
+        moved = [i for i in r["interfaces"] if i.get("card_component") and i["card_component"] in by_id
+                 and i["card_component"] != r["id"]]
+        if moved:
+            r["interfaces"] = [i for i in r["interfaces"] if i not in moved]
+            for i in moved:
+                by_id[i["card_component"]]["interfaces"] = by_id[i["card_component"]]["interfaces"] + [i]
+    return rows
+
+
 def running_instances(svc, band: str, live: dict, procs=None) -> list:
     """Cleanup C7c (W286, W290; K5: decision B out), K1: Home's entry for each instance that runs on a radio of
     `band` (`<sid>@<rid>`, for its own radio's card only), with a row per component of its stack. A row's state is
@@ -1364,7 +1379,7 @@ def running_instances(svc, band: str, live: dict, procs=None) -> list:
             rows.append(component_row(svc, c, state=state, note=note, interfaces=itfs,
                                       commands=commands_by_radio(svc, c, [inst.rid]) if c.interactive else {}))
         out.append({"id": instances.key(stk.id, inst), "sid": stk.id, "rid": inst.rid, "name": stk.name,
-                    "main": stk.main, "components": rows, "multi_band": False})
+                    "main": stk.main, "components": relocate_card_interfaces(rows), "multi_band": False})
     return out
 
 

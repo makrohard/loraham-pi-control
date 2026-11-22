@@ -18,7 +18,8 @@ def test_the_password_link_opens_the_apps_password_section(flask_page, tmp_path)
     table[700] = [comp.process.exec_path or comp.process.exec_name, *(("-m", comp.process.entry) if comp.process.entry else ()),
                   *[a for a in comp.process.all_args if a != opt], opt, val]
     page, _posts = flask_page(path="/", cmdlines=table, listeners=[Listener("ipv4", "127.0.0.1", 5399, 1)])
-    link = page.locator('div.runstack:has(p[data-stack="meshcore@r3"]) a.logslink[aria-label="meshcore-node password"]')
+    link = page.locator('details.runstack:has(summary[data-stack="meshcore@r3"]) a.logslink[aria-label="meshcore-node password"]')
+    page.locator('details.cbox:has(a.logslink[aria-label="meshcore-node password"]) > summary').click(position={"x": 6, "y": 8})   # F18: opened first
     assert link.count() == 1 and link.inner_text() == "password"
     link.click()
     page.wait_for_url("**/stacks?open=meshcore&radio=r3#stack-password-meshcore-node")

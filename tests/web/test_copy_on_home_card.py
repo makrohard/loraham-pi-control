@@ -34,10 +34,10 @@ def _card(doc, rid):
 def test_a_running_copy_shows_on_its_own_radios_card_only(tmp_path, web, monkeypatch):
     doc = _home(tmp_path, web, monkeypatch)
     r3, r1 = _card(doc, "r3"), _card(doc, "r1")
-    assert [re.sub(r"\s+", " ", e.text).strip() for e in r3.find("div", class_="runstack")] == [
-        "LoRaHAM KISS TNC kiss@r3 degraded LoRaHAM KISS/TCP TNC listener absent: 127.0.0.1:8267 config logs "
-        "stopped KISS serial (PTY) opt Run logs Stop Restart"]                  # K1: its stopped part too, with Run
-    assert not r1.find("div", class_="runstack")
+    assert [re.sub(r"\s+", " ", e.text).strip() for e in r3.find("details", class_="runstack")] == [
+        "LoRaHAM KISS TNC kiss@r3 LoRaHAM KISS/TCP TNC degraded listener absent: 127.0.0.1:8267 config logs "
+        "KISS serial (PTY) opt stopped logs Run Stop Restart"]   # K1: its stopped part too, with Run (F18: name, state; button last)
+    assert not r1.find("details", class_="runstack")
     assert "No stack running on this radio." in r1.text
     forms = [r3.within(x) for x in r3.find("form", action="/action")]
     assert [(f.field_default("op"), f.field_default("target")) for f in forms if "kiss" in f.field_default("target")] == [
@@ -47,7 +47,7 @@ def test_a_running_copy_shows_on_its_own_radios_card_only(tmp_path, web, monkeyp
 def test_a_listed_copy_that_does_not_run_shows_nowhere(tmp_path, web, monkeypatch):
     doc = _home(tmp_path, web, monkeypatch, running=False)
     for rid in ("r1", "r3"):
-        assert not _card(doc, rid).find("div", class_="runstack") and "No stack running on this radio." in _card(doc, rid).text
+        assert not _card(doc, rid).find("details", class_="runstack") and "No stack running on this radio." in _card(doc, rid).text
 
 
 def test_a_copy_is_its_radios_bands_alone(tmp_path, web, monkeypatch):
@@ -67,9 +67,9 @@ def test_a_copy_is_its_radios_bands_alone(tmp_path, web, monkeypatch):
 def test_a_copy_whose_own_listener_is_up_reads_running_with_no_note(tmp_path, web, monkeypatch):
     # G1-C49: the copy's rows are judged on its OWN listener, as slot 0's are on slot 0's (already_healthy's calls).
     r3 = _card(_home(tmp_path, web, monkeypatch, listening=True), "r3")
-    assert [re.sub(r"\s+", " ", e.text).strip() for e in r3.find("div", class_="runstack")] == [
-        "LoRaHAM KISS TNC kiss@r3 running LoRaHAM KISS/TCP TNC kiss: 127.0.0.1:8267 config logs "
-        "stopped KISS serial (PTY) opt Run logs Stop Restart"]        # layout B: address · config · logs on line 2
+    assert [re.sub(r"\s+", " ", e.text).strip() for e in r3.find("details", class_="runstack")] == [
+        "LoRaHAM KISS TNC kiss@r3 LoRaHAM KISS/TCP TNC running kiss: 127.0.0.1:8267 config logs "
+        "KISS serial (PTY) opt stopped logs Run Stop Restart"]   # F18 box: name, state; address · config · logs; button last
 
 
 def test_a_copys_entry_and_rows_come_from_one_read_of_its_processes(tmp_path, web, monkeypatch):

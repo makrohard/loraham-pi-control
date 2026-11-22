@@ -45,7 +45,7 @@ def _rows(doc):
     for li in doc.find("li", class_="crow"):
         row = doc.within(li)
         name = row.find("span", class_="cname")[0].text.removesuffix(" opt").strip()
-        out[name] = [(b.text.strip(), sorted(b.classes)) for b in row.find("span", class_="badge")]
+        out[name] = [(b.text.strip(), sorted(b.classes - {"sstate"})) for b in row.find("span", class_="badge")]   # F18: right-aligned
     return out
 
 

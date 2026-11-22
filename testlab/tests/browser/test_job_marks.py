@@ -266,10 +266,10 @@ def test_a_real_home_card_of_the_stack_is_marked_and_another_stacks_card_is_not(
     page.route("**/api/tasks", lambda route: route.fulfill(
         status=200, content_type="application/json", body=json.dumps({"tasks": feed["tasks"]})))
     page.reload()
-    card = 'p[data-stack="meshcom@r1"]'
-    assert page.locator('p[data-stack="meshcore@r3"]').count() == 1      # the other stack's real card
+    card = 'summary[data-stack="meshcom@r1"]'
+    assert page.locator('summary[data-stack="meshcore@r3"]').count() == 1      # the other stack's real card
     _wait_marks(page, card, ["⏳ install", "⏳ HMAC enable"])
-    assert _marks(page, 'p[data-stack="meshcore@r3"]') == []
+    assert _marks(page, 'summary[data-stack="meshcore@r3"]') == []
     feed["tasks"] = [dict(job, state="failed"), hmac]
     page.clock.run_for(2000)
     _wait_marks(page, card, ["install failed", "⏳ HMAC enable"])        # it updates
