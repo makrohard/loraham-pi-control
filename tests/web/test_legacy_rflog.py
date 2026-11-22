@@ -53,7 +53,7 @@ def _no_band_file(html, where):
 def test_home_and_the_hardware_page_link_only_the_radios_rf_logs(tmp_path, web, monkeypatch, daemon_record):
     c, svc = _client(web, tmp_path)
     monkeypatch.setattr(svc, "_daemon_installed", lambda _st: True)      # F8: the Hardware page links an installed daemon's
-    daemon_record("r1", "433")                                           # dash plan c3: the RF links sit in its daemon row
+    daemon_record("r1", "433")                                           # the RF links sit in its daemon row
     home = _html(c, "/")
     _no_band_file(home, "/")
     doc = parse(home)

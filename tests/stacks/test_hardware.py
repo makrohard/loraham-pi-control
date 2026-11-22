@@ -294,7 +294,7 @@ def test_hw_preset_label_is_friendly_never_legacy():
 
 
 def test_dashboard_is_wide_in_single_and_dual_radio_setups(tmp_path):
-    # dash plan c11 (his yes, 19:18Z): no dash-narrow page any more; one radio is one column of the wide grid
+    # no dash-narrow page any more; one radio is one column of the wide grid
     from lhpc.adapters.web.app import create_app
     svc = _svc(tmp_path)
     _setup(svc, "loraham")

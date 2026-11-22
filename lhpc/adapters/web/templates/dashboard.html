@@ -6,16 +6,16 @@
    the web UI, as the 0.13.x card linked them (A23). `rid`: an instance's radio (its Settings and log for that radio),
    "" for an entry without an instance. `caller('extra')`: what follows the row (an interactive part's command). #}
 {% macro comp_row(c, s, rid, rf='', card_rid='') %}{% set sid = s.sid if rid else s.id %}<li class="crow">
-                    <div class="chead">{% if c.kind in ('library', 'firmware') %}<span class="badge badge-kind">{{ c.kind }}</span>{# dash plan c4: a dependency, never run here #}{% else %}<span class="badge badge-{{ c.state }}">{{ c.state }}</span>{% endif %}
+                    <div class="chead">{% if c.kind in ('library', 'firmware') %}<span class="badge badge-kind">{{ c.kind }}</span>{# a dependency, never run here #}{% else %}<span class="badge badge-{{ c.state }}">{{ c.state }}</span>{% endif %}
                       <span class="cname">{{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}</span>
                       <span class="cact">{{ caller('act') }}</span></div>
                     <div class="csub">{% if c.note %}<span class="muted" data-note="{{ c.id }}">{{ c.note }}</span>{% endif %}
                       {% for itf in c.interfaces if not itf.is_web %}{{ iface(itf, sid, rid) }}{% endfor %}
                       {% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=sid, radio=rid or None) }}#stack-settings-{{ sid }}" aria-label="{{ c.id }} config">config</a>{% endif %}
                       {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id, radio=rid or None) }}" aria-label="{{ c.id }} logs">logs</a>{% endif %}
-                      {{ rf }}{# dash plan c3: the caller's RF-log line (the daemon row only), its radio context built by the caller #}
+                      {{ rf }}{# the caller's RF-log line (the daemon row only), its radio context built by the caller #}
                       {% for itf in c.interfaces if itf.is_web %}{{ iface(itf, sid, rid) }}{% endfor %}
-                      {% if c.has_password %}<a class="logslink" href="{{ url_for('stacks_overview', open=sid, radio=(rid or card_rid) or None) }}#stack-password-{{ c.id }}" aria-label="{{ c.id }} password">password</a>{% endif %}{# dash plan c14: after the web pill, its Apps Password section #}</div>
+                      {% if c.has_password %}<a class="logslink" href="{{ url_for('stacks_overview', open=sid, radio=(rid or card_rid) or None) }}#stack-password-{{ c.id }}" aria-label="{{ c.id }} password">password</a>{% endif %}{# after the web pill, its Apps Password section #}</div>
                     {{ caller('extra') }}</li>{% endmacro %}
 {# The href of a web interface that WORKS for this viewer, else "": a PROXIED web UI via the nginx proxy per its LIVE
    scope (exposed -> the reached host; loopback -> 127.0.0.1 for a LOCAL viewer only); a direct one at its endpoint
@@ -51,7 +51,7 @@
                         {% endif %}
                         <div class="muted">Interactive — run local:</div>
                         {{ cmdbox(box, cmd) }}{% endmacro %}
-{# dash plan c13a (his word): Home's one nav line "All menus · Home", the first thing after the header #}
+{# Home's one nav line "All menus · Home", the first thing after the header #}
 {% block nav %}
   <div class="crumbline">{% include "_crumbs_all.html" %}<nav class="crumbs" aria-label="You are here"><h2 class="here">Home</h2></nav></div>
 {% endblock %}
@@ -156,10 +156,10 @@
           <span class="rfline">RF log: {% for l in r.rflogs %}{% if not loop.first %} · {% endif %}{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a class="pill" href="{{ url_for('logs_view', target=l.target, job=l.job, radio=r.rid or None) }}">{{ l.label }}</a>{% endif %}{% endfor %}</span>
         </p>
       {% endset %}
-      {# dash plan c3: the same RF-log links (target/job/radio, error pill) in the daemon component row, logslink look #}
+      {# the same RF-log links (target/job/radio, error pill) in the daemon component row, logslink look #}
       {% set rfline %}<span class="rfline">RF log: {% for l in r.rflogs %}{% if not loop.first %} · {% endif %}{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a class="logslink" href="{{ url_for('logs_view', target=l.target, job=l.job, radio=r.rid or None) }}">{{ l.label }}</a>{% endif %}{% endfor %}</span>{% endset %}
       <div class="card radio-col{{ ' radio-stray' if r.stray }}" id="radio-{{ key }}" data-radio-band="{{ r.band }}"{% if r.rid %} data-radio-rid="{{ r.rid }}"{% endif %}>
-       {# dash plan c10: collapsible like Webserver / System (default open; dash.js restores the operator's choice) #}
+       {# collapsible like Webserver / System (default open; dash.js restores the operator's choice) #}
        <details class="radiobox" id="radiobox-{{ key }}" open>
         <summary>
           <h2>{% if r.rid %}{{ r.name }} ({{ r.rid }}, {{ r.band }} MHz){% else %}{{ where }}{% endif %}{% if r.stray %} <span class="pill">no listed radio</span>{% endif %}</h2>
@@ -207,21 +207,21 @@
               radio tuning. Run only one at a time on this radio.</p>
           {% endif %}
 
-          {# --- the RX-TX Monitor (only when the daemon serves this band). Dash plan c1: the card has no daemon Stop /
+          {# --- the RX-TX Monitor (only when the daemon serves this band). The card has no daemon Stop /
                  Restart of its own; a daemon with a verified launch record has its pair in its block under "Running on";
-                 one that no record lists there (hand-started, lost or stale record) stops from Apps only (his Q15 "OK ii").
-                 c3: "Radio config" + "Daemon log" are gone (the daemon row's config / logs open the same pages); its RF
+                 one that no record lists there (hand-started, lost or stale record) stops from Apps only.
+                 "Radio config" + "Daemon log" are gone (the daemon row's config / logs open the same pages); its RF
                  logs sit in that row. --- #}
           {% if up %}
             <details class="monitor" id="monitor-{{ key }}" open>
-              <summary>RX-TX Monitor <span class="badge txpill" id="rd-txpill-{{ key }}" hidden></span>{# dash plan c5: RX / TX from the poll's STATUS TX #}</summary>
+              <summary>RX-TX Monitor <span class="badge txpill" id="rd-txpill-{{ key }}" hidden></span>{# RX / TX from the poll's STATUS TX #}</summary>
               <table class="monrssi">
                 <tr><th>Live RSSI</th>
                   <td><meter id="rd-rssi-{{ key }}" min="-130" max="0" low="-110" high="-90" optimum="-30"
                              value="{{ dv.liverssi or '-130' }}"></meter>
                       <span class="mono" id="rd-rssiv-{{ key }}">{{ dv.liverssi or '?' }}</span> dBm</td></tr>
               </table>
-              {# dash plan c5: the radio params in effect, painted by dash.js (daemon 1.5.0: GET RADIO while READY, else "-") #}
+              {# the radio params in effect, painted by dash.js (daemon 1.5.0: GET RADIO while READY, else "-") #}
               <p class="rparams">{% for k, n in (("freq", "FREQ"), ("pwr", "PWR"), ("bw", "BW"), ("sf", "SF")) %}<span class="rp"><span class="rpk">{{ n }}</span> <span class="mono rpv" id="rd-{{ k }}-{{ key }}">-</span></span>{% endfor %}</p>
               <table>
                 <tr><th>Radio</th><td class="mono" id="rd-radio-{{ key }}">{{ dv.radio or '?' }}</td>
@@ -251,10 +251,10 @@
             {% if not r.daemon.installed %}
               <p class="muted">Daemon not installed. Install &amp; build the
                 <a href="{{ url_for('stacks_overview', open='daemon') ~ '#stackrow-daemon' }}">daemon stack</a> first.</p>
-            {% endif %}{# dash plan c1: the daemon starts from "Start a stack on rX"; c3: no log links while it is stopped #}
+            {% endif %}{# the daemon starts from "Start a stack on rX"; no log links while it is stopped #}
           {% endif %}
 
-          {# dash plan c2: the radio's hardware page, below the RX-TX Monitor (daemon up) or above "Running on" (stopped) #}
+          {# the radio's hardware page, below the RX-TX Monitor (daemon up) or above "Running on" (stopped) #}
           {% if r.rid %}<p class="hwlink"><a class="logslink" id="rd-hw-{{ key }}" href="{{ url_for('hardware_radio', rid=r.rid) }}">Hardware</a></p>{% endif %}
 
           {# --- running stack(s) on this radio (W2: its rid; a stray band's card: the band) --- #}
@@ -350,7 +350,7 @@
             {% endfor %}
           {% endif %}
 
-          {# --- start another stack on this radio; dash plan c1: while THIS radio's daemon is installed and stopped, its
+          {# --- start another stack on this radio; while THIS radio's daemon is installed and stopped, its
                  "daemon <band>" (daemon@rX) is the first entry, added here outside the stacks' radio filter --- #}
           {% set daemon_offer = r.rid and not up and r.daemon.installed %}
           {% if r.startable or daemon_offer %}
@@ -374,7 +374,7 @@
     {% endfor %}
   </div>
 
-  {# dash plan c12 S10 (his word): Webserver and System in one wrapping row below the radio grid, side by side when both fit #}
+  {# Webserver and System in one wrapping row below the radio grid, side by side when both fit #}
   <div class="homeduo">
   {# Webserver box: LHPC console (always), then per RUNNING stack its web-UI line and a line per other
      open TCP port. Web lines: security+running pills. Port lines (no auth): one exposure-coloured
@@ -392,7 +392,7 @@
         {% if security_pill %}<span class="pill pill-{{ security_pill.level }}" title="{{ security_pill.title }}">{{ security_pill.label }}</span>{% endif %}
       </summary>
     <div class="body">
-      {# dash plan c12 S11 (his word): each entry its own box (div.wsgroup), the Firewall's follow-up lines inside its box #}
+      {# each entry its own box (div.wsgroup), the Firewall's follow-up lines inside its box #}
       {% if firewall %}
       <div class="wsgroup">
       <div class="wsline fwline">
@@ -484,13 +484,13 @@
     <details id="sysbox">
       <summary><h2>System</h2></summary>
       <div class="body">
-        {# dash plan c12 S8 (his word): three boxes: CPU..GNSS (row lines kept inside), autostart, reboot / shut down #}
+        {# three boxes: CPU..GNSS (row lines kept inside), autostart, reboot / shut down #}
         <div class="sysgroup">
         <table class="systab" aria-label="Live system metrics">
           <tr class="sysrow sysrow-cpu"><th scope="row">CPU</th>
             <td class="sys-gauge"><span class="sys-gaugewrap"><span class="sysbar" aria-hidden="true"><span class="sysbar-fill" id="sys-cpu-bar"></span></span><svg class="sysspark" id="sys-cpu-spark" viewBox="0 0 60 20" preserveAspectRatio="none" aria-hidden="true"><polyline points=""/></svg></span></td>
             <td class="sys-val" id="sys-cpu-val">…</td></tr>
-          <tr class="sysrow sysrow-mem"><th scope="row" aria-label="Memory">MEM</th>{# dash plan c12 S8b: fits its 3.6rem column on phones #}
+          <tr class="sysrow sysrow-mem"><th scope="row" aria-label="Memory">MEM</th>{# fits its 3.6rem column on phones #}
             <td class="sys-gauge"><span class="sys-gaugewrap"><span class="sysbar" aria-hidden="true"><span class="sysbar-fill" id="sys-mem-bar"></span></span><svg class="sysspark" id="sys-mem-spark" viewBox="0 0 60 20" preserveAspectRatio="none" aria-hidden="true"><polyline points=""/></svg></span></td>
             <td class="sys-val" id="sys-mem-val">…</td></tr>
           <tr class="sysrow sysrow-swap" id="sys-swap-row" hidden><th scope="row">Swap</th>
@@ -542,7 +542,7 @@
             {% endif %}
           </p>
           {% if autostart.last %}<p class="muted">{{ autostart.last }}</p>{% endif %}
-          <p class="muted">Applies at the next boot.</p>{# S8: the text before the button, the button last #}
+          <p class="muted">Applies at the next boot.</p>{# the text before the button, the button last #}
           <form method="post" action="{{ url_for('boot_restore_set') }}" class="act">
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
             <input type="hidden" name="from" value="dash">
@@ -574,7 +574,7 @@
           </div>
         {% endif %}
         {# Host identity line stays the LAST thing in the card (system.js fills it by id). #}
-        <p class="muted sys-info" id="sys-info"></p>{# dash plan c12 S8c (his word): no placeholder; system.js fills it #}
+        <p class="muted sys-info" id="sys-info"></p>{# no placeholder; system.js fills it #}
       </div>
     </details>
   </div>

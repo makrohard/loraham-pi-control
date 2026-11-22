@@ -1,4 +1,4 @@
-"""Dash plan c12 S11 in a real browser: the Webserver entries' boxes have the component box look, .45rem apart, the
+"""In a real browser: the Webserver entries' boxes have the component box look, .45rem apart, the
 lines inside have no separator border; phone inset below 480 px; no sideways scroll at 360."""
 _STYLE = """() => { const cs = e => getComputedStyle(e), root = parseFloat(cs(document.documentElement).fontSize);
   const g = [...document.querySelectorAll('#wsbox .wsgroup')];

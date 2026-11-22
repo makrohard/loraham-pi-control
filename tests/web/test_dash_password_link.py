@@ -1,7 +1,7 @@
-"""Dash plan c14 (14a/14b decided): a Home card row whose component declares a UI password file (graywolf, meshcore-node)
+"""A Home card row whose component declares a UI password file (graywolf, meshcore-node)
 ends with a "password" logslink after its web pills, to its Apps Password section with the card's radio
 (/stacks?open=<sid>&radio=<rid>#stack-password-<cid>). No other row has one (meshcore-webui, MeshCom included), and
-Home reads no password file for it. An orphan entry's row (rid "") links with the card's radio (a25 N1). Driven through the rendered Home page with a verified launch record per stack."""
+Home reads no password file for it. An orphan entry's row (rid "") links with the card's radio. Driven through the rendered Home page with a verified launch record per stack."""
 import subprocess
 import sys
 from urllib.parse import parse_qs, urlsplit

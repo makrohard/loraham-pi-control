@@ -1,4 +1,4 @@
-"""Dash plan c12 S4 (his "let columns grow"): on the wide Apps page no stack-list name is cut off (each .col-name shows
+"""On the wide Apps page no stack-list name is cut off (each .col-name shows
 its whole text; a long one wraps) at 900, 1024, 1280, 1920 and 2560 px, and the status column still lines up across the rows. Real browser."""
 _M = """() => { const rows = [...document.querySelectorAll('.stacklist .stackrow > summary')].filter(s => s.offsetParent !== null);
   const names = rows.map(s => s.querySelector('.col-name')).filter(Boolean);

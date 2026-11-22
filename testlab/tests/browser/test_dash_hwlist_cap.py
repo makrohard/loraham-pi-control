@@ -1,4 +1,4 @@
-"""Dash plan c12 S13 (his "cap hw list table"): the Hardware page's radio list table (#hw-list) is today's 950 px on a
+"""The Hardware page's radio list table (#hw-list) is today's 950 px on a
 big screen and fits the width on a phone (no sideways scroll); at 900 px (no phone rule) it is no wider than its container.
 Real browser."""
 _FIT = """i => { const e = document.getElementById(i), p = e.parentElement, cs = getComputedStyle(p);

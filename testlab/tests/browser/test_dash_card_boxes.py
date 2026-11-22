@@ -1,4 +1,4 @@
-"""Dash plan c9: on a Home radio card each component row and the RX-TX Monitor sit in a light box (1px line border,
+"""On a Home radio card each component row and the RX-TX Monitor sit in a light box (1px line border,
 6px radius, tinted background, no separator lines between rows); below 480 px the Apps-style inset tightening applies
 to .runstack, the boxes and the Monitor (.3rem .35rem). The Apps page's own phone insets are unchanged. Computed styles
 in a real browser (meshcore@r3 running, r3's daemon up)."""

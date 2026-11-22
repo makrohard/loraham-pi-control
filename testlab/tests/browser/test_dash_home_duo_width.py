@@ -1,5 +1,5 @@
-"""Dash plan c12 S9 + S10 (his words; G1 B7 pin): Home's Webserver and System cards are both 984 px at 2560 (equal widths), the
-Webserver card's left edge is r1's and its right edge r2's (two radio cards + their gap); S10: both in one wrapping row
+"""Home's Webserver and System cards are both 984 px at 2560 (equal widths), the
+Webserver card's left edge is r1's and its right edge r2's (two radio cards + their gap); both in one wrapping row
 below the radio grid, side by side (System on r3's column) at 2560, stacked at 1920; 100% of the page at 360."""
 from lhpc.core import radios
 

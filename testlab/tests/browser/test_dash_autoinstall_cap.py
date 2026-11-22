@@ -1,4 +1,4 @@
-"""Dash plan c12 S12 (his word): on the Auto-install page the selection table (#ai-select) and the run's task table
+"""On the Auto-install page the selection table (#ai-select) and the run's task table
 (#ai-tasks) are at most 950 px on a big screen and fill the width on a phone; other .tasklist tables (HMAC) are not
 capped; at 900 px (no phone rule) a table is no wider than its container. Real browser."""
 _W = """ids => ids.map(i => { const e = document.getElementById(i);

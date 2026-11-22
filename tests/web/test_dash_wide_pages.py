@@ -1,4 +1,4 @@
-"""Dash plan c12 S1: every page is wide; the named narrow exceptions are exactly the 8 confirmation pages, by one body
+"""Every page is wide; the named narrow exceptions are exactly the 8 confirmation pages, by one body
 class (narrow-page) in their body_class block. Rendered GETs of the wide families carry no such class; a confirmation
 reached by GET (Remove radio) carries it."""
 import pathlib

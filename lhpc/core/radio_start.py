@@ -1320,8 +1320,8 @@ def component_row(svc, c, *, state: str, note: str, interfaces: list, commands: 
     interfaces, and the run commands of the cards the row shows on (an interactive part's only). `runnable`: the card
     may offer the part's own Run, by the operator surfaces' one rule (optional_role): never a library or firmware, a
     production GPS feed (its position plan starts it) or a test fixture (run deliberately, by name). `kind`: the
-    manifest kind (dash plan c4: Home labels a library / firmware row by it; `state` stays for the action rules).
-    `has_password`: the component declares a UI password file (dash plan c14: the row links its Apps Password
+    manifest kind (Home labels a library / firmware row by it; `state` stays for the action rules).
+    `has_password`: the component declares a UI password file (the row links its Apps Password
     section) — a flag only, no secret file is read for Home."""
     return {"id": c.id, "name": c.name, "kind": c.kind.value, "optional": c.optional, "runnable": svc.optional_role(c) != "hidden",
             # Interactive components (GUI/CLI/REPL) are run by the operator, never by lhpc: the command to copy.

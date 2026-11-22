@@ -21,7 +21,7 @@ def test_the_rows_stand_in_columns_on_a_large_screen_and_in_one_on_a_phone(flask
     page, _posts = flask_page(path=path, unix_replies=_LIVE)
     page.set_viewport_size({"width": 1280, "height": 900})
     big = page.evaluate(_MEASURE)
-    # dash plan c12 S1: the page is wide (no 1024 px main), so 1280 px fits a 4th auto-fill column (was <= 3 at the cap)
+    # the page is wide (no 1024 px main), so 1280 px fits a 4th auto-fill column (was <= 3 at the cap)
     assert big["n"] >= 3 and 2 <= big["cols"] <= 4 and big["inside"], (path, big)
     page.set_viewport_size({"width": 390, "height": 900})
     small = page.evaluate(_MEASURE)

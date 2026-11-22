@@ -1,4 +1,4 @@
-"""Dash plan c13: "‹ Back" on a page outside the tree goes one step back in the browser history; opened with no history,
+""""‹ Back" on a page outside the tree goes one step back in the browser history; opened with no history,
 it follows its href to Home. Real browser (Dependency Overview)."""
 
 

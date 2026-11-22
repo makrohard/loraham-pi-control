@@ -1,4 +1,4 @@
-"""Dash plan c12 S11 (his word): every entry of the Webserver card (a line with its name: Firewall, LHPC, each page or
+"""Every entry of the Webserver card (a line with its name: Firewall, LHPC, each page or
 address) is its own box (div.wsgroup); the Firewall entry's follow-up lines (the not-set-up note, or the two command
 boxes) sit inside the Firewall box; nothing in the body is outside a box. Rendered GET of Home."""
 from htmlq import parse

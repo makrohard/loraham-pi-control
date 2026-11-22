@@ -1,4 +1,4 @@
-"""Dash plan c10: a Home radio card collapses like Webserver / System. div#radio-<rid> keeps its id and data attributes;
+"""A Home radio card collapses like Webserver / System. div#radio-<rid> keeps its id and data attributes;
 inside it details#radiobox-<rid> (open by default) > summary (title + daemon pill) + body. The operator's choice is stored
 (lhpc:radiobox-<rid>, "0" and "1" both restored) across ordinary reloads; the signature reload's id-keyed snapshot wins
 over the stored choice; a collapsed card still polls, its pill stays live. Real browser, r3's poll answered by the test."""
@@ -60,7 +60,7 @@ def test_a_collapsed_card_keeps_polling_and_its_pill_live(flask_page):
 
 
 def test_the_cards_summary_keeps_the_phone_header_inset(flask_page):
-    # a25 N2: the phone rule's .7rem side padding (was on the card <header>) applies to the radio card's summary
+    # the phone rule's .7rem side padding (was on the card <header>) applies to the radio card's summary
     page, _posts = flask_page(path="/", unix_replies={"/tmp/loraconf-r3.sock": _READY}, api={"/api/daemon/r3": _reply("daemon READY")})
     pad = """() => { const s = getComputedStyle(document.querySelector('#radiobox-r3 > summary'));
       return [s.paddingLeft, s.paddingRight, parseFloat(getComputedStyle(document.documentElement).fontSize)]; }"""

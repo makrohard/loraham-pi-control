@@ -1,9 +1,9 @@
-"""Dash plan c1: a radio card has no daemon Start / Stop / Restart form and no "Daemon not running" hint of its own; while
+"""A radio card has no daemon Start / Stop / Restart form and no "Daemon not running" hint of its own; while
 THIS radio's daemon is installed and stopped, "daemon <band>" (target daemon@<rid>, the old form's op/CSRF/from fields) is
 the first entry of "Start a stack on <rid>", exactly once, also when another radio of the band runs its daemon. Not
 installed: the note and its link stay, no entry. A running daemon with a verified launch record shows under "Running on
 <rid>" with its Stop / Restart (daemon@<rid>), and the card has no pair of its own; a running daemon that no record lists
-there has no Stop on Home at all (it stops from Apps, the maintainer's Q15 "OK ii"). Driven through the rendered Home page."""
+there has no Stop on Home at all (it stops from Apps). Driven through the rendered Home page."""
 import subprocess
 import sys
 

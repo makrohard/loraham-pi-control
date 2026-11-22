@@ -66,7 +66,7 @@
       COLS.forEach(function (c) {
         var td = cell(fmt(r[c], c));
         if (c === "decoded" && r.status && r.status !== "ok") td.textContent = "[" + (r.decoded || r.status) + "]";
-        if (c === "hex" || c === "ascii" || c === "decoded") td.className = "rf-payload" + (c === "hex" ? " rf-hex" : "");   // dash plan c12 S5
+        if (c === "hex" || c === "ascii" || c === "decoded") td.className = "rf-payload" + (c === "hex" ? " rf-hex" : "");
         td.hidden = !state.cols[c];
         tr.appendChild(td);
       });

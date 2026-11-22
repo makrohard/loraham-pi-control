@@ -31,7 +31,7 @@
       + (badge.classList.contains("dbadge") ? " dbadge" : "");
   }
 
-  // Dash plan c5 + c6: the Monitor's RX / TX pill. TX while STATUS TX=1, or while this radio's TXOK+TXERR grew since
+  // the Monitor's RX / TX pill. TX while STATUS TX=1, or while this radio's TXOK+TXERR grew since
   // its previous poll (a frame sent between two polls). The first valid sample is the baseline; a lower total is a
   // reset (new baseline, no TX); missing or non-numeric STATS never count as 0: they drop the baseline, so the next
   // valid sample is a new one. One baseline per radio. Neither STATUS TX nor a valid count: hidden.
@@ -54,7 +54,7 @@
     pill.className = "badge txpill " + (on ? "tx-on" : "badge-running");
   }
 
-  // Dash plan c5 + daemon 1.5.0 seam: the FREQ / PWR / BW / SF line. A 1.5.0+ daemon (its STATUS carries RADIOERR=,
+  // the FREQ / PWR / BW / SF line. A 1.5.0+ daemon (its STATUS carries RADIOERR=,
   // the marker daemon_control.read_radio keys on) is read ONLY through `radio` (GET RADIO): its values while its
   // RADIO=READY, else (FAILED, UNPLUGGED, any other, {} or absent) "-" for all four, never STATUS. An older daemon:
   // STATUS FREQ / POWER / SF (BW "-": STATUS has none). A missing or "-" value is "-", also after an earlier value.
@@ -297,7 +297,7 @@
 
   // A box's open-state persists across ORDINARY reloads too (the id-keyed sessionStorage restore above only survives
   // dash.js's own signature reloads, and wins over the stored choice): the Webserver box (rendered collapsed) and,
-  // dash plan c10, each radio card (rendered open; key lhpc:radiobox-<rid or band>). The stored "1" opens, "0"
+  // each radio card (rendered open; key lhpc:radiobox-<rid or band>). The stored "1" opens, "0"
   // closes. The toggle listener is attached after the restore; the restore's own toggle event only writes the state
   // the box now shows. Mirrors the System box's localStorage contract.
   function remember(box, KEY) {

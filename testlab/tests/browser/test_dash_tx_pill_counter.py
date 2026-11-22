@@ -1,4 +1,4 @@
-"""Dash plan c6: the Monitor's RX / TX pill also shows TX when this radio's TXOK+TXERR grew since its previous poll.
+"""The Monitor's RX / TX pill also shows TX when this radio's TXOK+TXERR grew since its previous poll.
 The first valid sample is the baseline (TX only on STATUS TX=1); a lower total is a reset (new baseline, no TX);
 missing or incomplete STATS never count as 0 and drop the comparison until the next valid sample; STATUS TX=1 alone
 shows TX. Each radio has its own baseline. Two radios (r1, r3) in a real browser, their polls answered by the test;

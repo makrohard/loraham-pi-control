@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block body_class %}narrow-page{% endblock %}{# dash plan c12 S1: a named narrow exception (1024 px) #}
+{% block body_class %}narrow-page{% endblock %}{# a named narrow exception (1024 px) #}
 {% block title %}Kill {{ component or sid }} — LoRaHAM Pi Control{% endblock %}
 {% block content %}
   {# The operator's hard stop (A §2.12): SIGTERM, then SIGKILL after 5 s to whatever is left. One

@@ -677,7 +677,7 @@ def csrf():
 @pytest.fixture
 def daemon_record(tmp_path):
     """`daemon_record(rid, band, paths=None)`: a verified launch record of daemon@<rid> on `band` (a live process lhpc
-    owns, killed at teardown). Home lists a daemon under "Running on <rid>", with its row's RF-log line (dash plan c3),
+    owns, killed at teardown). Home lists a daemon under "Running on <rid>", with its row's RF-log line,
     only for such a record."""
     import subprocess
     import sys

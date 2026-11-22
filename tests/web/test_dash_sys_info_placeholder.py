@@ -1,4 +1,4 @@
-"""Dash plan c12 S8c (his word, read narrowly): the System card's host info line starts empty, the placeholder "Expand to
+"""The System card's host info line starts empty, the placeholder "Expand to
 load system information." is gone; the line itself stays (system.js fills it by id, test_system_box.py). Rendered GET."""
 from htmlq import parse
 

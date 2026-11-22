@@ -1,4 +1,4 @@
-"""Dash plan c12 S8b in a real browser: at 360 and 390 px every System row label fits its column (scrollWidth <=
+"""In a real browser: at 360 and 390 px every System row label fits its column (scrollWidth <=
 clientWidth), MEM included."""
 
 

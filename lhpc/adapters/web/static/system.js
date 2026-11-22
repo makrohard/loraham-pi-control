@@ -135,7 +135,7 @@
         if (dSum > 0 && dIdle >= 0) {               // negative delta (reboot/wrap) -> skip sample
           var pct = 100 * (1 - dIdle / dSum);       // number + graph stay TOTAL-%
           set("sys-cpu-val", pct.toFixed(0) + " %");
-          // dash plan c15: ONE total-CPU bar like the rows below (the per-core bars are gone); levels as before
+          // ONE total-CPU bar like the rows below (the per-core bars are gone); levels as before
           setBar("sys-cpu-bar", pct);
           setLevel(rowOf("sys-cpu-bar"), pct >= 90 ? "sys-crit" : (pct >= 70 ? "sys-warn" : ""));
           pushHist(hist.cpu, pct);
@@ -425,7 +425,7 @@
     if (nv) { while (nv.firstChild) nv.removeChild(nv.firstChild); nv.textContent = "…"; delete nv.dataset.txt; }
     var svgs = document.querySelectorAll("#sysbox polyline");
     for (var i = 0; i < svgs.length; i++) svgs[i].setAttribute("points", "");
-    setBar("sys-cpu-bar", 0);                       // dash plan c15: the total-CPU bar starts empty and neutral
+    setBar("sys-cpu-bar", 0);                       // the total-CPU bar starts empty and neutral
     setLevel(rowOf("sys-cpu-bar"), "");
   }
   // --- history persistence (STAGE 1: client-side only, zero cost for the Pi) -----------------

@@ -1,9 +1,9 @@
-"""Dash plan c13 NAV FIRST + 13a/13c/13d (G1 B6 matrix, the nav-first rows): in <main> the first element is the page's
+"""In <main> the first element is the page's
 .crumbline, then its optional second line (p.pagebar), then any notice (the disk notice forced on). Home: "All menus ·
 Home" (Home the h2.here, no link), no second line. Apps: "All menus · Home › Apps", no second line. All menus: one line
 "Home › Apps › All menus", no second line. Tree pages: their crumbs + "‹ show in Stacks". Hardware Add / a radio: the
-hardware crumbs + "‹ The radios". Pages outside the tree (Remove radio, Dependency Overview, Auto-install, a job log;
-13b) and the pages with no place (confirmations, error, self-update progress, HMAC apply: "All menus · Home › Apps ›
+hardware crumbs + "‹ The radios". Pages outside the tree (Remove radio, Dependency Overview, Auto-install, a job log)
+and the pages with no place (confirmations, error, self-update progress, HMAC apply: "All menus · Home › Apps ›
 <title>") get "‹ Back" (data-back, href Home). Every page except Home links Home in its crumbline. Rendered GETs."""
 import pytest
 from htmlq import parse

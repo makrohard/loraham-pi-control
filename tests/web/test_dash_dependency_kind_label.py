@@ -1,4 +1,4 @@
-"""Dash plan c4: on a Home card a component row of manifest kind library / firmware shows a neutral "library" /
+"""On a Home card a component row of manifest kind library / firmware shows a neutral "library" /
 "firmware" label (badge-kind) instead of its state pill; every other row keeps its state pill (a stopped service row
 still says "stopped"). The Apps page's rows are unchanged. Driven through the rendered pages, with a verified launch
 record per stack so each instance lists all its rows."""

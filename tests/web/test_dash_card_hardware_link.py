@@ -1,4 +1,4 @@
-"""Dash plan c2: a radio card's header title is plain text (no link) and the body has no "<name> (<model>)" hardware
+"""A radio card's header title is plain text (no link) and the body has no "<name> (<model>)" hardware
 line any more; a "Hardware" link (class logslink, id rd-hw-<rid>) to /hardware/radio/<rid> sits below the RX-TX Monitor
 while the daemon runs, and above "Running on <rid>" while it is stopped. It is the card's only link to its hardware page.
 Driven through the rendered Home page."""

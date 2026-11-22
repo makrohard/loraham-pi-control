@@ -1,4 +1,4 @@
-"""Dash plan c15 (his word; removal = his literal yes): the System card's CPU row has ONE bar like the rows below
+"""The System card's CPU row has ONE bar like the rows below
 (#sys-cpu-bar, width = the total CPU %, from the d.cpu.total jiffy deltas), no per-core bars; the row turns warn at
 >= 70 % and crit at >= 90 %; the number keeps "N %"; a reopened card starts with an empty, neutral bar. Real browser,
 /api/system answered by the test."""

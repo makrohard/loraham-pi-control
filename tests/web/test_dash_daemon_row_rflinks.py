@@ -1,4 +1,4 @@
-"""Dash plan c3: "Radio config" and "Daemon log" are gone from a radio card (the daemon row's config / logs open the
+""""Radio config" and "Daemon log" are gone from a radio card (the daemon row's config / logs open the
 same pages); the card's RF-log links (each link's target / job / radio, an unreadable entry's error pill) sit in the
 daemon component row, after its config / logs, as logslink links, and nowhere else on the card. The component macro
 gets that line from its callers: the instance's and an orphan entry's (rid ""), both with the card's radio. A stopped

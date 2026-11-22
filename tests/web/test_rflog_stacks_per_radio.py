@@ -87,7 +87,7 @@ def test_home_links_each_running_instance_of_the_band_to_its_own_file(tmp_path, 
     radios_fixture.write(tmp_path, (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"),
                                     radios.Radio("r2", "b", "uputronics", "868", ce="ce1"),
                                     radios.Radio("r4", "c", "meshstick-1262", "868", usb_serial="26073012")))
-    for rid in ("r2", "r4"):                     # dash plan c3: a card's RF links sit in its recorded daemon's row
+    for rid in ("r2", "r4"):                     # a card's RF links sit in its recorded daemon's row
         daemon_record(rid, "868")
     doc = parse(c.get("/").get_data(as_text=True))
     def jobs(band):

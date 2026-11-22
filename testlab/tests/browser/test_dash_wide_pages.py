@@ -1,4 +1,4 @@
-"""Dash plan c12 S1 in a real browser: main is wide on Home (well past 1024 px at 2560) and 1024 px on a confirmation page
+"""In a real browser: main is wide on Home (well past 1024 px at 2560) and 1024 px on a confirmation page
 (Remove radio); the header's Home / Apps buttons sit at the same x on both; at 360 px no page scrolls sideways."""
 _GEO = """() => { const m = document.querySelector('main.wrap').getBoundingClientRect();
   const x = s => Math.round(document.querySelector(s).getBoundingClientRect().left);

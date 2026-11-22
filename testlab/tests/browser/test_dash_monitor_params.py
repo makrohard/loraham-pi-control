@@ -1,4 +1,4 @@
-"""Dash plan c5 (+ the daemon 1.5.0 seam, a25 N2): the RX-TX Monitor in a real browser, its poll (/api/daemon/r3)
+"""The RX-TX Monitor in a real browser, its poll (/api/daemon/r3)
 answered by the test. Structure: an RX / TX pill in the summary, no TX active / CAD wait cells, rows Radio | TX mode,
 Uptime | Packet RSSI, CAD state | CAD RSSI, RX pkts | TX ok/err, and after Live RSSI the FREQ / PWR / BW / SF line (names
 in the field-label look, a name never wraps from its value). Painting: the pill from STATUS TX; an older daemon (no

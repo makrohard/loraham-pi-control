@@ -1,4 +1,4 @@
-"""Dash plan c12 S8 (his word): the System card body is three boxes in order: (1) the CPU..GNSS table, (2) autostart,
+"""The System card body is three boxes in order: (1) the CPU..GNSS table, (2) autostart,
 its texts before the Turn on / off button (the button last), (3) Reboot / Shut down, only when one of them is allowed
 (no empty box); the host info line stays below the boxes. Rendered GET of Home."""
 import pytest

@@ -1,4 +1,4 @@
-"""Dash plan c14: a Home card row's "password" link (meshcore-node of meshcore@r3) opens the Apps page on that stack and
+"""A Home card row's "password" link (meshcore-node of meshcore@r3) opens the Apps page on that stack and
 radio with its Password section open (stacks_state.js opens the details the hash names)."""
 from lhpc.core import instances, radios
 from lhpc.core.paths import Paths

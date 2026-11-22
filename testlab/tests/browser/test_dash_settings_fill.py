@@ -1,4 +1,4 @@
-"""Dash plan c12 S6 (his "settings fill"): a radio's Live radio settings grid is one column below 880 px and from 880 px
+"""A radio's Live radio settings grid is one column below 880 px and from 880 px
 as many 26rem columns as fit the wide page (at least 3 at 1920); nothing scrolls sideways at 360. Real browser."""
 _M = """() => { const g = document.querySelector('.settingsgrid');
   return {cols: getComputedStyle(g).gridTemplateColumns.split(' ').filter(Boolean).length,

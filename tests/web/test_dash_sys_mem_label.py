@@ -1,4 +1,4 @@
-"""Dash plan c12 S8b (his "4 fix", "we go with MEM"): the System card's memory row label shows MEM (it fits its 3.6rem
+"""The System card's memory row label shows MEM (it fits its 3.6rem
 column on phones); the row header keeps aria-label "Memory" for screen readers. Rendered GET of Home."""
 from htmlq import parse
 

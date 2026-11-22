@@ -215,7 +215,7 @@ def test_radio_dashboard_has_two_band_columns(web):
     assert doc.find("div", class_="radiogrid")
     assert doc.find("div", **{"data-radio-band": "433"}) and doc.find("div", **{"data-radio-band": "868"})
     assert "LoRaHAM 433 (r1, 433 MHz)" in body and "LoRaHAM 868 (r2, 868 MHz)" in body   # S2: one card per radio (W286)
-    # per-band: a start-stack control and the daemon's state (dash plan c3: no card "Radio config" link any more)
+    # per-band: a start-stack control and the daemon's state (no card "Radio config" link any more)
     assert 'name="op" value="start"' in body
     assert "daemon offline" in body and "Radio config" not in body
 
@@ -1481,15 +1481,15 @@ _DAEMON_UP = {100: ["loraham_daemon", "--radio", "433", "--id", "r1"]}
     ("offline-installed", _DAEMON_UP, {}),
 ], ids=["ready", "occupied", "offline-installed"])
 def test_the_radio_card_has_no_link_block_of_its_own(tmp_path, web, state, cmdlines, socks):
-    """Dash plan c3: in every state the daemon is installed in, the card has no "Radio config" / "Daemon log" / RF-log
-    block of its own (the daemon row carries config / logs and the RF links, test_dash_daemon_row_rflinks.py). Dash plan
-    c1: no card-level daemon Stop / Restart / Start form; these fixtures have no launch record, so "Running on" lists no
-    daemon either (it stops from Apps, his Q15). Daemon stopped: the start list is led by "daemon 433"."""
+    """In every state the daemon is installed in, the card has no "Radio config" / "Daemon log" / RF-log
+    block of its own (the daemon row carries config / logs and the RF links, test_dash_daemon_row_rflinks.py). No
+    card-level daemon Stop / Restart / Start form; these fixtures have no launch record, so "Running on" lists no
+    daemon either (it stops from Apps). Daemon stopped: the start list is led by "daemon 433"."""
     c = web(system=FakeSystem(cmdlines_data=cmdlines, unix_replies=socks).system)
     doc = parse(c.get("/").get_data(as_text=True))
     col = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
     acts = [f for f in col.find("form", class_="act") if col.within(f).field_default("target") == "daemon@r1"]
-    assert not acts, "dash plan c1: no card-level daemon Stop / Restart / Start form"
+    assert not acts, "no card-level daemon Stop / Restart / Start form"
     assert not col.find("p", class_="links") and not col.find("span", class_="rfline")
     assert not [a for a in col.find("a") if a.text.strip() in ("Radio config", "Daemon log")]
     assert not [h for h in col.find("h3") if h.text.strip() == "Radio config"]
@@ -1509,7 +1509,7 @@ def test_the_radio_card_has_no_log_links_without_a_daemon(web):
 
 def test_dash_radio_config_link_opens_daemon_settings(tmp_path, web, daemon_record):
     # With a configured setup, an answering CONF socket and a recorded daemon@r1 the daemon row emits its "config"
-    # link (dash plan c3: the card's "Radio config" is gone, L12: same page), asserted where the operator sees it.
+    # link (the card's "Radio config" is gone, L12: same page), asserted where the operator sees it.
     from lhpc.core import config as _cfg
     svc = ControllerService(
         system=FakeSystem(unix_replies={"/tmp/loraconf-r1.sock":

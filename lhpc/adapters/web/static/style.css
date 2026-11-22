@@ -106,14 +106,14 @@ h3 { font-size: 1rem; margin: .6rem 0 .35rem; }
   .brand-short { display: inline; }
 }
 .wrap { max-width: 1024px; margin: 0 auto; padding: 1.25rem; }
-/* dash plan c12 S1: every page is wide (main uncapped, side padding max(1.25rem, 2vw)); the header keeps the 1024 px
+/* every page is wide (main uncapped, side padding max(1.25rem, 2vw)); the header keeps the 1024 px
    .wrap, so its buttons never move; the named narrow exceptions (the confirmation pages: body.narrow-page) keep it too */
 main.wrap { max-width: none; padding-left: max(1.25rem, 2vw); padding-right: max(1.25rem, 2vw); }
 body.narrow-page main.wrap { max-width: 1024px; padding-left: 1.25rem; padding-right: 1.25rem; }
-/* dash plan c12 S9 (his word): Home's Webserver card (Firewall box inside) and System card are exactly the two radio
+/* Home's Webserver card (Firewall box inside) and System card are exactly the two radio
    cards' width (484 + 16 + 484 = 984 px), left-aligned with the radio grid; full width on phones */
 main.wrap .homeduo > .card.wsbox, main.wrap .homeduo > .card.sysbox { width: min(100%, 984px); box-sizing: border-box; }
-/* dash plan c12 S10 (his word): one wrapping row below the radio grid; side by side when both fit, the gap = the radio
+/* one wrapping row below the radio grid; side by side when both fit, the gap = the radio
    grid's (1rem), so System starts on the third radio column */
 .homeduo { display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: 1rem; }
 .homeduo > .card { flex: 0 0 min(100%, 984px); min-width: 0; }
@@ -172,7 +172,7 @@ tr:last-child td { border-bottom: none; }
 .badge-stopped, .badge-not-installed, .badge-unknown { background: var(--badge-idle-bg); color: var(--badge-idle-ink); border-color: var(--badge-idle-border); }
 .badge-not-applicable { background: var(--badge-idle-bg); color: var(--badge-idle-ink); border-color: var(--badge-idle-border); }
 .badge-not-applicable::before { content: "– "; }
-.badge-kind { background: transparent; color: var(--badge-idle-ink); border-color: var(--badge-idle-border); }   /* dash plan c4: a library / firmware row's neutral label */
+.badge-kind { background: transparent; color: var(--badge-idle-ink); border-color: var(--badge-idle-border); }   /* a library / firmware row's neutral label */
 
 .pill { display: inline-block; padding: .05rem .45rem; border-radius: 6px; background: var(--pill-bg); color: var(--pill-ink); font-size: .78rem; border: 1px solid var(--line); }
 /* Semantic pill colours (webserver security + running posture), theme-aware via the badge tokens. */
@@ -203,7 +203,7 @@ details[open] summary { margin-bottom: .4rem; }
 details.monitor > summary { font-size: 1rem; font-weight: 600; color: var(--ink);
                             margin: .6rem 0 .3rem; }
 .monrssi th { white-space: nowrap; }
-/* dash plan c5: the RX/TX pill right in the Monitor summary; the FREQ/PWR/BW/SF line (names in the field-label look,
+/* the RX/TX pill right in the Monitor summary; the FREQ/PWR/BW/SF line (names in the field-label look,
    values in the value font, a name never wraps away from its value) */
 details.monitor > summary .txpill { float: right; font-weight: 600; }
 .txpill.tx-on { background: var(--badge-bad-bg); color: var(--bad); border-color: var(--badge-bad-border); }
@@ -211,7 +211,7 @@ details.monitor > summary .txpill { float: right; font-weight: 600; }
 .rparams .rp { white-space: nowrap; }
 .rparams .rpk { color: var(--muted); font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .4px; margin-right: .35rem; }
 .rparams .rpv { font-size: .92rem; }
-/* dash plan c9 (radio cards only): each component row and the RX-TX Monitor in a light box (no separator lines between
+/* each component row and the RX-TX Monitor in a light box (no separator lines between
    rows); below the phone breakpoint the Apps-style inset tightening for .runstack, the boxes and the Monitor */
 .radio-col ul.complist { display: flex; flex-direction: column; gap: .45rem; padding: 0; }
 .radio-col ul.complist > li.crow, .radio-col details.monitor {
@@ -259,7 +259,7 @@ button:hover { background: var(--btn-bg); color: var(--btn-ink); border-color: v
             border: 1px solid var(--line); border-radius: 8px; padding: .25rem .5rem; }
 .grouplabel { font-size: .68rem; text-transform: uppercase; letter-spacing: .5px;
               color: var(--muted); margin-right: .2rem; }
-/* dash plan c11: left-aligned radio columns of 484 px, as many as fit; on a small screen one column shrinks to the width */
+/* left-aligned radio columns of 484 px, as many as fit; on a small screen one column shrinks to the width */
 .radiogrid { display: grid; grid-template-columns: repeat(auto-fill, min(484px, 100%)); justify-content: start;
              gap: 1rem; align-items: start; }
 .radio-col .feed { max-height: 9rem; overflow: auto; }
@@ -303,7 +303,7 @@ a.iface { text-decoration: none; color: var(--brand); }
 .cgrid .csub { margin: .15rem 0 0; font-size: .9em; overflow-wrap: anywhere; }
 .cgrid .csub .iface { display: inline-block; margin: .15rem .4rem 0 0; }
 .cgrid .csub .logslink { margin-left: 0; }
-.cgrid .csub .rfline { display: inline; }   /* dash plan c3: the daemon row's RF-log links, after config / logs */
+.cgrid .csub .rfline { display: inline; }   /* the daemon row's RF-log links, after config / logs */
 .headlink { margin-left: .5rem; }
 .cmdbox { position: relative; }
 .cmdbox .copybtn { position: absolute; top: .3rem; right: .3rem; font-size: .75rem;
@@ -371,7 +371,7 @@ a.iface { text-decoration: none; color: var(--brand); }
 /* TOP-LEVEL row headers (controller + each stack) lay out as fixed columns so the SAME field lines up
    vertically across rows: marker | name | status | version | extra. The summary reserves
    right padding for the .row-actions overlay so the flexible `col-extra` never slides under it. */
-/* dash plan c12 S4 (his "let columns grow"): on the wide page the name column grows with the row (20 % of it, at least
+/* on the wide page the name column grows with the row (20 % of it, at least
    the old 11em), the same width in every row, so the columns still line up and no name is cut off */
 .stacklist .stackrow > summary {
   display: grid;
@@ -381,7 +381,7 @@ a.iface { text-decoration: none; color: var(--brand); }
   row-gap: .2rem;
   padding-right: 11.5em;   /* room for the logs + "Update" overlay */
 }
-/* a name too long for its column wraps (no ellipsis) at every width (a25 N1 on S4: 861..1090 px cut long names) */
+/* a name too long for its column wraps (no ellipsis) at every width (861..1090 px would otherwise cut long names) */
 .stacklist .stackrow > summary .col-name    { grid-column: 2; min-width: 0; white-space: normal; }
 .stacklist .stackrow > summary .col-status  { grid-column: 3; }
 .stacklist .stackrow > summary .col-version { grid-column: 4; }
@@ -473,7 +473,7 @@ input.wide { width: 100%; min-width: 16rem; }
 .settings th { width: 12rem; }
 /* Live daemon settings (daemon page): one param per cell, two columns when wide enough. */
 .settingsgrid { display: grid; grid-template-columns: 1fr; gap: .35rem 1.6rem; margin: .3rem 0 .6rem; }
-/* dash plan c12 S6 (his "settings fill"): from 880 px as many 26rem columns as fit the wide page (4 at 1920) */
+/* from 880 px as many 26rem columns as fit the wide page (4 at 1920) */
 @media (min-width: 880px) { .settingsgrid { grid-template-columns: repeat(auto-fill, minmax(26rem, 1fr)); } }
 .setcell { display: flex; align-items: center; gap: .6rem; }
 .setkey { min-width: 6rem; font-family: ui-monospace, monospace; font-size: .85rem; }
@@ -545,7 +545,7 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .logbox-half { max-height: 22rem; }
 .tasklist { width: 100%; border-collapse: collapse; margin-bottom: 0.8rem; }
 .tasklist th, .tasklist td { text-align: left; padding: 0.25rem 0.6rem 0.25rem 0; }
-/* dash plan c12 S12 (his word): Auto-install's two tables keep today's 950 px on big screens (.tasklist itself unchanged) */
+/* Auto-install's two tables keep today's 950 px on big screens (.tasklist itself unchanged) */
 #ai-select, #ai-tasks { width: min(100%, 59.375rem); }
 .badge-ok { background: var(--badge-ok-bg); color: var(--ok); border-color: var(--badge-ok-border); }
 .badge-failed, .badge-not-running { background: var(--badge-bad-bg); color: var(--bad); border-color: var(--badge-bad-border); }
@@ -564,7 +564,7 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 #rfview th[aria-sort="ascending"] button::after { content: " \25B2"; }
 #rfview th[aria-sort="descending"] button::after { content: " \25BC"; }
 #rfview td { font-variant-numeric: tabular-nums; white-space: nowrap; }
-/* dash plan c12 S5 (his "c" + refinement): the table takes the page's width; payload cells wrap instead of being cut at
+/* the table takes the page's width; payload cells wrap instead of being cut at
    18rem. The hex cell is 32 characters wide (the hex text has 2 per byte, no spaces): 16 bytes per line, a break only
    between two bytes; the ascii / decoded cells take the rest of the row (at least 12rem) and wrap. */
 #rfview { width: 100%; }
@@ -725,7 +725,7 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
    the summary only reserves room for it. */
 .wsbox .fwline .hdrlogs { margin-left: auto; }
 .wsbox > details > summary { padding-right: 4rem; }
-/* dash plan c10: a radio card collapses like Webserver / System: the title and the daemon pill in the summary row */
+/* a radio card collapses like Webserver / System: the title and the daemon pill in the summary row */
 .radio-col > details.radiobox > summary { cursor: pointer; padding: .8rem 1rem; color: var(--ink); list-style: none;
                                           display: flex; align-items: baseline; gap: .5rem; }
 .radio-col > details.radiobox > summary::-webkit-details-marker { display: none; }
@@ -734,7 +734,7 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .radio-col > details.radiobox > summary h2 { margin: 0; font-size: 1.05rem; display: inline; }
 .radio-col > details.radiobox > summary .badge { margin-left: auto; }
 .radio-col > details.radiobox[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 0; }
-@media (max-width: 860px) { .radio-col > details.radiobox > summary { padding-left: .7rem; padding-right: .7rem; } }   /* as the card header did (a25 N2) */
+@media (max-width: 860px) { .radio-col > details.radiobox > summary { padding-left: .7rem; padding-right: .7rem; } }   /* as the card header did */
 .systab { table-layout: fixed; width: 100%; border-collapse: collapse; }
 .systab th { width: 4.6rem; text-align: left; font-weight: 600; font-size: .88rem;
              padding: .3rem .4rem .3rem 0; }
@@ -749,7 +749,7 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .sysblock { border-bottom: 1px solid var(--line); padding: .3rem 0; margin: 0; }
 .sysblock p { margin: 0; }
 .sysblock form { margin: .25rem 0; }
-/* dash plan c12 S8: the System card's three boxes, the radio-card component box look (c9); phones: the Apps inset */
+/* the System card's three boxes, the radio-card component box look; phones: the Apps inset */
 #sysbox .sysgroup { border: 1px solid var(--line); border-radius: 6px; padding: .45rem .6rem; margin: .6rem 0;
                     background: color-mix(in srgb, var(--line) 18%, transparent); }
 #sysbox .sysgroup .systab tr:last-child { border-bottom: 0; }
@@ -757,7 +757,7 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 #sysbox .sysgroup .actrow { margin: 0; }
 #sysbox .sysgroup .sysautostart form { margin-bottom: 0; }
 @media (max-width: 480px) { #sysbox .sysgroup { padding: .3rem .35rem; } }
-/* dash plan c12 S11: each Webserver entry its own box (the same look), boxes .45rem apart, no separator lines inside */
+/* each Webserver entry its own box (the same look), boxes .45rem apart, no separator lines inside */
 #wsbox > .body { display: flex; flex-direction: column; gap: .45rem; }
 #wsbox .wsgroup { border: 1px solid var(--line); border-radius: 6px; padding: .45rem .6rem;
                   background: color-mix(in srgb, var(--line) 18%, transparent); }
@@ -854,7 +854,7 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 
 /* W257 Hardware list: the whole row opens the radio's detail (its id link stretched over the row, no JS); the
    row's Disable/Enable sits above that link, so a click or Enter on it never opens the detail (W258). */
-/* dash plan c12 S13 (his "cap hw list table"): the hardware list keeps today's 950 px on big screens; phones unchanged */
+/* the hardware list keeps today's 950 px on big screens; phones unchanged */
 #hw-list { width: min(100%, 59.375rem); }
 .hwlist td, .hwlist th { padding: .45rem .5rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .hwlist .hwrow { position: relative; }
@@ -902,6 +902,6 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .card .body > .navtree { padding-left: 0; }
 .navtree li { margin: .15rem 0; }
 .navtree summary { cursor: pointer; font-weight: 600; padding: .25rem 0; }
-.navtree-other a { font-weight: 600; }   /* dash plan c17: All menus' second card, the tree's top-entry look */
+.navtree-other a { font-weight: 600; }   /* All menus' second card, the tree's top-entry look */
 .navtree .tree-self { margin: 0 0 .1rem 1.1rem; font-size: .85rem; }
 .navtree a { display: inline-block; padding: .25rem 0; }

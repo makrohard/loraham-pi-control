@@ -1,4 +1,4 @@
-// Dash plan c13: "‹ Back" (a[data-back]) goes one step back in the browser history, as the browser's own Back does.
+// "‹ Back" (a[data-back]) goes one step back in the browser history, as the browser's own Back does.
 // A page opened with no history (a new tab, a bookmark) follows the link's href instead: Home. No inline handler (CSP).
 (function () {
   "use strict";

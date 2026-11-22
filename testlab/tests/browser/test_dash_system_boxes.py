@@ -1,4 +1,4 @@
-"""Dash plan c12 S8 in a real browser: the System card's boxes have the radio-card component box look (1px border,
+"""In a real browser: the System card's boxes have the radio-card component box look (1px border,
 6px radius, tinted fill, .45rem .6rem), the gauge table's last row has no line, phones get the Apps inset (.3rem .35rem)
 and nothing scrolls sideways at 360 px."""
 _STYLE = """() => { const cs = e => getComputedStyle(e), root = parseFloat(cs(document.documentElement).fontSize);

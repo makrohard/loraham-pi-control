@@ -35,7 +35,7 @@ def test_each_radio_of_one_band_has_its_own_labelled_card_and_daemon_view(web, t
     assert (doc.by_id("rd-txmode-r1").text, doc.by_id("rd-txmode-r2").text) == ("MANAGED", "DIRECT")   # each its own
     for rid in ("r1", "r2"):
         card = doc.within(doc.by_id(f"radio-{rid}"))
-        # dash plan c3: "Radio config" / "Daemon log" left the card (the daemon row's config / logs, its radio's own)
+        # "Radio config" / "Daemon log" left the card (the daemon row's config / logs, its radio's own)
         assert not [a for a in card.find("a") if a.text in ("Radio config", "Daemon log")]
         assert [a["href"] for a in card.find("a") if a.text == "Hardware"] == [f"/hardware/radio/{rid}"]
         targets = {card.within(f).field_default("target") for f in card.find("form", action="/action")}
@@ -84,7 +84,7 @@ def test_the_banner_tells_no_list_from_radios_none_enabled(web, tmp_path, case):
 
 @pytest.mark.parametrize("rows", [TWO_433[:1], TWO_433, TWO_433 + (radios_fixture.R3,)], ids=["one", "two", "three"])
 def test_every_radio_count_is_the_same_wide_grid(web, tmp_path, rows):
-    # dash plan c11 (his yes, 19:18Z): dash-narrow is gone; one card is one 484 px column of the same grid
+    # dash-narrow is gone; one card is one 484 px column of the same grid
     r, doc = _page(web, tmp_path, rows=rows)
     assert r.status_code == 200 and len(doc.find("div", class_="radio-col")) == len(rows)
     assert not doc.find("body")[0].has_class("dash-narrow")

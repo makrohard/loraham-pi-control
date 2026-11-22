@@ -1,4 +1,4 @@
-"""Dash plan c17 (his word): the All menus page has a second card below the tree with exactly two links, Dependency
+"""The All menus page has a second card below the tree with exactly two links, Dependency
 Overview (/dependencies) and Auto-install (/auto-install), each answering 200; nothing else is added. Rendered GET."""
 from htmlq import parse
 

@@ -9,7 +9,7 @@ DAEMONS = {100: ["loraham_daemon", "--radio", "433", "--id", "r1"],     # the li
 
 
 def _dashboard(web, tmp_path, daemon_record):
-    daemon_record("r1", "433")                          # dash plan c3: the links sit in each recorded daemon's row
+    daemon_record("r1", "433")                          # the links sit in each recorded daemon's row
     daemon_record("r2", "868")
     return web(cmdlines=DAEMONS).get("/").get_data(as_text=True)
 

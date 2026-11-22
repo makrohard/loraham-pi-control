@@ -1,4 +1,4 @@
-"""Dash plan c11 (a25 N1): Home's radio cards are left-aligned 484 px columns (repeat(auto-fill, min(484px, 100%)),
+"""Home's radio cards are left-aligned 484 px columns (repeat(auto-fill, min(484px, 100%)),
 justify-content start): two radios side by side from the grid's left edge, one radio one 484 px column at the left
 (no narrowed page), and on a phone one column that shrinks to the width. Computed geometry in a real browser."""
 from lhpc.core import radios

@@ -209,7 +209,7 @@ def test_a_running_daemon_keeps_its_card_while_its_stick_is_unplugged(tmp_path, 
     doc = parse(web(system=fs.system).get("/").get_data(as_text=True))
     card = doc.find("div", class_="radio-col", **{"data-radio-rid": "r2"})[0]
     assert doc.within(card).by_id("rd-badge-r2").text.strip() == "daemon READY"
-    # dash plan c1: no card pair; no launch record lists this daemon under "Running on" either: it stops from Apps (his Q15)
+    # no card pair; no launch record lists this daemon under "Running on" either: it stops from Apps
     assert _daemon_forms(doc, card) == set()
 
 
@@ -238,7 +238,7 @@ def test_add_hardware_serves_a_band_a_hat_was_added_on(tmp_path, web, csrf):
 
 
 def test_a_cards_daemon_log_and_occupied_badge_are_its_radios(tmp_path, monkeypatch, web, daemon_record):
-    # G1-C28 N3: the card's daemon log opens its radio's own start log (dash plan c3: the daemon row's "logs", the
+    # G1-C28 N3: the card's daemon log opens its radio's own start log (the daemon row's "logs", the
     # card's "Daemon log" is gone, L12); REMOVALS row 11: an occupied badge names the radio's state, as the band card did.
     _box(tmp_path)
     monkeypatch.setattr(ControllerService, "_daemon_installed", lambda self, dstat: True)

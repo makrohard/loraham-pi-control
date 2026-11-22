@@ -1,4 +1,4 @@
-"""Dash plan c10: every Home radio card, a stray band card included, wraps its body in its own
+"""Every Home radio card, a stray band card included, wraps its body in its own
 details#radiobox-<rid or band> (open by default) inside div#radio-<rid or band>; ids stay unique with two stray cards."""
 from htmlq import parse
 

@@ -321,7 +321,7 @@ def test_home_keeps_its_log_links(tmp_path, web):
     # green on the base too: Home is not the Apps page
     c, _svc = _client(web, tmp_path, radios=True)
     # (an instance row's config/logs links are pinned in test_home_instance_card_links)
-    # dash plan c2: each radio card's "Hardware" link is a logslink too (rendered order: r1, r2, then Webserver)
+    # each radio card's "Hardware" link is a logslink too (rendered order: r1, r2, then Webserver)
     assert [a["href"] for a in parse(_html(c, "/")).find("a", class_="logslink")] == [
         "/hardware/radio/r1", "/hardware/radio/r2", "/webserver/logs"]
 

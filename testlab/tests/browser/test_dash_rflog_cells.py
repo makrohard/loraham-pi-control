@@ -1,4 +1,4 @@
-"""Dash plan c12 S5 (his "c" + refinement): on the RF log page (/api/rflog stubbed, all columns ticked) a long payload
+"""On the RF log page (/api/rflog stubbed, all columns ticked) a long payload
 wraps instead of being cut, nothing scrolls sideways at 1920; a hex cell holds 16 bytes per line (lines =
 ceil(bytes / 16)), breaking only between two bytes; the ascii cell takes the rest of the row and is at least 12rem
 (also at 1024, where the row is too tight for its share)."""
