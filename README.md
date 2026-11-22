@@ -92,14 +92,14 @@ Other boards with those chips: choose the preset whose wiring matches
 | | Stack | Free to use | What it is | Docs |
 |:---:|---|:---:|---|---|
 | <img src="docs/img/readme/logo-loraham.png" height="32" alt="LoRaHAM"> | `daemon` | | LoRaHAM daemon — owns the radios, one process and socket set per radio | [daemon](docs/stacks/daemon.md) |
-| <img src="docs/img/readme/logo-loraham.png" height="32" alt="LoRaHAM"> | `chat` | 📜🛜 | APRS/chat TUI (local or over SSH) | [chat](docs/stacks/chat.md) |
-| <img src="docs/img/readme/logo-loraham.png" height="32" alt="LoRaHAM"> | `voice` | 📜🛜 | LoRa voice — GTK app on desktop, ncurses terminal on Lite | [voice](docs/stacks/voice.md) |
-| | `kiss` | | KISS TNC over TCP (graywolf, xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
-| <img src="docs/img/readme/logo-graywolf.png" height="48" alt="graywolf"> | `graywolf` | 📜🛜 | Graywolf APRS station (web UI, digipeater, iGate) | [graywolf](docs/stacks/graywolf.md) |
-| <img src="docs/img/readme/logo-meshtastic.png" height="48" alt="Meshtastic"> | `meshtastic` | ✅ | Rootless `meshtasticd`, drives the radio directly | [meshtastic](docs/stacks/meshtastic.md) |
-| <img src="docs/img/readme/logo-meshcom.png" height="48" alt="ICSSW"> | `meshcom` | 📜🛜 | MeshCom firmware in QEMU, bridged to the daemon | [meshcom](docs/stacks/meshcom.md) |
+| <img src="docs/img/readme/logo-meshtastic.png" height="48" alt="Meshtastic"> | `meshtastic` | ✅ | Rootless `meshtasticd`, drives the radio directly; does not work on USB radios | [meshtastic](docs/stacks/meshtastic.md) |
 | <img src="docs/img/readme/logo-meshcore.png" height="64" alt="openHop and MeshCore"> | `meshcore` | ✅ | MeshCore on openHop — chat node and/or repeater | [meshcore](docs/stacks/meshcore.md) |
 | <img src="docs/img/readme/logo-reticulum.png" height="48" alt="Reticulum"> | `reticulum` | ✅ | Reticulum node, drives the radio directly over SPI | [reticulum](docs/stacks/reticulum.md) |
+| <img src="docs/img/readme/logo-meshcom.png" height="48" alt="ICSSW"> | `meshcom` | 📜🛜 | MeshCom firmware in QEMU, bridged to the daemon | [meshcom](docs/stacks/meshcom.md) |
+| <img src="docs/img/readme/logo-graywolf.png" height="48" alt="graywolf"> | `graywolf` | 📜🛜 | Graywolf APRS station (web UI, digipeater, iGate) | [graywolf](docs/stacks/graywolf.md) |
+| | `kiss` | | KISS TNC over TCP (graywolf, xastir, YAAC …) | [kiss](docs/stacks/kiss.md) |
+| <img src="docs/img/readme/logo-loraham.png" height="32" alt="LoRaHAM"> | `chat` | 📜🛜 | APRS/chat TUI (local or over SSH) | [chat](docs/stacks/chat.md) |
+| <img src="docs/img/readme/logo-loraham.png" height="32" alt="LoRaHAM"> | `voice` | 📜🛜 | LoRa voice — GTK app on desktop, ncurses terminal on Lite | [voice](docs/stacks/voice.md) |
 
 ✅ no licence needed, within the ISM limits (frequency, power, duty cycle)\
 📜🛜 amateur-radio licence needed, no encryption
