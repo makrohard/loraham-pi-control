@@ -520,3 +520,16 @@ def test_g1_w2_re_a_radio_the_list_does_not_have_is_said_and_picks_none(tmp_path
     assert selects and all([(o["value"], o.has_attr("disabled")) for o in s.find("option") if o.has_attr("selected")]
                            == [("", True)] for s in selects)
 
+
+
+def test_a_radios_component_confirmed_from_the_console_runs(tmp_path, monkeypatch):
+    # Box H 11-21: the confirmed Start of `meshcore-webui@r4` (the hash taken as the console takes it, through
+    # parse_target) ended "unknown stack 'meshcore-webui'": the child must find the component's copy by its stack.
+    from lhpc.core import instances, radios
+    radios_fixture.write(tmp_path, (radios.Radio("r4", "stick", "meshstick-1262", "868", usb_serial="MS123456"),))
+    svc = _svc(tmp_path)
+    _name, inst, _band, why = instances.parse_target(svc, "meshcore-webui@r4")
+    assert inst is not None and not why
+    rc, launched, detail = _run_child(tmp_path, monkeypatch, "meshcore-webui", "r4",
+                                      instances.plan_hash(svc, "start", "meshcore-webui", inst))
+    assert (rc, launched) == (0, [("meshcore-webui", "r4")]), detail

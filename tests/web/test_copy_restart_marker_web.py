@@ -181,3 +181,61 @@ def test_g1_b1_re_a_recorded_slot_0_on_a_disabled_radio_is_not_started_from_the_
     finally:
         p.kill()
         p.wait(timeout=5)
+
+
+def _start_child(tmp_path, monkeypatch, rows, target, rid, *, restart=False):
+    """The detached web start/restart child (`_stack-start <target> --radio <rid>`) with the core's start/restart
+    stubbed: (rc, calls, job result) — the console's own spawn arguments (service_jobs.spawn_start_job)."""
+    import os
+
+    from lhpc.adapters.cli.main import main
+    from lhpc.core import jobresult, jobs, procident
+    from lhpc.core.services import ActionResult
+    radios_fixture.write(tmp_path, rows)
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    monkeypatch.setenv("LHPC_WEBJOB_GATE_TIMEOUT_S", "0.3")
+    svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
+    op = "restart" if restart else "start"
+    log, aid, stack = f"web-{op}-{target}-{rid}.log", "a" * 32, svc.stack_of(target) or target
+    assert jobresult.reserve(svc._paths, log, aid, op, target, stack, [])
+    assert jobs.write_job_marker(svc._paths, log, os.getpid(), target, op,
+                                 ident=procident.proc_identity(os.getpid()), attempt_id=aid)
+    calls = []
+
+    def start(self, target, apply=False, stop_owners=False, band="", auto_install_ctx=None, *,
+              _before_start_locked=None, inst=None, **k):
+        calls.append((target, inst.rid if inst is not None else None))
+        return _before_start_locked() or ActionResult(True, "started (stub)")
+
+    def restart_(self, target, apply=False, stop_owners=False, cascade=False, band="", *,
+                 _before_restart_locked=None, inst=None, **k):
+        calls.append((target, inst.rid if inst is not None else None))
+        return _before_restart_locked() or ActionResult(True, "restarted (stub)")
+    monkeypatch.setattr(ControllerService, "start", start)
+    monkeypatch.setattr(ControllerService, "restart", restart_)
+    argv = ["_stack-start", target, "--web-result", log, "--attempt-id", aid, "--radio", rid]
+    rc = main(argv + (["--restart"] if restart else []))
+    return rc, calls, jobresult.read_one(svc._paths, log)
+
+
+R4 = radios.Radio("r4", "stick", "meshstick-1262", "868", usb_serial="MS123456")
+
+
+def test_the_start_child_starts_a_radios_component_as_its_stacks_copy(tmp_path, monkeypatch):
+    # Box H 11-21: the console's Start of `meshcore-webui@r4` spawned `_stack-start meshcore-webui --radio r4`, whose
+    # copy lookup took the COMPONENT id as a stack id and ended the job "unknown stack 'meshcore-webui'" with nothing
+    # started. The child resolves the copy by the component's stack and starts the component as that copy.
+    for restart in (False, True):
+        rc, calls, res = _start_child(tmp_path / str(restart), monkeypatch, (R4,), "meshcore-webui", "r4",
+                                      restart=restart)
+        assert (rc, calls) == (0, [("meshcore-webui", "r4")]), (restart, res)
+        assert res["state"] == "done", res
+
+
+def test_the_start_childs_refusal_is_in_its_job_log(tmp_path, monkeypatch, capsys):
+    # Box H 11-21: the job log behind the console's "process ended" card was empty: the copy-lookup refusal ended the
+    # job without a line. The child's stdout IS that log (spawn_start_job), so the refusal is printed there.
+    rows = (ROWS[0], radios.Radio("r3", "b", "uputronics", "433", ce="ce1", enabled=False))
+    rc, calls, res = _start_child(tmp_path, monkeypatch, rows, "kiss", "r3")
+    assert (rc, calls, res["state"]) == (1, [], "failed")
+    assert "web start: kiss@r3: r3 is disabled" in capsys.readouterr().out, res

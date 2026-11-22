@@ -1427,8 +1427,9 @@ def _run(argv: list[str] | None = None) -> int:
             if (svc.stack_of(args.target) or args.target) == (svc.stack_of(svc.DAEMON_ID) or "daemon"):
                 inst, _band, why = radio_start.daemon_radio(svc, args.radio)
             else:                                   # W325: a listed copy's start/restart from its card or marker
-                inst, why = instances.copy_of(svc, args.target, args.radio)
+                inst, why = instances.copy_of(svc, svc.stack_of(args.target) or args.target, args.radio)
             if why or inst is None:
+                print(f"web {op}: {why or 'no such copy'}")    # stdout is the job log (spawn_start_job)
                 jobresult.terminalize(svc._paths, web, aid, "failed", detail=(why or "no such copy")[:400])
                 return 1
 
