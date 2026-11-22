@@ -27,8 +27,10 @@ ARGV = {"loraham-daemon": lambda rid, band: ["loraham_daemon", "--radio", band, 
 
 @contextlib.contextmanager
 def _box(tmp_path, *holders, rows=radios_fixture.BOX_H):
-    """A Box H service (`rows`) with `holders` running: (stack, component, rid, band[, record=True[, argv]])."""
+    """A Box H service (`rows`) with `holders` running: (stack, component, rid, band[, record=True[, argv]]). Reticulum
+    runs its direct-SPI node here (`backend = spi` on every radio, B1): the claims these checks judge."""
     radios_fixture.write(tmp_path, rows)
+    radios_fixture.reticulum_backend(tmp_path, [r.id for r in rows])
     procs = [subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
              for _ in holders]
     try:

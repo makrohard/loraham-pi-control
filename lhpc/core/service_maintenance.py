@@ -454,7 +454,7 @@ class MaintenanceOpsMixin:
         # `build_free` stays as it is (it governs the synthesized build_requires source-checkout
         # entries); `classify` is the SAME predicate the start gate uses, so this report and a start
         # refusal can no longer contradict each other on a binary-managed runtime dependency.
-        report = deps.stack_report(self._lifecycle(), self._paths, self.stacks(),
+        report = deps.stack_report(self._lifecycle(), self._paths, instances.stacks_in_use(self),   # B1 note M7
                                    stack_id, comp_index, build_free=self.binary_covers,
                                    classify=self.binary_requirement_class,
                                    artifact_note=self.ARTIFACT_MISSING_NOTE,

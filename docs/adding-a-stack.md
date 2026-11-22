@@ -199,6 +199,10 @@ every TCP listener also needs `firewall` metadata and a `tcp.port.<n>` claim.
     mode = "exclusive"           # exclusive | provider | consumer | cooperative | requirement
 ```
 
+A component with a per-radio `backend` enum param (Reticulum: `daemon` | `spi`) may key a `resource` or `require`
+with `backend = "<value>"`, add dependencies per value with `backend_depends = { <value> = ["<component>"] }` and
+derive a hidden file key with `from_backend = { <value> = "<text>" }`: each instance gets only its backend's entries.
+
 ## The lifecycle
 
 ```bash

@@ -1,7 +1,10 @@
 """SPI-REFUSAL (PLAN-SPI-REFUSAL v4): a stack with `radio_access = "spi"` (reticulum, meshtastic: they drive the radio
 themselves) is OFFERED and STARTED on SPI radios only (instances.eligible / radio_refusal, copy_of's refusal); what runs
 and what a Stop reaches stay the inventory (radios_of, stack_instances, the running keys). Box H's list: r1 loraham 433,
-r2 loraham 868 (SPI), r3 CH341-RFM98 433 and r4 PineDio 868 (USB)."""
+r2 loraham 868 (SPI), r3 CH341-RFM98 433 and r4 PineDio 868 (USB).
+Reticulum's refusal is per interface since its `backend` setting (plan reti v21 §1, B1): these tests save
+`backend = spi` on every radio (`_spi_backend`), so they hold for that backend; the default `daemon` is in
+test_reticulum_backend.py."""
 from __future__ import annotations
 
 import contextlib
@@ -26,12 +29,19 @@ TWO_SPI_868 = (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"), radios.Ra
 def why(target, rid, kind="USB-CH341", alts=("r1", "r2")):
     sid = target.partition("@")[0]
     owner = "meshtastic" if sid.startswith("meshtastic") else "reticulum"
+    who = owner if owner == "meshtastic" else "reticulum with backend spi"
     tail = ("use " + " or ".join(f"{owner}@{r}" for r in alts)) if alts else "add an SPI radio on the Hardware page"
-    return f"{owner}@{rid}: {owner} drives SPI radios only, {rid} is a {kind} radio: {tail}"
+    return f"{owner}@{rid}: {who} drives SPI radios only, {rid} is a {kind} radio: {tail}"
+
+
+def _spi_backend(tmp_path, rows):
+    """Reticulum on the direct driver (`backend = spi`) on every radio of `rows`."""
+    radios_fixture.reticulum_backend(tmp_path, [r.id for r in rows])
 
 
 def _svc(tmp_path, rows=BOX_H):
     radios_fixture.write(tmp_path, rows)
+    _spi_backend(tmp_path, rows)
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
 
@@ -80,8 +90,9 @@ def test_t1_an_unknown_radio_access_is_a_manifest_error():
 def test_t1_the_shipped_spi_stacks_are_reticulum_and_meshtastic_every_other_is_daemon(tmp_path):
     svc = _svc(tmp_path)
     access = {s.id: getattr(s, "radio_access", "daemon") for s in svc.stacks()}     # red-before: no stack is "spi"
-    assert {k for k, v in access.items() if v == "spi"} == {"reticulum", "meshtastic"}
+    assert {k for k, v in access.items() if v == "spi"} == {"meshtastic"}           # reticulum: per interface (B1)
     assert set(access.values()) == {"spi", "daemon"}
+    assert {s.id for s in svc.stacks() if instances.access(svc, s, "r2") == "spi"} == {"reticulum", "meshtastic"}
 
 
 @pytest.mark.parametrize("model,kind", [("no-such-model", "UNKNOWN"), ("", "UNKNOWN"),
@@ -89,10 +100,13 @@ def test_t1_the_shipped_spi_stacks_are_reticulum_and_meshtastic_every_other_is_d
 def test_t13_an_unknown_empty_or_usb_model_is_refused_for_an_spi_stack_only(tmp_path, model, kind):
     svc, models = _svc(tmp_path), radio_models.load()
     radio = radios.Radio("r4", "x", model, "868")
-    assert instances.radio_refusal(svc.stack("reticulum"), radio, models) == \
-        f"reticulum drives SPI radios only, r4 is a {kind} radio"
+    assert instances.radio_refusal(svc.stack("reticulum"), radio, models, "spi") == \
+        f"reticulum with backend spi drives SPI radios only, r4 is a {kind} radio"
+    assert instances.radio_refusal(svc.stack("meshtastic"), radio, models) == \
+        f"meshtastic drives SPI radios only, r4 is a {kind} radio"
     assert instances.radio_refusal(svc.stack("kiss"), radio, models) == ""
-    assert instances.radio_refusal(svc.stack("reticulum"), radios.Radio("r2", "h", "loraham", "868"), models) == ""
+    assert instances.radio_refusal(svc.stack("reticulum"), radio, models, "daemon") == ""
+    assert instances.radio_refusal(svc.stack("reticulum"), radios.Radio("r2", "h", "loraham", "868"), models, "spi") == ""
 
 
 # ---- inventory vs eligibility (T2) ------------------------------------------------------------------------------
@@ -100,19 +114,19 @@ def test_t13_an_unknown_empty_or_usb_model_is_refused_for_an_spi_stack_only(tmp_
 def test_t2_eligibility_is_the_spi_radios_the_inventory_is_unchanged(tmp_path):
     svc = _svc(tmp_path)
     for sid in ("reticulum", "meshtastic"):
-        assert instances.eligible(svc.stack(sid), svc._paths) == ("r1", "r2")
+        assert instances.eligible(svc.stack(sid), svc) == ("r1", "r2")
         assert instances.radios_of(svc.stack(sid), svc._paths) == ("r1", "r2", "r3", "r4")
-    assert instances.eligible(svc.stack("kiss"), svc._paths) == ("r1", "r2", "r3", "r4")
+    assert instances.eligible(svc.stack("kiss"), svc) == ("r1", "r2", "r3", "r4")
     assert [i.rid for i in commands.stack_instances(svc.stack("meshtastic"), svc._paths)] == ["r1", "r2", "r3", "r4"]
     assert [i.rid for i in commands.stack_instances(svc.stack("reticulum"), svc._paths)] == ["r1"]   # singleton rule
     with _running(svc, "r4", "868"):
         assert [i.rid for i in commands.stack_instances(svc.stack("reticulum"), svc._paths)] == ["r4"]
-        assert instances.eligible(svc.stack("reticulum"), svc._paths) == ("r1", "r2")
+        assert instances.eligible(svc.stack("reticulum"), svc) == ("r1", "r2")
 
 
 def test_t2_two_spi_radios_on_one_band_stay_addressable_and_a_band_start_names_them(tmp_path):
     svc = _svc(tmp_path, TWO_SPI_868)
-    assert instances.eligible(svc.stack("reticulum"), svc._paths) == ("r2", "r5")
+    assert instances.eligible(svc.stack("reticulum"), svc) == ("r2", "r5")
     assert [instances.copy_of(svc, "reticulum", r)[1] for r in ("r2", "r5")] == ["", ""]
     rid, why_ = instances.one_radio(svc, "reticulum", "868")
     assert rid == "" and "name the radio" in why_
@@ -158,6 +172,7 @@ def box(tmp_path, monkeypatch, capsys):
     def run(*argv, rows=BOX_H, write=True):
         if write:
             radios_fixture.write(tmp_path, rows)
+            _spi_backend(tmp_path, rows)
         rc = cli.main(list(argv))
         return rc, capsys.readouterr(), calls
     return run
@@ -187,6 +202,7 @@ def test_t8_an_spi_row_still_starts(box, target):
 
 def test_t9_a_running_instance_on_a_usb_radio_is_stopped_and_its_start_refused(tmp_path, box):
     radios_fixture.write(tmp_path, BOX_H)
+    _spi_backend(tmp_path, BOX_H)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     with _running(svc, "r4", "868"):
         rc, _out, calls = box("stack", "stop", "reticulum@r4", "--yes", write=False)
@@ -197,6 +213,7 @@ def test_t9_a_running_instance_on_a_usb_radio_is_stopped_and_its_start_refused(t
 
 def test_t9_a_running_instance_whose_radio_became_usb_is_stopped_and_its_start_refused(tmp_path, box):
     radios_fixture.write(tmp_path, BOX_H)
+    _spi_backend(tmp_path, BOX_H)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     with _running(svc, "r2", "868"):                                 # launched while r2 was the loraham board
         radios_fixture.write(tmp_path, (BOX_H[0], radios.Radio("r2", "high", "pinedio-usb-1262", "868", usb_serial="PINE0002"),

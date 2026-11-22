@@ -1495,12 +1495,13 @@ def test_dec_w384ci_the_proxy_help_names_the_forms_the_proxy_takes(tmp_path, cap
 def test_a_stale_build_names_the_update_when_the_checkout_is_off_its_pinned_selection(box, tmp_path, monkeypatch,
                                                                                       state, selector, remedy):
     # The box role on the Zero: a checkout BEHIND its pin was told `lhpc build`, which rebuilds the old sources.
-    from radios_fixture import R1, R2_868
+    from radios_fixture import R1, R2_868, reticulum_backend
     from lhpc.core import source_registry
     from lhpc.core.manifest import load_manifest
     from lhpc.core.model import SourceState
     from lhpc.core.paths import Paths
     run = box((R1, R2_868))
+    reticulum_backend(tmp_path, ["r1", "r2"])           # the direct-SPI node (B1): no daemon start first
     rel = next(s for s in load_manifest() if s.id == "reticulum").component("rns").source.path
     assert selector is None or source_registry.write_record(Paths(runtime_root=tmp_path), source_registry.RegistryRecord(
         rel, "", selector, "", 1.0, "", ("rns",)))   # adopted_at: any time; it is not read

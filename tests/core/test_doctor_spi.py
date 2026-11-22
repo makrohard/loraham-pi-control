@@ -1,6 +1,7 @@
 """`lhpc doctor` reports the SPI chip-select mode: what config.txt asks for, what the running kernel
 booted with, and the start gate's refusal while they disagree (docs/cli.md#deps)."""
 import pytest
+import radios_fixture
 
 from lhpc.core import spi_mode
 from lhpc.core.model import (
@@ -151,10 +152,14 @@ def test_doctor_lists_the_manifests_installed_spi_users(tmp_path, monkeypatch):
     monkeypatch.setattr(spi_mode, "read_config_txt", lambda: KERNEL_TXT)
     monkeypatch.setattr(spi_mode, "live_mode", lambda: "kernel")
     monkeypatch.setattr(spi_mode, "provenance_refusal", lambda paths, stack, comp, sd: "")
+    radios_fixture.write(tmp_path)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     life = svc._lifecycle()
     for sid, cid in (("daemon", "loraham-daemon"), ("reticulum", "rns"), ("meshtastic", "meshtastic")):
         life.source_dir(svc.stack(sid).component(cid)).mkdir(parents=True, exist_ok=True)
+    rows = [d.strip() for d in svc.doctor().details if d.strip().startswith("SPI user ")]
+    assert rows == ["SPI user daemon/loraham-daemon: built with kernel chip selects"]    # rns on the daemon (B1)
+    radios_fixture.reticulum_backend(tmp_path, ["r2"])                 # an interface on the direct driver
     rows = [d.strip() for d in svc.doctor().details if d.strip().startswith("SPI user ")]
     assert rows == ["SPI user daemon/loraham-daemon: built with kernel chip selects",
                     "SPI user reticulum/rns: built with kernel chip selects"]

@@ -3088,8 +3088,7 @@ main = "meshcore-node"
 id = "reticulum"
 name = "Reticulum (RNS)"
 license = "free"   # F32: the Home card's licence mark (README "Free to use" column)
-radio_access = "spi"     # drives the radio directly: SPI radios only (instances.radio_refusal); "daemon" once it runs on it
-summary = "Reticulum node driving the LoRa radio DIRECTLY over SPI — no rnoded, no RNode firmware, no KISS. Owns the radio for its band; shares the SPI bus with the daemon through spi0.lock."
+summary = "Reticulum node on the LoRa radio — through the daemon (backend daemon, the default) or driving an SPI radio directly (backend spi, spi0.lock shared with the daemon). No rnoded, no RNode firmware, no KISS."
 main = "rns"
 
 [[stack.component]]
@@ -3118,6 +3117,7 @@ bands = ["433", "868"]
 purpose = "rnsd-equivalent that OWNS the shared instance and the radio. Runs loraham-rns-node, which exits rather than staying up without a radio."
 tx_capable = true
 build_requires = ["rns-lora-interface"]
+backend_depends = { daemon = ["loraham-daemon"] }   # the daemon backend reaches the radio through it (instances.for_backend)
 venv_packages = ["rns"]
 readiness = "endpoint"
 readiness_timeout = 60.0
@@ -3145,6 +3145,14 @@ kind = "enum"
 choices = ["on", "off"]
 default = "on"
 label = "Use the global position source (Position (GPS) card on the Stacks page)"
+# Per radio: how the LoRa interface reaches the radio. `spi` drives an SPI radio itself (the v0.3.1 driver) and is
+# refused on a USB radio; the claims, requirements and the daemon dependency below follow it (`backend = ...` keys).
+[[stack.component.param]]
+name = "backend"
+kind = "enum"
+choices = ["daemon", "spi"]
+default = "daemon"
+label = "Radio access — daemon (any radio) or spi (the direct driver, SPI radios only); takes effect at the next start"
 [[stack.component.param]]
 name = "rns_allow"
 kind = "str"
@@ -3221,18 +3229,31 @@ allow_param = "rns_allow"
 auth = "none"
 
 [[stack.component.resource]]
+key = "loraham.daemon-socket.{radio:433}"
+kind = "daemon-socket"
+mode = "consumer"
+backend = "daemon"
+[[stack.component.resource]]
+key = "loraham.daemon-socket.{radio:868}"
+kind = "daemon-socket"
+mode = "consumer"
+backend = "daemon"
+[[stack.component.resource]]
 key = "loraham.radio.{radio:868}"
 kind = "radio-band"
 mode = "exclusive"
+backend = "spi"
 note = "Owns the radio for this band — conflicts with the daemon and meshtastic on 868."
 [[stack.component.resource]]
 key = "loraham.radio.{radio:433}"
 kind = "radio-band"
 mode = "exclusive"
+backend = "spi"
 [[stack.component.resource]]
 key = "spi.bus.0"
 kind = "spi-bus"
 mode = "cooperative"
+backend = "spi"
 [[stack.component.resource]]
 # Meshtastic drives /dev/spidev0.0 WITHOUT taking spi0.lock, so it cannot be
 # interleaved safely with any other bus user. Both it and this node claim this key
@@ -3243,6 +3264,7 @@ mode = "cooperative"
 key = "spi.bus.0.unlocked"
 kind = "spi-bus"
 mode = "exclusive"
+backend = "spi"
 note = "Participates in the daemon's spi0.lock, so both may share the bus."
 [[stack.component.resource]]
 key = "tcp.port.37428"
@@ -3259,10 +3281,12 @@ mode = "exclusive"
 
 [[stack.component.require]]
 check_file = "/dev/spidev0.0"
+backend = "spi"
 install = "printf 'dtparam=spi=on\\ndtoverlay=spi0-0cs\\n' | sudo tee -a /boot/firmware/config.txt"
 note = "SPI device. The spi0-0cs overlay (bootstrap-deps.sh --spi-mode soft-cs) is required: the radio's chip-select is driven from userspace, and the kernel must NOT claim CE0/CE1."
 [[stack.component.require]]
 groups = ["spi", "gpio"]
+backend = "spi"
 install = "sudo usermod -aG spi,gpio $USER"
 note = "spi + gpio group membership — needed to drive the radio without root"
 [[stack.component.require]]
@@ -3271,10 +3295,12 @@ note = "spi + gpio group membership — needed to drive the radio without root"
 # which an older install built with include-system-site-packages = false (it sees no apt
 # binding). The package receipt is stable across Python and arch.
 check_file = "/var/lib/dpkg/info/python3-libgpiod.list"
+backend = "spi"
 install = "sudo apt install -y python3-libgpiod python3-spidev"
 note = "Python libgpiod binding as a SYSTEM package. The stack venv is built with --system-site-packages and inherits it, so the radio needs no compiler — which is what makes this installable on a Pi Zero, where the pip wheels cannot build."
 [[stack.component.require]]
 check_file = "/var/lib/dpkg/info/python3-spidev.list"
+backend = "spi"
 install = "sudo apt install -y python3-spidev"
 note = "Python spidev binding as a SYSTEM package — the other half of the radio's bindings, checked separately so a half-installed pair cannot pass."
 
@@ -3289,6 +3315,14 @@ fmt = "ini-update"
 # security boundary: a client under the same account could chmod it back.
 mode = 0o400
 base = "{asset}/bases/reticulum.conf"
+[[stack.component.config_file.param]]
+name = "iface_type"
+key = "type"
+section = "interfaces/LoRa"
+kind = "str"
+hidden = true
+from_backend = { daemon = "LoRaDaemonInterface", spi = "LoRaSPIInterface" }
+label = "Interface type (from the radio's backend)"
 [[stack.component.config_file.param]]
 name = "hardware"
 key = "hardware"

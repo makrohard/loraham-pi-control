@@ -475,6 +475,7 @@ def box(tmp_path, monkeypatch, capsys):
         api = _API.replace("127.0.0.1:8790", fake.api).replace('"--timeout", "60"', f'"--timeout", "{step_timeout}"')
         (tmp_path / "manifest.toml").write_text(man.replace(_API, api))
         radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2_868))
+        radios_fixture.reticulum_backend(tmp_path, ["r1", "r2"])       # the direct-SPI node (B1): no daemon here
         seed_framing_driver(tmp_path)
         for name, value in (("hardware_configured", lambda self: True), ("radio_bands", lambda self: ["433", "868"]),
                             ("is_built", lambda self, c: True), ("_build_complete", lambda self, c: True),

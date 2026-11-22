@@ -15,6 +15,14 @@ def write(root, rows=RADIOS):
     (root / "config" / "radios.toml").write_text(radios.render(tuple(rows)))
 
 
+def reticulum_backend(root, rids, value="spi"):
+    """Save Reticulum's `backend` (plan reti v21 §1, B1) on each radio of `rids` under the runtime root `root`: a test
+    of the direct-SPI node (its claims, requirements, no daemon) saves `spi`; the default is `daemon`."""
+    (root / "config" / "stacks").mkdir(parents=True, exist_ok=True)
+    for rid in rids:
+        (root / "config" / "stacks" / f"reticulum@{rid}.toml").write_text(f'backend = "{value}"\n')
+
+
 def conf(band: str) -> str:
     """The CONF socket path of `band`'s radio in RADIOS (the daemon's /tmp socket)."""
     return f"/tmp/loraconf-{RID[band]}.sock"

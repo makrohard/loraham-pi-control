@@ -435,7 +435,7 @@ def hardware_view(svc) -> dict:
     """B5 Hardware section: the hardware list's rows, each with its daemon's state on its own socket and, for a
     USB row, the sticks it can be bound to (usb_flow.usb_choices); the copybox when a USB row is listed and the
     host setup is not set (usb_access.setup_needed)."""
-    from . import daemon_control, usb_access, usb_flow
+    from . import daemon_control, instances, usb_access, usb_flow
     state = radios.load(svc._paths)
     models = radio_models.load()
     found = usb_access.scan()                       # the sticks to bind, and (B) to add as new USB radios
@@ -451,7 +451,8 @@ def hardware_view(svc) -> dict:
                      "choices": usb_flow.usb_choices(found, m) if usb else None,
                      "activity": radio_activity(svc, r, procs), "problems": (pr := _problems(r, usb, v, found)),
                      "attention": _attention(pr, [u for u in _radio_users(svc, r)       # an "spi" stack needs no daemon
-                                                  if getattr(svc.stack(u.partition("@")[0]), "radio_access", "") != "spi"])})
+                                                  if (st := svc.stack(u.partition("@")[0])) is None
+                                                  or instances.access(svc, st, u.partition("@")[2]) != "spi"])})
     addable = [(m.id, c) for m in models.values() if m.transport != "spi"
                for c in usb_flow.usb_choices(found, m).items if c.selectable and not _holder(state.radios, c)]
     box = None
@@ -1094,7 +1095,7 @@ def radio_dependents(svc, band: str, inst=None):
         return sid not in told or stk is None or any(instances.unclaimed(svc, c, table, procs)
                                                      for c in stk.components if c.process is not None)
     out = [s for s in svc.stop_dependents(daemon_sid, bands={band}) if bare(s)]          # fail-safe
-    for stk in svc.stacks():
+    for stk in (instances.stack_as(svc, s, instances.live) for s in svc.stacks()):     # B1 note C3: live
         if stk.id == daemon_sid or not any(svc.DAEMON_ID in c.depends_on for c in stk.components):
             continue
         for i in commands.stack_instances(stk, svc._paths):
@@ -1462,9 +1463,9 @@ def overview_entry(svc, row, e: dict) -> dict:
     here = {x.get("sid", x["id"]) for x in running}                       # an instance's entry: id "<sid>@<rid>"
     elsewhere = [x.get("sid", x["id"]) for x in e["running"] if x.get("rid") and x.get("sid", x["id"]) not in here]
     startable = [x for x in e["startable"] + [e["entries"][sid] for sid in dict.fromkeys(elsewhere) if sid in e["entries"]]
-                 if rid in instances.eligible(svc.stack(x["id"]), svc._paths, instances.radios_able(svc, x["id"]))]   # an offer
+                 if rid in instances.eligible(svc.stack(x["id"]), svc, instances.radios_able(svc, x["id"]))]   # an offer
     interactive = [x for x in e["interactive"] if rid in x.get("on_rids", ()) or "" in x.get("on_rids", ())    # G1-K8D3 N1
-                   or (not x.get("on_rids") and rid in instances.eligible(svc.stack(x["id"]), svc._paths,
+                   or (not x.get("on_rids") and rid in instances.eligible(svc.stack(x["id"]), svc,
                                                                           instances.radios_able(svc, x["id"])))]
     up, procs = dv.reachable, _daemon_procs(svc)
     own = any(p.rid == rid for p in procs)                                # G1-K8D3 B1: this radio's own process

@@ -536,7 +536,7 @@ class ParamsConfigMixin:
         declaration marks it GUI-only (core wins). Both are derived from all declarations after the
         sweep, so neither depends on manifest declaration order."""
         life = self._lifecycle()
-        s = self.stack(target)
+        s = _instances.stack_as(self, self.stack(target), _instances.in_use)     # B1 note M7: the backends in use
         out, by_key, decls = [], {}, {}
         for c in (s.components if s else ()):
             missing = life.missing_requirements(c)
@@ -878,6 +878,8 @@ class ParamsConfigMixin:
             if sid == _reticulum_interfaces.STACK_ID and (
                     _why := self._reticulum_internet_save_refusal(merged)):
                 raise ConfigError(_why, reason=_reticulum_interfaces.REASON_ENDPOINT_INCOMPLETE)   # same rollback
+            if _why := _instances.backend_save_refusal(self, sid, current, merged, i):
+                raise ConfigError(_why)                                     # B1 note v2: same rollback
             return render_stack_config(tgt, merged)
         targets.append(("stack", _stack_config_path(self._paths, sid, inst), _render_stack, 0o644))
         # DURABLE restart-required marker — written INSIDE the same transaction (config-txn
@@ -1958,6 +1960,10 @@ class ParamsConfigMixin:
                     except (OSError, PathContainmentError, ValueError) as exc:
                         secret_error = str(exc)
                         break
+                    continue
+                if getattr(p, "from_backend", ()):      # B1: the value for the instance's backend (reticulum `type`)
+                    values[p.name] = dict(p.from_backend).get(
+                        _instances.backend_of(self, self._owner_stack_id(target), c, getattr(inst, "rid", "") or ""), "")
                     continue
                 if getattr(p, "panel_power", False):    # RADIO-POWER 3c: the panel's POWER; none refuses (never `power=`)
                     values[p.name], secret_error = _radio_start.panel_power(self, self._owner_stack_id(target), getattr(inst, "rid", ""))

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Reticulum now reaches the radio through the daemon (any radio, USB too); `backend = spi` per radio
+  (`lhpc config reticulum@<rid>`) keeps the direct driver on an SPI radio.
+
 ## 0.14.0
 
 - Radios: the hardware list (config/radios.toml, written by `lhpc hardware <setup>` or the Hardware page) names each

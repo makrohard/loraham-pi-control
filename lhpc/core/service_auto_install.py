@@ -791,7 +791,7 @@ class AutoInstallOpsMixin:
         success."""
         life = self._lifecycle()
         out: list[str] = []
-        for c in st.components:
+        for c in instances.stack_as(self, st, instances.in_use).components:     # B1 note M7
             if getattr(c, "optional", False):
                 continue
             reqs = self.start_blocking_requirements(c)
@@ -811,7 +811,7 @@ class AutoInstallOpsMixin:
         """A dependency stack is MANDATORY when a NON-optional component of `st` requires it
         (depends_on / build_requires); optional-only requirers make it a recommendation."""
         by_comp = {c.id: s.id for s in self.stacks() for c in s.components}
-        for c in st.components:
+        for c in instances.stack_as(self, st, instances.in_use).components:     # B1 note M7
             if getattr(c, "optional", False):
                 continue
             for d in tuple(c.depends_on or ()) + tuple(c.build_requires or ()):
@@ -1576,7 +1576,7 @@ class AutoInstallOpsMixin:
 
     def _auto_install_scope_edges(self) -> tuple:
         """(ordered stack ids, {stack -> set(dependency stacks)}) from the manifest graph."""
-        stacks = list(self.stacks())        # every manifest stack — see _auto_install_scope
+        stacks = list(instances.stacks_in_use(self))  # every manifest stack — see _auto_install_scope; B1 note M7
         by_comp = {c.id: st.id for st in self.stacks() for c in st.components}
         edges = {st.id: set() for st in stacks}
         for st in stacks:
@@ -1773,7 +1773,7 @@ class AutoInstallOpsMixin:
         work lists (see StackWork) so source-specific machinery can never see a source-less
         component. OPTIONAL components are INCLUDED — they are only excluded from auto-START,
         which stays autostart-gated."""
-        stacks = list(self.stacks())
+        stacks = list(instances.stacks_in_use(self))     # B1 note M7
         by_comp = {c.id: st.id for st in stacks for c in st.components}
         edges = {st.id: set() for st in stacks}
         for st in stacks:

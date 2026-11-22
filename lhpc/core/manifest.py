@@ -82,6 +82,7 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             radio_power=p.get("radio_power", False) is True,
             panel_power=p.get("panel_power", False) is True,
             card_ident=_card_ident(p, "config_file"),
+            from_backend=tuple((str(k), str(v)) for k, v in (p.get("from_backend", {}) or {}).items()),
         )
         for p in raw.get("param", [])
     )
@@ -125,6 +126,8 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             raise ManifestError(f"param {prm.name!r} has radio_power and must be kind int")
         if prm.panel_power and not (prm.hidden and prm.kind == "int"):
             raise ManifestError(f"param {prm.name!r} has panel_power and must be a hidden int")
+        if prm.from_backend and not (prm.hidden and prm.kind == "str"):
+            raise ManifestError(f"param {prm.name!r} has from_backend and must be a hidden str")
         if prm.secret_ref and prm.secret_file:
             raise ManifestError(f"param {prm.name!r} declares both secret_ref and secret_file "
                                 f"— a secret has exactly one source")
@@ -405,7 +408,8 @@ def _validate_graph(stacks: tuple[Stack, ...]) -> None:
                                 f"components {sorted(c.id for c in s.components)}")
 
     for cid, c in comp_of.items():                     # dependencies resolvable, no self-dep
-        for dep in c.depends_on:
+        _check_backend_keys(cid, c)
+        for dep in c.depends_on + tuple(d for _b, deps in c.backend_depends for d in deps):
             if dep == cid:
                 raise ManifestError(f"component {cid!r} depends on itself")
             if dep not in comp_of:
@@ -425,7 +429,7 @@ def _validate_graph(stacks: tuple[Stack, ...]) -> None:
 
     def _visit(cid: str, path: list[str]) -> None:
         color[cid] = GRAY
-        for dep in comp_of[cid].depends_on:
+        for dep in comp_of[cid].depends_on + tuple(d for _b, deps in comp_of[cid].backend_depends for d in deps):
             if color[dep] == GRAY:                     # dep is on the current stack -> cycle
                 i = path.index(dep)
                 raise ManifestError("dependency cycle: " + " -> ".join([*path[i:], dep]))
@@ -854,6 +858,25 @@ def _asset_inputs(raw: dict) -> tuple[str, ...]:
     return tuple(rels)
 
 
+def _check_backend_keys(cid: str, c: Component) -> None:
+    """A `backend` key on a claim, a requirement or `backend_depends` names a value of the component's own `backend`
+    enum param (instances.for_backend reads it per instance); never on a `gui` / `absent_file` requirement, whose
+    readers take the manifest as declared."""
+    keyed = ({r.backend for r in c.resources if r.backend} | {q.backend for q in c.requires if q.backend}
+             | {b for b, _deps in c.backend_depends}
+             | {b for p in (c.config_file.params if c.config_file else ()) for b, _v in p.from_backend})
+    if not keyed:
+        return
+    prm = next((p for p in c.run_params if p.name == "backend"), None)
+    if prm is None or prm.kind != "enum":
+        raise ManifestError(f"component {cid!r} keys entries by backend but declares no `backend` enum param")
+    if keyed - set(prm.choices):
+        raise ManifestError(f"component {cid!r}: backend {sorted(keyed - set(prm.choices))} is not one of "
+                            f"its `backend` choices {list(prm.choices)}")
+    if any(q.backend and (q.gui or q.absent_file) for q in c.requires):
+        raise ManifestError(f"component {cid!r}: a `gui` or `absent_file` requirement takes no backend key")
+
+
 def _parse_component(raw: dict) -> Component:
     _derive_structured(raw)
     return Component(
@@ -869,6 +892,8 @@ def _parse_component(raw: dict) -> Component:
         process=_parse_process(raw.get("process")),
         endpoints=tuple(_parse_endpoint(e) for e in raw.get("endpoint", [])),
         depends_on=tuple(raw.get("depends_on", [])),
+        backend_depends=tuple((str(b), tuple(str(d) for d in deps))
+                              for b, deps in (raw.get("backend_depends", {}) or {}).items()),
         build_requires=tuple(raw.get("build_requires", [])),
         venv_packages=_parse_venv_packages(raw.get("venv_packages"), raw.get("id", "?")),
         build_inputs=_parse_build_inputs(raw),
@@ -910,7 +935,8 @@ def _parse_component(raw: dict) -> Component:
                         provisioned=bool(r.get("provisioned", False)),
                         module=_require_module(r.get("module", ""), raw.get("id", "?")),
                         gui=bool(r.get("gui", False)),
-                        gps=bool(r.get("gps", False)))
+                        gps=bool(r.get("gps", False)),
+                        backend=str(r.get("backend", "") or ""))
             for r in raw.get("require", [])
         ),
         optional=raw.get("optional", False),
@@ -999,6 +1025,7 @@ def _parse_resource(raw: dict) -> ResourceClaim:
         note=raw.get("note", ""),
         advisory=bool(raw.get("advisory", False)),
         claims_if=claims_if or "",
+        backend=str(raw.get("backend", "") or ""),
     )
 
 

@@ -1368,10 +1368,13 @@ def test_a_non_advisory_exclusive_claim_still_blocks(tmp_path):
     from lhpc.core.paths import Paths
     from lhpc.core.probes.backends import FakeSystem
     from lhpc.core.services import ControllerService
+    from lhpc.core import instances
     fake = FakeSystem(cmdlines_data={301: ["meshtasticd"]})
+    radios_fixture.write(tmp_path)
+    radios_fixture.reticulum_backend(tmp_path, ["r2"])                 # the direct-SPI node (B1): its SPI claims
     svc = ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))
     assert any(b["resource"] == "spi.bus.0.unlocked" and b["holder"] == "meshtastic"
-               for b in svc.run_blockers("reticulum"))
+               for b in svc.run_blockers("reticulum", "868", "", instances.copy_of(svc, "reticulum", "r2")[0]))
 
 
 # --- the shared-SPI warning (docs/architecture.md, SPI policy: "allow, but warn") ------------

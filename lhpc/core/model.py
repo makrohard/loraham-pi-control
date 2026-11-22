@@ -130,6 +130,8 @@ class ResourceClaim:
     claims_if: str = ""
     # The manifest's key when it carries instance tokens ({port:…}); `key` is its template value (no radio). "" = none.
     key_template: str = ""
+    # "" = made by every backend; else made only when the instance's `backend` param is this value (instances.for_backend)
+    backend: str = ""
 
 
 
@@ -173,6 +175,7 @@ class Requirement:
     #                             additionally SUPPRESSED ENTIRELY when the configured gpsd is remote or
     #                             the source is off/nmea/fixed — telling an operator whose gpsd runs on
     #                             another box to install a local package would be simply wrong.
+    backend: str = ""           # "" = every backend; else only when the instance's `backend` param is this value
 
 
 @dataclass(frozen=True)
@@ -359,6 +362,7 @@ class FileParam:
     radio_power: bool = False    # a TX power: its default is at most the instance radio's model default (USB 14, SPI 17)
     panel_power: bool = False    # hidden, derived: the instance's daemon-panel POWER (radio_start.post_power), never stored
     card_ident: int = 0          # F30: >0 = shown in the Home card's stack title (order), e.g. a node name
+    from_backend: tuple = ()     # hidden, derived: ((backend, value), …) — the value for the instance's `backend` param
 
 
 @dataclass(frozen=True)
@@ -441,6 +445,7 @@ class Component:
     process: ProcessSpec | None = None
     endpoints: tuple[EndpointSpec, ...] = ()
     depends_on: tuple[str, ...] = ()     # component ids this one needs at runtime
+    backend_depends: tuple = ()          # ((backend, (component ids, …)), …): needed only with that `backend` value
     build_requires: tuple[str, ...] = ()  # source component ids whose CHECKOUT this one's
                                           # build consumes (e.g. daemon -> radiolib); enforced
                                           # for update inclusion + uninstall refcounting

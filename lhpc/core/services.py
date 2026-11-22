@@ -545,7 +545,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         owned = self._lifecycle().owned_running()
         snap = StatusProber(self._system, self._paths, binary_cover=binary_cover, owned_running=owned,
                             sources=sources, cache=None if fresh else source_cache.SHARED,
-                            instance_endpoints=lambda t: instances.status_endpoints(self, t, owned)).assess_stacks(self.stacks())
+                            instance_endpoints=lambda t: instances.status_endpoints(self, t, owned)).assess_stacks(
+                                tuple(instances.stack_as(self, s, instances.live) for s in self.stacks()))   # B1 note C2
         self._overlay_runtime_bands(snap)
         self._overlay_gui_unavailable(snap)
         self._overlay_licensed_tx_enabled(snap)
@@ -658,7 +659,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         graywolf stack transmits through the kiss stack's TNC), and a chain that is judged
         on half its members proves nothing. Resolution is best-effort — an unresolvable id
         is skipped rather than raised, because this is an inference, not a gate."""
-        by_id = {c.id: c for s in self.stacks() for c in s.components}
+        by_id = {c.id: c for s in self.stacks() for c in instances.stack_as(self, s, instances.live).components}   # C3
         seen: set = set()
         out: list = []
         pending = [c.id for c in stack.components]
@@ -1044,9 +1045,10 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             details.append(f"  {order}. {c.id}{band} — {c.purpose} [{c.kind.value}, {tx}]")
             if c.depends_on:
                 details.append(f"        depends on: {', '.join(c.depends_on)}")
+            details.extend(f"        depends on (backend {b}): {', '.join(deps)}" for b, deps in c.backend_depends)
             for r in c.resources:
                 extra = f" = {r.requirement}" if r.requirement else ""
-                details.append(f"        claims {r.key} ({r.mode.value}{extra})")
+                details.append(f"        claims {r.key} ({r.mode.value}{extra})" + (f" (backend {r.backend})" if r.backend else ""))
             if c.note:
                 details.append(f"        note: {c.note}")
             if c.id in gui_unavailable:
@@ -1144,7 +1146,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         for dev in (_SPI_DEV, _GPIO_DEV):
             chk = hardware.check_char_device(sys, dev)
             details.append(f"  {dev}: {chk.detail}")
-        details.extend(f"  {x}" for x in [*spi_mode.doctor_lines(self._paths, self.stacks(), self._lifecycle().source_dir), *radio_start.doctor_usb(self)])   # B5 Table D: the USB lines
+        details.extend(f"  {x}" for x in [*spi_mode.doctor_lines(self._paths, instances.stacks_in_use(self), self._lifecycle().source_dir), *radio_start.doctor_usb(self)])   # B5 Table D: the USB lines
 
         # Configured source paths present?
         present = missing = covered = 0
@@ -1941,11 +1943,15 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         else:
             return None
         order, seen = [], set()
+        rid = getattr(inst, "rid", "") or ""
 
         def visit(cid: str):
             if cid in seen or cid not in idx:
                 return
-            comp = idx[cid][1]
+            stk, comp = idx[cid]
+            if instances.keyed(comp):     # its instance's backend: claims, requirements, dependencies (B1 note C1)
+                comp = instances.for_backend(comp, {instances.backend_of(self, stk.id, comp, rid)})
+                idx[cid] = (stk, comp)
             if comp.optional and cid not in allowed_optional:
                 return                    # soft dependency the operator hasn't opted into
             seen.add(cid)
@@ -2055,7 +2061,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         none of them is left out."""
         order_ids = {c.id for _, c in (self._run_order(target) or [])}
         out = set()
-        for s in self.stacks():
+        for s in (instances.stack_as(self, x, instances.live) for x in self.stacks()):     # B1 note C3: live
             if not any(d in order_ids for c in s.components for d in (c.depends_on or ())):
                 continue
             can = {b for c in s.components for b in (c.bands or (c.band,)) if b}

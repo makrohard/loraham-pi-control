@@ -76,6 +76,7 @@ class StopOpsMixin:
         for the daemon stack itself or a non-daemon-dependent stack. A band-switchable client (KISS/
         Voice) thus releases only the band it ran on, never both."""
         daemon_sid = next((s.id for s in self.stacks() if s.main == self.DAEMON_ID), None)
+        stk = instances.stack_as(self, stk, instances.live)          # B1 note C3: the backends it runs with
         if stk is None or not daemon_sid or sid == daemon_sid:
             return daemon_sid or "", []
         if not any(self.DAEMON_ID in (c.depends_on or ()) for c in stk.components):

@@ -1292,7 +1292,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                     # W2: the Run line's ONE radio selector, the union of the runnable and the running instances (Stop);
                     # Start/Run/Restart offer only the radios the stack may start on (instances.eligible)
                     "run_on": _run_on,
-                    "start_on": list(_instances.eligible(stack, service._paths, _run_on)),
+                    "start_on": list(_instances.eligible(stack, service, _run_on)),
                     "command": service.manual_start_command(main, _inst) if interactive else "",   # 7f: the shown instance's
                     # Per-stack Settings section rendered inline on the Apps list (same data the
                     # stack-detail Settings uses): operator, component-scoped params, sources, autostart.

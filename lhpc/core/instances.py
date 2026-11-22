@@ -21,23 +21,127 @@ def stack_bands(stack) -> tuple:
     return tuple(sorted({c.band for c in stack.components if getattr(c, "band", "")}))
 
 
-def radio_refusal(stack, radio, models=None) -> str:
-    """Why `stack` may not START on `radio` ("" = it may): radio_access "spi" drives the radio itself, so an SPI model
-    only; "daemon" (the default) reaches any radio through the daemon. `models`: the caller's one table snapshot."""
-    if stack.radio_access != "spi":
+def radio_refusal(stack, radio, models=None, access: str = "") -> str:
+    """Why `stack` may not START on `radio` ("" = it may): access "spi" drives the radio itself, so an SPI model
+    only; "daemon" (the default) reaches any radio through the daemon. `access`: the instance's (instances.access),
+    else the stack's radio_access. `models`: the caller's one table snapshot."""
+    if (access or stack.radio_access) != "spi":
         return ""
     have = getattr((radio_models.load() if models is None else models).get(radio.model), "transport", "")
-    return "" if have == "spi" else f"{stack.id} drives SPI radios only, {radio.id} is a {(have or 'unknown').upper()} radio"
+    who = stack.id if stack.radio_access == "spi" else f"{stack.id} with backend spi"
+    return "" if have == "spi" else f"{who} drives SPI radios only, {radio.id} is a {(have or 'unknown').upper()} radio"
 
 
-def eligible(stack, paths, rids=None, models=None) -> tuple:
+BACKEND = "backend"          # a component's per-instance backend param (reticulum: daemon | spi), plan reti v21 §1
+
+
+def keyed(comp) -> bool:
+    """True when `comp` has entries made only for one backend (a `backend` key, or `backend_depends`)."""
+    return bool(comp.backend_depends or any(r.backend for r in comp.resources) or any(q.backend for q in comp.requires))
+
+
+def for_backend(comp, backends):
+    """`comp` as the backends `backends` (a set) run it: its unkeyed claims and requirements, the keyed ones of those
+    backends, and depends_on plus their `backend_depends`. An unkeyed component is returned as is."""
+    if not keyed(comp):
+        return comp
+    extra = [d for b, deps in comp.backend_depends if b in backends for d in deps]
+    return dataclasses.replace(
+        comp, resources=tuple(r for r in comp.resources if not r.backend or r.backend in backends),
+        requires=tuple(q for q in comp.requires if not q.backend or q.backend in backends),
+        depends_on=tuple(dict.fromkeys(comp.depends_on + tuple(extra))), backend_depends=())
+
+
+def backend_of(svc, sid: str, comp, rid: str) -> str:
+    """The backend instance `<sid>@<rid>` of keyed `comp` runs: its saved `backend`, else the param's default (no
+    radio, no file, an unreadable file or a value not among the choices: the default; the start path fails closed
+    on a bad file by itself)."""
+    from .config import ConfigError
+    if not rid:
+        return _saved_backend(svc, sid, comp, {})
+    try:
+        return _saved_backend(svc, sid, comp, svc._stack_config_cached(sid, "", commands.Instance(rid)))
+    except (ConfigError, OSError):
+        return _saved_backend(svc, sid, comp, {})
+
+
+def _saved_backend(svc, sid: str, comp, stored: dict) -> str:
+    """The backend a stack settings dict `stored` gives keyed `comp`: its value when among the choices, else the
+    default; "" for a component without the param."""
+    prm = next((p for p in comp.run_params if p.name == BACKEND), None)
+    if prm is None:
+        return ""
+    count = sum(1 for c in svc.stack(sid).components for p in c.run_params if p.name == BACKEND)
+    val = str(svc._resolve_stored(stored, "r", comp.id, BACKEND, count)[0] or "")
+    return val if val in prm.choices else prm.default
+
+
+def backend_save_refusal(svc, sid: str, current: dict, merged: dict, inst) -> str:
+    """Why a save of `<sid>@<rid>`'s settings (`current` -> `merged`, read under the config lock) must be refused
+    ("" = fine): a changed `backend` while that instance runs (it takes effect at its next start, so what runs and
+    what is saved never differ), or `spi` on a radio that is no SPI model."""
+    stack, rid = svc.stack(sid), getattr(inst, "rid", "") or ""
+    comp = next((c for c in stack.components if keyed(c)), None) if stack is not None and rid else None
+    if comp is None:
+        return ""
+    new = _saved_backend(svc, sid, comp, merged)
+    if new == _saved_backend(svc, sid, comp, current):
+        return ""
+    if f"{sid}@{rid}" in running_keys(svc, sid):
+        return (f"{sid}@{rid} runs: its backend changes at its next start — stop {sid}@{rid} first "
+                f"(lhpc stack stop {sid}@{rid})")
+    radio = next((r for r in radios.load(svc._paths).radios if r.id == rid), None)
+    why = radio_refusal(stack, radio, None, new) if radio is not None else ""
+    return f"{sid}@{rid}: {why}: keep backend = daemon" if why else ""
+
+
+def in_use(svc, stack, comp) -> set:
+    """The backends keyed `comp` of `stack` is configured with: those of every instance (radios_of), the default
+    when it has none — what the install, deps and doctor readers count (B1 note M7)."""
+    return {backend_of(svc, stack.id, comp, r) for r in radios_of(stack, svc._paths)} or {backend_of(svc, stack.id, comp, "")}
+
+
+def live(svc, stack, comp) -> set:
+    """The backends keyed `comp` of `stack` runs with now: those of its running instances (verified launch records),
+    else in_use — what the snapshot and the stop / dependents readers count (B1 note C2, C3)."""
+    return {backend_of(svc, stack.id, comp, r) for r in recorded(svc, stack.id)} or in_use(svc, stack, comp)
+
+
+def stacks_in_use(svc) -> tuple:
+    """The stacks as configured (B1 note M7): each backend-keyed component with the backends its instances use."""
+    return tuple(stack_as(svc, s, in_use) for s in svc.stacks())
+
+
+def stack_as(svc, stack, which):
+    """`stack` with each keyed component through for_backend(comp, which(svc, stack, comp)) (`which`: in_use or live);
+    the stack itself when none is keyed."""
+    if stack is None or not any(keyed(c) for c in stack.components):
+        return stack
+    return dataclasses.replace(stack, components=tuple(for_backend(c, which(svc, stack, c)) if keyed(c) else c
+                                                       for c in stack.components))
+
+
+def access(svc, stack, rid: str) -> str:
+    """How instance `<stack>@<rid>` reaches its radio: "spi" (drives it itself: the stack's radio_access, or a
+    backend-keyed component saved as `backend = spi`) or "daemon"."""
+    if stack.radio_access == "spi":
+        return "spi"
+    comp = next((c for c in stack.components if keyed(c)), None)
+    return "spi" if comp is not None and backend_of(svc, stack.id, comp, rid) == "spi" else "daemon"
+
+
+def eligible(stack, svc, rids=None, models=None) -> tuple:
     """The radios of `rids` (default radios_of) `stack` may be STARTED on: what offers, Start selects and suggestions
-    read. What runs and what a Stop reaches stay radios_of and the running keys. An "spi" stack needs the radio's row."""
-    rids = radios_of(stack, paths) if rids is None else tuple(rids)
-    if stack is None or stack.radio_access != "spi":
+    read. What runs and what a Stop reaches stay radios_of and the running keys. An "spi" instance needs the radio's
+    row."""
+    if stack is None:
+        return () if rids is None else tuple(rids)
+    rids = radios_of(stack, svc._paths) if rids is None else tuple(rids)
+    acc = {r: access(svc, stack, r) for r in rids}
+    if "spi" not in acc.values():
         return rids
-    rows, models = {r.id: r for r in radios.load(paths).radios}, radio_models.load() if models is None else models
-    return tuple(r for r in rids if r in rows and not radio_refusal(stack, rows[r], models))
+    rows, models = {r.id: r for r in radios.load(svc._paths).radios}, radio_models.load() if models is None else models
+    return tuple(r for r in rids if r in rows and not radio_refusal(stack, rows[r], models, acc[r]))
 
 
 def fixed_band(stack) -> str:
@@ -101,7 +205,7 @@ def radios_able(svc, sid: str, band: str = "") -> list:
 def one_radio(svc, sid: str, band: str) -> tuple:
     """(rid, "") of the ONE radio of `band` able to run `sid`, else ("", why): none or several is refused by name, never
     one picked (G1-K8A 1: the web's ?band= start until W5)."""
-    rids = list(eligible(svc.stack(sid), svc._paths, radios_able(svc, sid, band)))
+    rids = list(eligible(svc.stack(sid), svc, radios_able(svc, sid, band)))
     if len(rids) == 1:
         return rids[0], ""
     return "", (f"no radio on {band} MHz runs '{sid}'" if not rids else
@@ -442,7 +546,7 @@ def parse_instance(svc, stack, name: str, at: str, rid: str, verb: str):
         named = [f"{name}@{k.partition('@')[2]}" for k in run]
         return sid, None, "", f"{name} runs as {' and '.join(named)}: name one ({named[0]})"
     if not at:
-        can = eligible(stack, svc._paths)
+        can = eligible(stack, svc)
         if not can:
             return sid, None, "", f"{name} can run on no enabled radio of the hardware list: add one on the Hardware page"
         return sid, None, "", (f"{name} can run on {' or '.join(can)}: use " + " or ".join(f"{name}@{r}" for r in can))
@@ -535,9 +639,10 @@ def copy_of(svc, sid: str, rid: str = "", band: str = "", run=None):
     # a start refuses on the why); the current row decides only for an instance that does not run
     launched = recorded_bands(svc, sid) if run is None or rid in run else {}
     moved = rid in launched and radio is not None and launched[rid] != radio.band
-    models = radio_models.load() if radio is not None and stack.radio_access == "spi" else {}   # one snapshot
-    refused = radio_refusal(stack, radio, models) if radio is not None else ""
-    alts = eligible(stack, svc._paths, models=models) if refused else ()      # never the refused radio itself
+    acc = access(svc, stack, rid) if radio is not None else ""
+    models = radio_models.load() if acc == "spi" else {}   # one snapshot
+    refused = radio_refusal(stack, radio, models, acc) if radio is not None else ""
+    alts = eligible(stack, svc, models=models) if refused else ()      # never the refused radio itself
     if radio is None or (bands and radio.band not in bands) or moved or refused:
         why = (f"{sid}@{rid}: {rid} is not in the hardware list" if radio is None else
                f"{sid}@{rid}: {sid} runs on {' or '.join(bands)} MHz, {rid} is on {radio.band} MHz"
