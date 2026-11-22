@@ -282,6 +282,7 @@
                   starts closed, every other stack open; dash.js remembers the viewer's choice by its id. -#}
               <details class="runstack" id="stk-{{ key }}-{{ s.id }}"{% if (s.sid or s.id) != 'daemon' %} open{% endif %}>
                 <summary class="stitle" data-stack="{{ s.id }}"><strong>{{ s.name }}</strong> <span class="pill">{{ s.id }}</span></summary>
+                {% if s.mode %}<p class="smode muted">Mode: <b>{{ s.mode }}</b></p>{% endif %}{# F29: display only, the running mode #}
                 {% if s.rid %}
                 {# K1: a row per component of the instance, stopped ones too; a part's own Run/Stop names `<comp>@<rid>`;
                    W325: the instance's own Stop and Restart (target `<stack>@<rid>`) #}

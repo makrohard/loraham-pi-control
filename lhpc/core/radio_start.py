@@ -1378,8 +1378,11 @@ def running_instances(svc, band: str, live: dict, procs=None) -> list:
                 note, itfs = component_note(own), svc._client_interfaces(own, stk.id, inst.rid)
             rows.append(component_row(svc, c, state=state, note=note, interfaces=itfs,
                                       commands=commands_by_radio(svc, c, [inst.rid]) if c.interactive else {}))
+        from . import meshcore_mode
         out.append({"id": instances.key(stk.id, inst), "sid": stk.id, "rid": inst.rid, "name": stk.name,
-                    "main": stk.main, "components": relocate_card_interfaces(rows), "multi_band": False})
+                    "main": stk.main, "components": relocate_card_interfaces(rows), "multi_band": False,
+                    # F29: the MeshCore instance's RUNNING mode (the saved one when the running role is unknown)
+                    "mode": svc.meshcore_running_mode(inst) if stk.id == meshcore_mode.STACK_ID else ""})
     return out
 
 

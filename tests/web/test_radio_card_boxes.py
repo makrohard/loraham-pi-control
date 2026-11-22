@@ -171,3 +171,38 @@ def test_card_component_must_name_a_component_of_the_same_stack():
         ep["card_component"] = bad
         with pytest.raises(ManifestError, match="card_component"):
             manifest.parse_manifest(data)
+
+
+MC_NODE_R2 = 5133
+
+
+def _mc_r2(tmp_path, mode="chat"):
+    """meshcore@r2 (868) running its node in `mode` (saved; the running role is read from it when no marker says)."""
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2_868))
+    paths = Paths(runtime_root=tmp_path)
+    plain = ControllerService(system=FakeSystem().system, paths=paths)
+    inst = instances.parse_target(plain, "meshcore@r2", "start")[1]
+    if mode != "chat":
+        assert plain.save_config_bundle("meshcore", values={"file_repeater_name": "RPT2"}, inst=inst).ok
+        assert plain.save_config_bundle("meshcore", values={"file_mode": mode}, inst=inst).ok
+    comp = plain.stack("meshcore").component("meshcore-node")
+    opt, val = instances._token(plain, comp, inst, "868")
+    argv = [exe(comp.process, comp.process.exec_name), *entry_args(comp.process),
+            *[a for a in comp.process.all_args if a != opt], opt, val]
+    return ControllerService(system=FakeSystem(cmdlines_data={700: argv},
+                                               listeners=[Listener("ipv4", "127.0.0.1", MC_NODE_R2, 1)]).system,
+                             paths=paths)
+
+
+@pytest.mark.parametrize("mode", ["chat", "chat+repeater"])
+def test_the_meshcore_block_starts_with_its_mode_line(tmp_path, web, mode):
+    # F29 (his item; red before: no mode line): display only, the first line after the stack title
+    mc = _block(_home(web, _mc_r2(tmp_path, mode)), "meshcore@r2")
+    [title] = mc.find("summary", class_="stitle")
+    [line] = mc.find("p", class_="smode")
+    assert line.index == title.end + 1 and line.text.strip() == f"Mode: {mode}"   # no running marker: the saved mode
+
+
+def test_other_stacks_have_no_mode_line(tmp_path, web):
+    doc = _home(web, _mt(tmp_path))
+    assert not _block(doc, "meshtastic@r1").find("p", class_="smode")

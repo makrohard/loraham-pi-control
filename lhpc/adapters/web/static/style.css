@@ -311,6 +311,7 @@ a.iface { text-decoration: none; color: var(--brand); }
 .radio-col details.runstack > summary.stitle::before { content: "▸ "; color: var(--muted); }
 .radio-col details.runstack[open] > summary.stitle::before { content: "▾ "; }
 .radio-col details.runstack:not([open]) > summary.stitle { margin-bottom: .1rem; }
+.radio-col details.runstack > p.smode { margin: 0 0 .4rem; font-size: .92em; }   /* F29: MeshCore's mode line */
 .radio-col details.cbox > summary.shead { cursor: pointer; list-style: none; display: flex; align-items: center;
   flex-wrap: wrap; gap: .45rem; color: var(--ink); }
 .radio-col details.cbox > summary.shead::-webkit-details-marker { display: none; }
