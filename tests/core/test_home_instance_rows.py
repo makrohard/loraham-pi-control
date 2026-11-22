@@ -168,7 +168,7 @@ def test_without_its_own_page_an_instance_never_takes_a_longer_rids(tmp_path):
 R4 = radios.Radio("r4", "stick", "meshstick-1262", "868", usb_serial="MS123456")
 MC_NODE = {"r2": 5133, "r4": 5399}                  # meshcore-node's own TCP port per instance
 MC_WEB = {"r2": 8921, "r4": 9187}                   # meshcore-webui's own port per instance
-K1_KEYS = {"id", "name", "optional", "state", "note", "configurable", "writes_log", "interfaces", "runnable",
+K1_KEYS = {"id", "name", "kind", "optional", "state", "note", "configurable", "writes_log", "interfaces", "runnable",
            "interactive", "commands", "blocker"}
 
 

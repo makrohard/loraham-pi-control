@@ -165,6 +165,7 @@ tr:last-child td { border-bottom: none; }
 .badge-stopped, .badge-not-installed, .badge-unknown { background: var(--badge-idle-bg); color: var(--badge-idle-ink); border-color: var(--badge-idle-border); }
 .badge-not-applicable { background: var(--badge-idle-bg); color: var(--badge-idle-ink); border-color: var(--badge-idle-border); }
 .badge-not-applicable::before { content: "– "; }
+.badge-kind { background: transparent; color: var(--badge-idle-ink); border-color: var(--badge-idle-border); }   /* dash plan c4: a library / firmware row's neutral label */
 
 .pill { display: inline-block; padding: .05rem .45rem; border-radius: 6px; background: var(--pill-bg); color: var(--pill-ink); font-size: .78rem; border: 1px solid var(--line); }
 /* Semantic pill colours (webserver security + running posture), theme-aware via the badge tokens. */
