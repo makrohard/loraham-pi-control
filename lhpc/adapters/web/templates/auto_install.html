@@ -3,6 +3,7 @@
 {% block title %}Auto-install — LoRaHAM Pi Control{% endblock %}
 {% block nav %}
   {% with here = "Auto-install" %}{% include "_apps_crumbs.html" %}{% endwith %}
+  {% include "_back.html" %}
 {% endblock %}
 {% block content %}
   {% if needs_ack %}

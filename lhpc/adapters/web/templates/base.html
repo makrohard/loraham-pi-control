@@ -27,7 +27,10 @@
     {% set _content = self.content() %}
     {# dash plan c13 NAV FIRST (his word): the page's navigation lines (crumbline + optional second line) come first in
        <main>, before every notice; rendered after the body (results routing above is unchanged) #}
-    {% block nav %}{% endblock %}
+    {#- the default, for a page with no place of its own (the confirmations, error, self-update progress, HMAC apply):
+        "All menus · Home › Apps › <its title>" + "‹ Back" (13b); every other page defines its own -#}
+    {% block nav %}{% with here = self.title() | replace(" — LoRaHAM Pi Control", "") %}{% include "_apps_crumbs.html" %}{% endwith %}
+    {% include "_back.html" %}{% endblock %}
     {% for sev, msg in page_results() %}
       <p class="depnote {{ depnote_classes(sev) }} flash">{{ msg }}</p>
     {% endfor %}
@@ -91,6 +94,7 @@
   </footer>
   <script src="{{ url_for('static', filename='shown.js') }}" defer></script>{# s13: before every poller #}
   <script src="{{ url_for('static', filename='copy.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='back.js') }}" defer></script>{# dash plan c13: ‹ Back #}
   <script src="{{ url_for('static', filename='bandfilter.js') }}" defer></script>
   <script src="{{ url_for('static', filename='daemoncfg.js') }}" defer></script>
   <script src="{{ url_for('static', filename='dparams.js') }}" defer></script>

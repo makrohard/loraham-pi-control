@@ -3,6 +3,7 @@
 {% block title %}Remove {{ plan.rid }} — LoRaHAM Pi Control{% endblock %}
 {% block nav %}
 {% with here = "Remove " ~ plan.rid %}{% include "_hw_crumbs.html" %}{% endwith %}
+{% include "_back.html" %}
 {% endblock %}
 {% block content %}
 <section class="card" id="hardware-remove">
