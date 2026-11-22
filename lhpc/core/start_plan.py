@@ -74,6 +74,7 @@ class StartRun:
     life: object
     pre_marker: object
     skipped: list = dataclasses.field(default_factory=list)   # Q11b: the optional parts a stack start skipped, why
+    joined: str = ""             # B5: the radio this start joins to the running Reticulum node ("" = none)
 
 
 def verify_start(prep: PreparedStart, results, presented) -> tuple[list[str], list[str]]:

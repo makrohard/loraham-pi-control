@@ -17,6 +17,7 @@ from . import openhop_store as _openhop_store
 from . import radio_start as _radio_start
 from . import restart_required as _rr
 from . import reticulum_interfaces as _reticulum_interfaces
+from . import reticulum_members as _reticulum_members
 from . import reticulum_node as _reticulum_node
 from . import rflog as _rflog
 from . import web_client as _web_client
@@ -881,6 +882,8 @@ class ParamsConfigMixin:
                 raise ConfigError(_why, reason=_reticulum_interfaces.REASON_ENDPOINT_INCOMPLETE)   # same rollback
             if _why := _instances.backend_save_refusal(self, sid, current, merged, i):
                 raise ConfigError(_why)                                     # B1 note v2: same rollback
+            if _why := _reticulum_members.save_refusal(self, sid, current, merged, i):
+                raise ConfigError(_why)                                     # B5: a member's section checked first
             return render_stack_config(tgt, merged)
         targets.append(("stack", _stack_config_path(self._paths, sid, inst), _render_stack, 0o644))
         # DURABLE restart-required marker — written INSIDE the same transaction (config-txn
@@ -909,7 +912,8 @@ class ParamsConfigMixin:
         self._invalidate_config()               # saved operator/remotes visible immediately
         return ActionResult(True, f"Config saved for '{target}'.",
                             details=self._apply_hints(target, modes,
-                                                      live=_live_seen.get("v")) + remote_notes,
+                                                      live=_live_seen.get("v")) + remote_notes
+                            + _reticulum_members.after_save(self, target, inst),
                             next_commands=[f"lhpc stack start {_instances.named(self, target, inst)}"])
 
     def _restart_marker_target(self, target, sid, band, cfg_band, params, modes, live_seen, inst=None):
@@ -1823,7 +1827,7 @@ class ParamsConfigMixin:
     @invalidates_snapshot
     def write_config_files(self, target: str, band: str = "",
                            overrides: dict | None = None,
-                           position: dict | None = None, inst=None) -> list[ConfigWrite]:
+                           position: dict | None = None, inst=None, _render_only: bool = False) -> list[ConfigWrite]:
         """(Re)generate every file-config component's config file from the stored
         (per-band) values. Returns a STRUCTURED result per component (written /
         no-base / failed) so an auto-start can block on a generation
@@ -1891,8 +1895,9 @@ class ParamsConfigMixin:
         over = overrides or {}
         written: list[ConfigWrite] = []
 
-        def _values(c, fc, inst, stored, rendered_mode):
-            """(values, why) of component `c`'s file params for one instance (`stored`: its saved values)."""
+        def _values(c, fc, inst, stored, rendered_mode, owner=True):
+            """(values, why) of component `c`'s file params for one instance (`stored`: its saved values); a node
+            member's (`owner` False) renders only its LoRa section, so the Internet interface's rules are the owner's."""
             values = {}
             secret_error = ""
             for p in fc.params:
@@ -1981,7 +1986,7 @@ class ParamsConfigMixin:
                     values[p.name] = validators.validate_param(p, raw)
                 except validators.ValidationError:
                     values[p.name] = default
-            if not secret_error and c.id == _reticulum_interfaces.NODE_ID:
+            if not secret_error and c.id == _reticulum_interfaces.NODE_ID and owner:
                 # CROSS-FIELD rules, checked where the passphrase is resolved and BEFORE the
                 # file is written: an enabled Internet interface whose endpoint or IFAC is half
                 # configured must block the start with a typed message, not hand RNS a config
@@ -2006,9 +2011,12 @@ class ParamsConfigMixin:
             members = []                    # B3: the node's other interfaces, each from its own store and band
             if not secret_error and c.id == _reticulum_interfaces.NODE_ID and inst is not None and inst.rid:
                 for m in _instances.node_members(self, self._owner_stack_id(target), inst.rid):
-                    m_values, secret_error = _values(c, fc, m, self.file_config_values(target, m.band, m), rendered_mode)
-                    if secret_error:
-                        break
+                    m_values, m_why = _values(c, fc, m, self.file_config_values(target, m.band, m), rendered_mode,
+                                              owner=False)
+                    if m_why:                       # B5 (a25 B3 N1): that member is left out, never the owner's failure
+                        written.append(ConfigWrite(c.id, m.rid, "member-skipped", m_why))
+                        continue
+                    # `{band}` is the one token the renderer's `subst` fills from the OWNER's band: a member's own here
                     members.append((m.rid, {k: v.replace("{band}", m.band) if isinstance(v, str) else v
                                             for k, v in m_values.items()}))
             if secret_error:
@@ -2050,6 +2058,9 @@ class ParamsConfigMixin:
                 text = render_keyval(fc.params, values, subst, sep="=", comment=False)
             else:
                 text = render_keyval(fc.params, values, subst)
+            if _render_only:                                # B5: the text as it would be written (one member's block)
+                written.append(ConfigWrite(c.id, str(out_path), "rendered", text))
+                continue
             try:
                 if dest.policy == "runtime":
                     runtime_fs.atomic_write(self._paths, out_path, text, fc.mode)

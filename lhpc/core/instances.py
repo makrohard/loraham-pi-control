@@ -688,7 +688,8 @@ def copy_of(svc, sid: str, rid: str = "", band: str = "", run=None):
         return None, why
     if band and band != radio.band:
         return None, f"{sid}@{rid}: {rid} is on {radio.band} MHz, not {band} MHz"
-    if (owner := member_of(svc, sid, rid)) and rid not in launched:      # a member is never an owner (B3 note C1 a)
+    if (owner := member_of(svc, sid, rid)) and rid not in launched and owner not in recorded(svc, sid):
+        # a member is never an owner (B3 note C1 a); while its owner's node runs, its start joins it (B5)
         return commands.Instance(rid, band=radio.band), (f"{sid}@{rid} is a member of the node on {owner}: start "
                                                          f"{sid}@{owner}, or remove {rid} from it")
     return commands.Instance(rid, band=radio.band), ("" if radio.enabled else f"{sid}@{rid}: {rid} is disabled")

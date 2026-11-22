@@ -24,6 +24,7 @@ from . import config as _cfgmod
 from . import instance_liveness, instances, radio_start, spi_mode, stackupdates
 from . import manifest as manifest_mod
 from . import meshcore_mode as _meshcore_mode
+from . import reticulum_members as _reticulum_members
 from .config import (
     HW_SETUPS,
     Config,
@@ -1908,6 +1909,8 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # synthetic position. The plan below is the ONLY feed admitter; the fixture runs only
             # when named directly.
             allowed_optional = {c.id for c in s.components if self._autostart_on(c, cfg)}
+            if _reticulum_members.joining(self, inst):      # B5: a joining radio starts no node client (the owner's)
+                allowed_optional = set()
             # The GPS feed is NOT an operator auto-start choice: it is admitted from the ONE
             # resolved global GPS plan, computed HERE — before anything downstream acquires a
             # lock — so run order, claims and the rendered config all describe the same plan.

@@ -11,7 +11,14 @@ from .model import ComponentKind, RunState
 from .outcomes import CompResult, Outcome, applied_ok
 from .paths import PathContainmentError
 from .service_base import ActionResult, AdmissionRefused, SourceTxnBlocked
-from .service_lifecycle_ops import _daemon_presence, _ohs, instances, radio_start
+from .service_lifecycle_ops import (
+    _daemon_presence,
+    _ohs,
+    _ri,
+    _rm,
+    instances,
+    radio_start,
+)
 from .snapshot_memo import invalidates_snapshot
 
 
@@ -290,6 +297,13 @@ class StopOpsMixin:
                         dep_block = True
                         blocked_deps.append(dep)
 
+        _rid = getattr(inst, "rid", "") or ""
+        # B5: a node member's stop detaches it (never a signal: its process is the owner's); the owner's ends the node's
+        # memberships after its verified cessation (below)
+        _member = bool(_rid) and self.stack_of(target) == _ri.STACK_ID and bool(
+            instances.member_of(self, _ri.STACK_ID, _rid) or _rm.member_record(self, _rid))
+        _owner = not _member and self.stack_of(target) == _ri.STACK_ID and (_o := _rm.owner_record(self)) is not None \
+            and _o.get("rid") == _rid
         for _, comp in items:
             # Never stop the daemon while a dependent is still running / not verified stopped.
             if target_is_daemon and comp.id == self.DAEMON_ID and dep_block:
@@ -320,6 +334,11 @@ class StopOpsMixin:
             # identity-verified inside Lifecycle.stop, which returns a typed result.
             if comp.id == self.DAEMON_ID and band in ALLOWED_BANDS:
                 cr = life.stop(comp, band=band, rid=getattr(inst, "rid", "") or None)       # item 16: `--radio rN` alone
+            elif _member and comp.id == _ri.NODE_ID:
+                _why = _rm.detach(self, _rid)
+                cr = CompResult(component=comp.id, stack=target, action="stop",
+                                outcome=Outcome.BLOCKED if _why else Outcome.STOPPED,
+                                summary=_why or f"{_rid} disconnected from the Reticulum node (it keeps running)")
             else:
                 cr = life.stop(comp, **instances.stop_scope(self, self.stack_of(target) or target, comp, inst, band))   # 7c2b
                 if (cr.outcome in (Outcome.ALREADY_STOPPED, Outcome.STOPPED) and getattr(inst, "rid", "")
@@ -344,6 +363,8 @@ class StopOpsMixin:
         # later daemon-release fails, a stopped client must never look running. (K6, 13.12.5: no band marker.)
         if sid and own_ok:
             self.dismiss_interactive(sid, inst)             # K7: the stopped instance's own marker (a band caller's: its band's)
+            if _owner:
+                _rm.end_node(self, _rid)                    # B5: an explicit Stop ends the node's memberships
         # A CLIENT stop also takes down the non-daemon dependency stacks it ALONE was using
         # (the KISS TNC under graywolf) — the chain its start pulled up comes down with it.
         # Internal (_operator=False), so released stacks are never tombstoned; each release

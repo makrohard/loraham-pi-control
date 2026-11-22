@@ -1446,6 +1446,13 @@ class Lifecycle:
                               summary=summary, details=tuple(details) + tuple(post_notes),
                               pid=(killed[0] if killed else None))
         recs = self.owned_records(comp.id, band, rid=rid)
+        # B5 M8: a node member's record carries its owner's pid and pgid: never signalled here. It goes with its owner's
+        # stop; alone it is refused (its stop disconnects it from the running node instead).
+        from .instances import MEMBER_OF
+        members, recs = [r for r in recs if r.get(MEMBER_OF)], [r for r in recs if not r.get(MEMBER_OF)]
+        if members and not recs:
+            return result(Outcome.MANUAL_REQUIRED, f"{comp.id} on {members[0].get('rid', '?')} is a member of the node on "
+                          f"{members[0][MEMBER_OF]}: never signalled — its stop disconnects it from the node")
         # 7c2b: one instance's stop verifies ITS endpoints (127.0.0.1:8011), never another instance's that still serve.
         ep_comp = comp if endpoints is None else dataclasses.replace(comp, endpoints=tuple(endpoints))
         if not recs:
@@ -1522,7 +1529,9 @@ class Lifecycle:
             return result(Outcome.ENDPOINT_STILL_PRESENT,
                           f"process ceased but readiness endpoint(s) still present: "
                           f"{', '.join(lingering)} — ownership retained", killed, notes)
-        remove_failed = [rec for rec in ceased + stale if not self._remove_record(rec)]
+        gone_pids = {r["pid"] for r in ceased + stale}
+        remove_failed = [rec for rec in ceased + stale + [m for m in members if m["pid"] in gone_pids]
+                         if not self._remove_record(rec)]
         if remove_failed:
             # The processes ceased, but ownership evidence could NOT be cleared — report
             # UNVERIFIED rather than a clean STOPPED, so the discrepancy is visible.

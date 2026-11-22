@@ -710,6 +710,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("stack", metavar="stack@rid", help="<stack>@<rid> (or <component>@<rid>)")
         if action in ("start", "stop", "restart"):          # 13.8: `--radio RID` stays for scripts: daemon@RID
             sp.add_argument("--radio", default="", metavar="RID", help="The daemon of this radio: daemon@RID")
+        if action == "start":                               # B5: a further radio of the running Reticulum node
+            sp.add_argument("--join", action="store_true",
+                            help="Connect this radio to the running Reticulum node (live, no restart)")
         sp.add_argument("--yes", action="store_true", help="Apply without confirmation")
 
     # The operator's hard stop (A §2.12): SIGTERM, 5 s, SIGKILL over one instance's processes.
@@ -1512,6 +1515,16 @@ def _run(argv: list[str] | None = None) -> int:
                         and manual_required_only(res.results)):
                     return replace(res, ok=True)
                 return res
+            if args.stack_action == "start" and getattr(args, "join", False):
+                from lhpc.core import reticulum_members
+                ok, msg = reticulum_members.save_join(svc, sid, inst)          # B5: the intent, then the start joins
+                if not ok:
+                    print(f"ERR   {msg}", file=sys.stderr)
+                    return 1
+                rc = _start_flow(_run, args.stack, yes=args.yes)
+                if rc != 0:
+                    reticulum_members.drop_join(svc, inst)                     # a failed Connect leaves nothing behind
+                return rc
             if args.stack_action == "start":
                 return _start_flow(_run, args.stack, yes=args.yes,
                                    stop_cmds=svc.owner_stop_commands,

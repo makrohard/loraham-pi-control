@@ -28,6 +28,7 @@ from . import openhop_store as _ohs
 from . import resources as resources_mod
 from . import restart_required as _rr
 from . import reticulum_interfaces as _ri
+from . import reticulum_members as _rm
 from .daemon_control import ALLOWED_BANDS
 from .model import ComponentKind, ResourceMode, RunState
 from .outcomes import CompResult, Outcome
@@ -893,7 +894,7 @@ class LifecycleOpsMixin:
                 # typed row names what stayed up and why. A start blocked only on a manual step
                 # (chat's TUI) is not failed and keeps its daemon up for the operator.
                 run.out += self._roll_back_start(run.life, prep.order, run.results,
-                                                 prep.cfg_band, run.daemon_launched)
+                                                 prep.cfg_band, run.daemon_launched, run.joined)
             return self._finalize_start(prep, run, failed, required_manual)       # PHASE 5
 
     def _prepare_from_fresh_evidence(self, target: str, band: str, stop_owners: bool,
@@ -932,7 +933,13 @@ class LifecycleOpsMixin:
         _sid = self.stack_of(target) or target    # K5: an instance runs on its radio's band (the one-band rule is gone)
         # K7 (DEC-W384h): fixed ports only (Reticulum's one node, W391): one instance at a time, by the running ones
         if (not self._is_daemon_target(_sid) and instances.fixed_ports_only(self.stack(_sid))
-                and (_run := [k for k in instances.running_keys(self, _sid) if k != instances.key(_sid, inst)])):
+                and (_run := [k for k in instances.running_keys(self, _sid) if k != instances.key(_sid, inst)])
+                and not _rm.joining(self, inst)):                       # B5: a member joins the running node
+            _rid = getattr(inst, "rid", "")
+            if _sid == _ri.STACK_ID and (_own := _rm.owner_record(self)) is not None and _rid:
+                return ActionResult(False, f"Reticulum runs on {_own['rid']}. Connect {_rid} to that node? "
+                                           "(live, no restart)", data={"connect": {"node": _own["rid"], "radio": _rid}},
+                                    next_commands=[f"lhpc stack start {_sid}@{_rid} --join --yes"])
             return ActionResult(False, f"'{_sid}' runs one instance at a time (one node, fixed ports): {_run[0]} runs",
                                 next_commands=[f"lhpc stack stop {_run[0]} --yes"])
         # The SAME rule, one stack removed: a chain member of ANOTHER stack already up on a
@@ -1214,7 +1221,13 @@ class LifecycleOpsMixin:
                 return None
             return self._overrides_for_comp(target, "file", file_over, comp_id)
 
+        run.joined = _rm.joining(self, prep.inst)
         for stack, comp in order:
+            if run.joined and comp.id == _ri.NODE_ID:     # B5: a member's rns step attaches (its order holds no client:
+                why = _rm.attach(self, instances.member_of(self, stack.id, run.joined), run.joined)   # _run_order)
+                record(comp, stack, Outcome.BLOCKED if why else Outcome.VERIFIED,
+                       f"not connected: {why}" if why else "connected to the Reticulum node (live, no restart)")
+                continue
             state = instances.start_state(self, stack.id, comp, prep.inst, cfg_band, st_index[comp.id].run_state, st_index[comp.id])
             running = state == RunState.RUNNING        # DEGRADED is NOT healthy
             # A DEGRADED component (process up but a ready endpoint missing) must not
@@ -1542,6 +1555,11 @@ class LifecycleOpsMixin:
                 summary += f"; {post_summary}"
             record(comp, stack, Outcome.VERIFIED, summary)          # K5: no per-stack band marker (13.12.5)
         self.clear_stale_interactive(keep=instances.key(self.stack_of(target) or target, prep.inst))   # its own marker
+        if (not run.joined and getattr(prep.inst, "rid", "") and any(
+                r.component == _ri.NODE_ID and r.outcome == Outcome.VERIFIED for r in results)):
+            # B5: THE reconcile after every owner start (manual and boot): each intended member attached, or named
+            for rid, why in _rm.reconcile(self, prep.inst.rid, time.monotonic() + _rm.RPC_DEADLINE_S):
+                out.append(f"  [member] {rid}: " + (f"not connected — {why}" if why else "connected to the node"))
         run.pre_marker = _pre_marker
         return run
 
@@ -1594,7 +1612,7 @@ class LifecycleOpsMixin:
                             next_commands=[f"lhpc status {target}", f"lhpc logs {target}",
                                            f"lhpc stack stop {instances.named(self, target, prep.inst, prep.cfg_band)}"])
 
-    def _roll_back_start(self, life, order, results, band: str, daemon_launched) -> list[str]:
+    def _roll_back_start(self, life, order, results, band: str, daemon_launched, joined: str = "") -> list[str]:
         """The roll-back of a FAILED start (finding 64): stop again what THIS start launched,
         last started first, and return the detail lines.
 
@@ -1620,14 +1638,15 @@ class LifecycleOpsMixin:
         for cid in rolled:
             i = next(i for i, r in enumerate(results)
                      if r.component == cid and r.action == "start")
-            cr = life.stop(by_id[cid], band=band)
+            cr = life.stop(by_id[cid], band=band)      # a joined rns step is never rolled back: it is its order's last
             results[i] = dataclasses.replace(
                 results[i], outcome=cr.outcome,
                 summary=f"{results[i].summary}; rolled back: {cr.summary}")
             note(cr)
         if daemon_launched and self.DAEMON_ID in by_id:
-            residual = sorted(c.id for _, c in order
-                              if c.id != self.DAEMON_ID and life.owned_records(c.id))
+            residual = sorted(c.id for _, c in order       # a joined member: its own record only, not the node's
+                              if c.id != self.DAEMON_ID
+                              and (life.owned_records(c.id, rid=joined) if joined else life.owned_records(c.id)))
             why = residual_reason(residual, rolled, results)
             for b in sorted(daemon_launched):
                 if residual:

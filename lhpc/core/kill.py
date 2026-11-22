@@ -63,7 +63,8 @@ def _targets(svc, stk, copy, comps) -> tuple[list[dict], list[str]]:
     found: dict[int, dict] = {}
     unresolved: list[str] = []
     for comp in comps:
-        recs = {r["pid"]: r for r in life.owned_records(comp.id) if life.verify_owned(r)[0]}   # one verified scan
+        recs = {r["pid"]: r for r in life.owned_records(comp.id) if life.verify_owned(r)[0]
+                and not r.get(instances.MEMBER_OF)}      # one verified scan; a member's record is its owner's process
         if comp.id == svc.DAEMON_ID:
             # The daemon of one radio by its exact `--id <rid>` (L5), else every daemon.
             pids = [p for p, a in table.items() if a and posixpath.basename(a[0]) == "loraham_daemon"
@@ -287,6 +288,12 @@ def kill(svc, target: str, component: str = "", apply: bool = False) -> ActionRe
     if err:
         return ActionResult(False, err, next_commands=["lhpc list"])
     what = f"{component} of {target}" if component else target
+    if copy is not None and (owner := next((r[instances.MEMBER_OF] for r in svc._lifecycle().owned_inventory()[0]
+                                            if r.get("stack") == stk.id and r.get("rid") == copy.rid
+                                            and r.get(instances.MEMBER_OF)), "")):
+        # B5 M8: a node member runs in its owner's process: killing "it" would kill the node
+        return ActionResult(False, f"Cannot kill {target}: it is a member of the node on {owner}; "
+                                   f"`lhpc stack stop {target}` disconnects it, `lhpc kill {stk.id}@{owner}` ends the node.")
     key = instances.key(stk.id, copy)   # the copy whose in-flight start may end
     if not apply:
         targets, unresolved = _targets(svc, stk, copy, comps)

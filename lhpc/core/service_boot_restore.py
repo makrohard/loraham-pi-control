@@ -133,8 +133,8 @@ class BootRestoreOpsMixin:
         valid, issues, dir_state = life.owned_inventory()
         evidence, skipped = [], []
         for rec in valid:
-            if rec.get("role", "") != "":
-                continue
+            if rec.get("role", "") != "" or rec.get(instances.MEMBER_OF):
+                continue        # B5: a node member is no item of its own: its owner's start reconciles it (its intent)
             rec_boot = str(rec.get("boot_id") or "")
             if rec_boot:
                 if rec_boot == cur_boot:

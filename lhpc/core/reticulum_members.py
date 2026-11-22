@@ -1,0 +1,273 @@
+"""Radios joined to the running Reticulum node, restart-free (plan reti v21 §1c-§1d, B5 design note v2).
+
+One node per box, owned by the radio it was started on; each further radio is a member: its saved `member_of` (the one
+durable intent), its `[[LoRa <rid>]]` section in the node's config (B3), attached live through the node's own RPC
+(`rnstatus --attach/--detach/--reload`) and verified in `rnstatus -j`, then its ownership record on the owner's process
+(`member_of` in the record; never signalled, lifecycle.py). Every write of the node file and every rnstatus call runs
+under the node lock (NODE_LOCK, the key every owner start and stop holds), so one member's block never interleaves
+with an owner start's whole-file render.
+"""
+from __future__ import annotations
+
+import json
+import re
+import time
+
+from . import commands, instances, procident, reticulum_node, runtime_fs
+from .config import ConfigError, update_stack_config
+from .reticulum_interfaces import NODE_ID, STACK_ID
+
+NODE_LOCK = "tcp.port.37428"          # the node's shared-instance port: an exclusive claim of every owner start/stop
+TIMEOUT_S = 20.0                      # one rnstatus round (attach / detach / reload / -j)
+VIEW_TIMEOUT_S = 3.0                  # a page's one `-j` (a hung RPC never holds a render)
+RPC_RETRY_S = 2.0                     # the node's RPC after an owner start: retried until the start deadline
+RPC_DEADLINE_S = 60.0                 # = rns's readiness_timeout: the bound of that wait (plan §1c, a25 N2)
+_LISTED = re.compile(r"\[LoRa (r[1-9][0-9]?)\]$")
+
+
+def _comp(svc):
+    return svc.stack(STACK_ID).component(NODE_ID)
+
+
+def _config_dir(svc):
+    return svc._paths.under("state", "reticulum")
+
+
+def rnstatus(svc, *args, timeout: float = TIMEOUT_S):
+    """`rnstatus --config <the node's config dir> *args` from the node's venv -> CommandResult."""
+    src = svc._lifecycle().source_dir(_comp(svc))
+    return svc._system.runner.run([str(src / ".venv" / "bin" / "rnstatus"), "--config", str(_config_dir(svc)), *args],
+                                  timeout=timeout, cwd=str(src))
+
+
+def listed(svc, timeout: float = TIMEOUT_S):
+    """The rids whose `LoRa <rid>` the running node lists (`rnstatus -j`), or None when it does not answer."""
+    res = rnstatus(svc, "-j", timeout=timeout)
+    if res.returncode != 0:
+        return None
+    try:
+        ifaces = json.loads(res.stdout or "{}").get("interfaces", [])
+    except (ValueError, AttributeError):
+        return None
+    return {m.group(1) for i in ifaces if isinstance(i, dict) and (m := _LISTED.search(str(i.get("name", ""))))}
+
+
+def check(svc, rid: str, block: str) -> str:
+    """Why the interface would refuse `block` ("" = it accepts it): the interface's own check of one section (the same
+    code its constructor runs), from the node's venv, before the block is written or attached."""
+    src = svc._lifecycle().source_dir(_comp(svc))
+    path = _config_dir(svc) / f".check-{rid}"
+    try:
+        runtime_fs.atomic_write(svc._paths, path, block, 0o600)
+        res = svc._system.runner.run([str(src / ".venv" / "bin" / "loraham-rns-check-section"), str(path)],
+                                     timeout=TIMEOUT_S, cwd=str(src))
+    finally:
+        path.unlink(missing_ok=True)
+    if res.returncode == 0:
+        return ""
+    line = (res.stdout or "").strip().splitlines()
+    return line[0] if res.returncode == 1 and line else "the interface's section check is unavailable"
+
+
+def owner_record(svc):
+    """The running node's owner launch record (`node_owner`, B4), or None."""
+    life = svc._lifecycle()
+    return next((r for r in life.owned_records(NODE_ID, role=None)
+                 if r.get(instances.NODE_OWNER) is True and life.verify_owned(r)[0]), None)
+
+
+def member_record(svc, rid: str):
+    """`rid`'s member record on the running node, or None."""
+    life = svc._lifecycle()
+    return next((r for r in life.owned_records(NODE_ID, role=None, rid=rid) if r.get(instances.MEMBER_OF)), None)
+
+
+def joining(svc, inst) -> str:
+    """The radio a start of `inst` joins to the running node: its saved member_of names the running owner (and it is
+    not that owner), else "". A join attaches its rns step and starts none of the node's clients."""
+    rid = getattr(inst, "rid", "") or ""
+    owner = instances.member_of(svc, STACK_ID, rid) if rid else ""
+    own = owner_record(svc) if owner else None
+    return rid if own is not None and own.get("rid") == owner != rid else ""
+
+
+def _block(svc, owner, rid: str, overrides=None) -> tuple[str, str]:
+    """(rid's member block as the node file renders it, why not): the node's file rendered in memory (B3's renderer);
+    `overrides` ({file param: value}): a save's values not committed yet."""
+    inst = instances.copy_of(svc, STACK_ID, owner)[0]
+    writes = svc.write_config_files(NODE_ID, getattr(inst, "band", ""), inst=inst, overrides=overrides, _render_only=True)
+    text = next((w.detail for w in writes if w.component == NODE_ID and w.status == "rendered"), "")
+    block = reticulum_node.section_text(text, rid)
+    why = next((w.detail for w in writes if w.component == NODE_ID and w.status == "member-skipped" and w.path == rid),
+               "") or next((w.detail for w in writes if w.component == NODE_ID and w.status in ("failed", "no-base")), "")
+    return block, ("" if block else why or f"{rid}'s section does not render")
+
+
+def _node_file(svc):
+    return _config_dir(svc) / "config"
+
+
+def _write_block(svc, rid: str, block: str) -> None:
+    path = _node_file(svc)
+    runtime_fs.atomic_write(svc._paths, path, reticulum_node.replace_section(path.read_text(), rid, block), 0o400)
+
+
+def _save_intent(svc, rid: str, owner: str) -> None:
+    update_stack_config(svc._paths, STACK_ID, {instances.MEMBER_OF: owner}, inst=commands.Instance(rid))
+    svc._invalidate_config()
+
+
+def attach(svc, owner: str, rid: str) -> str:
+    """Bring `rid` up as a member of the running node on `owner` (its intent already saved): render its block, check it,
+    write it, `--attach`, verify in `-j`, then its member record. "" = connected, else why — and nothing is left behind
+    but the intent (the block removed, no record)."""
+    own = owner_record(svc)
+    if own is None or own.get("rid") != owner:
+        return f"the Reticulum node on {owner} is not running"
+    if member_record(svc, rid) is not None and rid in (listed(svc) or set()):
+        return ""                                   # already connected
+    block, why = _block(svc, owner, rid)
+    if not why:
+        why = check(svc, rid, block)
+    if why:
+        return why
+    _write_block(svc, rid, block)
+    res = rnstatus(svc, "--attach", reticulum_node.name(rid))
+    if res.returncode != 0 or rid not in (listed(svc) or set()):
+        _write_block(svc, rid, "")
+        return f"the node did not attach {reticulum_node.name(rid)}: {(res.stdout or res.stderr or '').strip()}".rstrip(": ")
+    band = next((r.band for r in instances.radios.load(svc._paths).radios if r.id == rid), "")
+    ident = procident.proc_identity(own["pid"])
+    stk = svc.stack(STACK_ID)
+    if ident is None or ident.get("starttime") != own.get("starttime") or not svc._lifecycle().record_launch(
+            stk, _comp(svc), own["pid"], band=band, ident=ident, extra={"rid": rid, instances.MEMBER_OF: owner}):
+        rnstatus(svc, "--detach", reticulum_node.name(rid))
+        _write_block(svc, rid, "")
+        return "the member's ownership record could not be written"
+    return ""
+
+
+def reconcile(svc, owner: str, deadline: float) -> list[tuple[str, str]]:
+    """THE node reconcile, after every owner start (manual and boot): wait for the node's RPC until `deadline`
+    (time.monotonic), then attach each intended member not live yet. [(rid, "" | why)]; the owner stands either way."""
+    out = []
+    members = [m.rid for m in instances.node_members(svc, STACK_ID, owner) if member_record(svc, m.rid) is None]
+    if not members:
+        return out
+    while listed(svc) is None and time.monotonic() < deadline:
+        time.sleep(RPC_RETRY_S)
+    for rid in members:
+        out.append((rid, attach(svc, owner, rid)))
+    return out
+
+
+def detach(svc, rid: str) -> str:
+    """A member's Stop: detached (when live), its block, record and intent removed — a not-connected member's Stop is its
+    Remove (no rnstatus call). "" = done, else why (nothing changed)."""
+    rec = member_record(svc, rid)
+    if rec is not None and rid in (listed(svc) or set()):
+        res = rnstatus(svc, "--detach", reticulum_node.name(rid))
+        if res.returncode != 0 and rid in (listed(svc) or set()):
+            return f"the node did not detach {reticulum_node.name(rid)}: {(res.stdout or res.stderr or '').strip()}".rstrip(": ")
+    if _node_file(svc).exists():
+        _write_block(svc, rid, "")
+    if rec is not None:
+        svc._lifecycle()._remove_record(rec)
+    update_stack_config(svc._paths, STACK_ID, {instances.MEMBER_OF: ""}, inst=commands.Instance(rid))
+    svc._invalidate_config()
+    return ""
+
+
+def end_node(svc, owner: str) -> None:
+    """After the owner's verified Stop: every member record of the node and every intent naming it cleared (an explicit
+    Stop ends the memberships, plan §1d)."""
+    life = svc._lifecycle()
+    for rec in [r for r in life.owned_records(NODE_ID, role=None) if r.get(instances.MEMBER_OF) == owner]:
+        life._remove_record(rec)
+    for m in instances.node_members(svc, STACK_ID, owner):
+        update_stack_config(svc._paths, STACK_ID, {instances.MEMBER_OF: ""}, inst=commands.Instance(m.rid))
+    svc._invalidate_config()
+
+
+def _file_values(merged: dict) -> dict:
+    """A stack settings dict's file-param values by param name (flat `file_<name>` and component-scoped)."""
+    scoped = f"__f__{NODE_ID}__"
+    return {**{k[len("file_"):]: v for k, v in merged.items() if k.startswith("file_")},
+            **{k[len(scoped):]: v for k, v in merged.items() if k.startswith(scoped)}}
+
+
+def save_refusal(svc, sid: str, current: dict, merged: dict, inst) -> str:
+    """Why a save of a node member's settings is refused ("" = fine): while its node runs, its would-be section must pass
+    the interface's own check BEFORE the save commits (plan §1c (b)); a node that does not run checks at its start."""
+    rid = getattr(inst, "rid", "") or ""
+    owner = str(merged.get(instances.MEMBER_OF, "") or "") if sid == STACK_ID and rid else ""
+    own = owner_record(svc) if owner and _file_values(merged) != _file_values(current) else None
+    if own is None or own.get("rid") != owner:
+        return ""
+    block, why = _block(svc, owner, rid, overrides=_file_values(merged))
+    why = why or check(svc, rid, block)
+    return f"{sid}@{rid}: the interface would refuse these settings: {why}" if why else ""
+
+
+def reload(svc, rid: str) -> str:
+    """After a member's saved settings: its section re-rendered and reloaded (`--reload`, verified in `-j`); refused ->
+    the previous section back and reloaded; that fails too -> its record removed (not connected). "" = reloaded, else
+    what happened (the saved settings stand: they passed the check, a failure here is the node's)."""
+    owner = instances.member_of(svc, STACK_ID, rid)
+    old = reticulum_node.section_text(_node_file(svc).read_text(), rid)
+    new, why = _block(svc, owner, rid)
+    if why:
+        return f"not reloaded: {why}"
+
+    def _round(block):
+        _write_block(svc, rid, block)
+        res = rnstatus(svc, "--reload", reticulum_node.name(rid))
+        ok = res.returncode == 0 and rid in (listed(svc) or set())
+        return "" if ok else (res.stdout or res.stderr or "not listed after the reload").strip()
+    if not (first := _round(new)):
+        return ""
+    if not (second := _round(old)):
+        return f"the node refused the new settings ({first}); the previous section is back and attached"
+    if (rec := member_record(svc, rid)) is not None:
+        svc._lifecycle()._remove_record(rec)
+    return f"not connected: the node refused the new settings ({first}), and the previous ones too ({second})"
+
+
+def after_save(svc, target: str, inst) -> list[str]:
+    """The detail lines of a saved member's live reload (none when it is no live member), under the node lock: a busy node
+    leaves it saved, not reloaded."""
+    from .reslock import ResourceBusy
+    rid = getattr(inst, "rid", "") or ""
+    if svc.stack_of(target) != STACK_ID or not rid or member_record(svc, rid) is None:
+        return []
+    try:
+        with svc._keys_guard("reload", STACK_ID, [NODE_LOCK]):
+            why = reload(svc, rid)
+    except ResourceBusy:
+        return [f"  [member] {rid}: saved, not reloaded (the node is busy) — it applies at its next connect"]
+    return [f"  [member] {rid}: " + (why or "reloaded live (no restart)")]
+
+
+def save_join(svc, sid: str, inst) -> tuple[bool, str]:
+    """Connect, step 1 (`lhpc stack start reticulum@<rid> --join`, the card's [Connect]): save `member_of` = the running
+    owner, so the ordinary start of the instance joins the node (`joining`). (ok, why not)."""
+    rid = getattr(inst, "rid", "") or ""
+    own = owner_record(svc)
+    if sid != STACK_ID or not rid:
+        return False, "--join connects a radio to the running Reticulum node: reticulum@<rid>"
+    if own is None:
+        return False, "Reticulum is not running: start it on one radio first (that radio owns the node)"
+    if rid == own["rid"]:
+        return False, f"{sid}@{rid} is the node's owner"
+    try:
+        _save_intent(svc, rid, own["rid"])
+    except (OSError, ConfigError) as exc:
+        return False, f"could not save {rid}'s membership: {exc}"
+    return True, ""
+
+
+def drop_join(svc, inst) -> None:
+    """A failed Connect leaves nothing behind (plan §1c): no block, no record, no intent (a restore's failure keeps the
+    intent instead: `reconcile` never calls this)."""
+    if member_record(svc, inst.rid) is None:
+        detach(svc, inst.rid)
