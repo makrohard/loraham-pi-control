@@ -106,16 +106,17 @@ function go(method, path, formData) {
 // frame first gets GitHub's same-origin 404 page; its path minus the index directory is the app path).
 function loaded() {
   const win = $("app").contentWindow;
-  let loc = null;
-  try { loc = win.location; } catch (_) { /* unreadable: render the current path again */ }
-  if (ours && loc && loc.href.startsWith("about:srcdoc")) {
+  let href = "";
+  try { href = win.location.href; } catch (_) { /* another origin's page: unreadable, render the current path again */ }
+  if (ours && href.startsWith("about:srcdoc")) {
     ours = false;
     wire(win.document);
     if (hash) { const h = hash; hash = ""; win.location.hash = h; }   // as a box loads /#x: scroll there, open its <details>
     return;
   }
   ours = false;
-  if (!loc || loc.href.startsWith("about:")) { go("GET", current); return; }
+  if (!href || href.startsWith("about:")) { go("GET", current); return; }
+  const loc = new URL(href);
   let p = loc.pathname;
   if (p.startsWith(BASE.pathname)) p = "/" + p.slice(BASE.pathname.length);
   go("GET", p + loc.search + loc.hash);
@@ -132,7 +133,9 @@ function wire(doc) {
     // An in-page #anchor jumps inside this page, as on a box; left alone, an about:srcdoc page resolves it against
     // index.html and loads the demo itself into the frame.
     if (href.startsWith("#")) { e.preventDefault(); doc.defaultView.location.hash = href; return; }
-    if (isInternal(href)) { e.preventDefault(); go("GET", href); }
+    if (isInternal(href)) { e.preventDefault(); go("GET", href); return; }
+    // Another site opens in a new tab: the frame stays the app (a page of another origin in it is unreadable).
+    if (/^https?:/i.test(href) && !a.target) { e.preventDefault(); window.open(href, "_blank", "noopener"); }
   });
   doc.addEventListener("submit", (e) => {
     if (e.defaultPrevented) return;

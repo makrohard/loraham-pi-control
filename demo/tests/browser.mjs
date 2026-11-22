@@ -420,6 +420,33 @@ try {
   { timeout: 30000 });
   if (await boots(page) !== "1") throw new Error("an in-page anchor booted Pyodide again");
   ok("an in-page #anchor (Settings → Repeater) jumps inside the page, no new boot");
+  // (l) a link to another site (the footer's GitHub link, base.html) opens a new tab; the frame stays the page: a frame
+  // navigated to another origin would show that site in the demo, and its pages are unreadable to the demo.
+  await render(page, "/", "#sysbox");
+  const ext = await page.evaluate(() => {
+    const seen = [], real = window.open;
+    window.open = (...a) => { seen.push(a.slice(0, 2)); return null; };
+    try {
+      const a = [...doc().querySelectorAll('a[href^="https://"]')].find((x) => !x.target);
+      if (!a) return { href: "", seen };
+      doc().documentElement.dataset.old = "1";
+      a.click();
+      return { href: a.getAttribute("href"), seen };
+    } finally { window.open = real; }
+  });
+  await sleep(500);
+  const extStayed = await page.evaluate(() => { const d = doc(); return d !== document && !!d.documentElement.dataset.old; });
+  if (!ext.href || JSON.stringify(ext.seen) !== JSON.stringify([[ext.href, "_blank"]]) || !extStayed)
+    throw new Error("an external link did not open a new tab with the page kept: " + JSON.stringify({ ...ext, extStayed }));
+  ok("an external link (" + ext.href + ") opens a new tab, the page stays");
+  // (m) a script's navigation of the frame to another origin: the demo renders its page again (that frame's location
+  // is unreadable to the demo; reading it must not throw).
+  await page.evaluate(() => { doc().documentElement.dataset.old = "1"; doc().defaultView.location.href = "https://example.invalid/"; });
+  await page.waitForFunction(() => { const d = doc(), e = d && d.documentElement;
+    return d !== document && !!e && !e.dataset.old && d.readyState === "complete" && !!d.getElementById("sysbox"); },
+  { timeout: 30000 });
+  if (await boots(page) !== "1") throw new Error("a cross-origin frame navigation booted Pyodide again");
+  ok("a frame navigation to another origin renders the page again, no new boot");
   // (h) 390 px: no horizontal page scroll, neither the demo page nor the page shown.
   await page.setViewport({ width: 390, height: 844 });
   await sleep(500);
