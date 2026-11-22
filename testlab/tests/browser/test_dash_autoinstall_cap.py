@@ -1,8 +1,10 @@
 """Dash plan c12 S12 (his word): on the Auto-install page the selection table (#ai-select) and the run's task table
 (#ai-tasks) are at most 950 px on a big screen and fill the width on a phone; other .tasklist tables (HMAC) are not
-capped. Real browser."""
+capped; at 900 px (no phone rule) a table is no wider than its container. Real browser."""
 _W = """ids => ids.map(i => { const e = document.getElementById(i);
   return [Math.round(e.getBoundingClientRect().width), getComputedStyle(e).width]; })"""
+_FIT = """i => { const e = document.getElementById(i), p = e.parentElement, cs = getComputedStyle(p);
+  return [Math.round(e.getBoundingClientRect().width), p.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)]; }"""
 
 
 def test_the_two_auto_install_tables_are_capped(flask_page):
@@ -15,6 +17,10 @@ def test_the_two_auto_install_tables_are_capped(flask_page):
           t.innerHTML = '<tr><td>x</td></tr>'; document.querySelector('main.wrap').appendChild(t); }""")
     wide = page.evaluate(_W, ["ai-select", "ai-tasks"])
     assert wide[0][0] == wide[1][0] == 950, wide
+    page.set_viewport_size({"width": 900, "height": 1000})
+    for i in ("ai-select", "ai-tasks"):
+        w, box = page.evaluate(_FIT, i)
+        assert w <= box + 1, (i, w, box)
     page.set_viewport_size({"width": 360, "height": 900})
     narrow = page.evaluate(_W, ["ai-select"])
     assert narrow[0][0] < 360 and page.evaluate("() => document.documentElement.scrollWidth - innerWidth") <= 0, narrow
