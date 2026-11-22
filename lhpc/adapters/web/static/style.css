@@ -738,6 +738,14 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .sysblock { border-bottom: 1px solid var(--line); padding: .3rem 0; margin: 0; }
 .sysblock p { margin: 0; }
 .sysblock form { margin: .25rem 0; }
+/* dash plan c12 S8: the System card's three boxes, the radio-card component box look (c9); phones: the Apps inset */
+#sysbox .sysgroup { border: 1px solid var(--line); border-radius: 6px; padding: .45rem .6rem; margin: .6rem 0;
+                    background: color-mix(in srgb, var(--line) 18%, transparent); }
+#sysbox .sysgroup .systab tr:last-child { border-bottom: 0; }
+#sysbox .sysgroup .sysblock { border-bottom: 0; padding: 0; }
+#sysbox .sysgroup .actrow { margin: 0; }
+#sysbox .sysgroup .sysautostart form { margin-bottom: 0; }
+@media (max-width: 480px) { #sysbox .sysgroup { padding: .3rem .35rem; } }
 /* Net renders as a FIXED two-line value (JS joins with \n): constant row height — a one-line
    string wrapped and unwrapped as the rate text length changed, bouncing the box height. */
 /* Net value: everything right-aligned; the rate lives in a FIXED-WIDTH block so the arrow
