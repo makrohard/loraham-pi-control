@@ -31,14 +31,25 @@
       + (badge.classList.contains("dbadge") ? " dbadge" : "");
   }
 
-  // Dash plan c5: the Monitor's RX / TX pill, from STATUS TX ("1" = TX, any other value RX; no STATUS: hidden).
-  function txpill(key, status) {
+  // Dash plan c5 + c6: the Monitor's RX / TX pill. TX while STATUS TX=1, or while this radio's TXOK+TXERR grew since
+  // its previous poll (a frame sent between two polls). The first valid sample is the baseline; a lower total is a
+  // reset (new baseline, no TX); missing or non-numeric STATS never count as 0: they drop the baseline, so the next
+  // valid sample is a new one. One baseline per radio. Neither STATUS TX nor a valid count: hidden.
+  var txtotal = {};
+  function txcount(stats) {
+    var ok = stats && stats.TXOK, err = stats && stats.TXERR;
+    return /^[0-9]+$/.test(ok || "") && /^[0-9]+$/.test(err || "") ? Number(ok) + Number(err) : null;
+  }
+  function txpill(key, status, stats) {
+    var n = txcount(stats), prev = txtotal[key];
+    var grew = n !== null && prev !== undefined && prev !== null && n > prev;
+    txtotal[key] = n;
     var pill = document.getElementById("rd-txpill-" + key);
     if (!pill) return;
     var tx = status ? status.TX : undefined;
-    pill.hidden = tx === undefined;
+    pill.hidden = tx === undefined && n === null;
     if (pill.hidden) return;
-    var on = tx === "1";
+    var on = tx === "1" || grew;
     if (pill.textContent !== (on ? "TX" : "RX")) pill.textContent = on ? "TX" : "RX";
     pill.className = "badge txpill " + (on ? "tx-on" : "badge-running");
   }
@@ -99,7 +110,7 @@
           if (d.status.RADIO) set("rd-radio-" + key, d.status.RADIO);
           if (d.status.CADRSSI) set("rd-cadrssi-" + key, d.status.CADRSSI);
         }
-        txpill(key, d.status);
+        txpill(key, d.status, d.stats);
         params(key, d);
         if (d.stats) {
           set("rd-rx-" + key, d.stats.RX || "?");
