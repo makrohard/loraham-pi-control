@@ -292,3 +292,19 @@ def test_the_frequency_pattern_accepts_ascii_digits_only():
     from lhpc.core import daemon_control as dc
     assert dc._FREQ_RE.fullmatch("433.775")
     assert not dc._FREQ_RE.fullmatch("٤٣٣")           # Arabic-Indic digits rejected
+
+
+def test_a_daemon_150_status_line_keeps_every_field():
+    # daemon 1.5.0 adds RADIOERR= and USBFAULT= after ID= (33 fields): the bounded parse keeps every field, the new
+    # two included; a long-running stick's line (wide counters, a %-escaped serial) stays inside its bounds
+    keys = ("RADIO TX CAD GETRSSI TXRESULT TXMODE TXQUEUE TXQ TXQDROP TXQREJECT TXQSTALE TXQRESULTDROP TXQDONE TXQLAST "
+            "TXQSEQ CADWAIT CADIDLE CADPOLL CADTXAFTERTIMEOUT CADMONITOR CADRSSI RXREADY HIGHPOWER CHIPFAMILY OCP "
+            "USBWAIT BOUND ID RADIOERR USBFAULT FREQ SF POWER").split()
+    n = "4294967295"
+    vals = ["READY", "0", "0", "0", "1", "MANAGED", "1", n, n, n, n, n, n, "RADIO_NOT_READY", n, "5000", "2000",
+            "500", "0", "1", "-130", "1", "1", "SX1262", "140", "-", "%41" * 8 + "@3-1.4.2.3.1.4", "abcdefghijklmnop",
+            "retry", n, "869.525", "12", "22"]
+    line = ("STATUS " + " ".join(f"{k}={v}" for k, v in zip(keys, vals, strict=True)) + "\n").encode()
+    st = dc.parse_conf_reply(line, "STATUS")
+    assert list(st) == keys and st["RADIOERR"] == "retry" and st["USBFAULT"] == n and st["POWER"] == "22"
+    assert dc.chip_family_from_status(st) == "sx1262" and dc.high_power_from_status(st) is True

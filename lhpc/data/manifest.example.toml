@@ -190,8 +190,8 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/loraham-daemon"
-    pin_commit = "c951d8202853c0aedc6765a565bc1df41345c940"
-    pin_tag = "v1.4.2"
+    pin_commit = "0d1802a00095cff0b3bcd8d58385c0c32913a36c"
+    pin_tag = "v1.5.0"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "loraham-daemon-hardening"
@@ -297,7 +297,7 @@ main = "loraham-daemon"
     [stack.component.source]
     path = "src/libch341-spi-userspace"
     # makrohard's fork of pine64's library (its main: the selection fixes and pinedio_init_at_port,
-    # one poll worker per stick, diagnostics that never block: daemon 1.4.2's lock); untagged, so the commit alone
+    # one poll worker per stick, diagnostics that never block: daemon 1.5.0's lock); untagged, so the commit alone
     # is the pin.
     pin_commit = "745bd0671de5ab489c4736a2fc42a3de719b521d"
     remote = "https://github.com/makrohard/libch341-spi-userspace"
@@ -345,8 +345,8 @@ main = "loraham-chat"
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    pin_commit = "c951d8202853c0aedc6765a565bc1df41345c940"
-    pin_tag = "v1.4.2"
+    pin_commit = "0d1802a00095cff0b3bcd8d58385c0c32913a36c"
+    pin_tag = "v1.5.0"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"

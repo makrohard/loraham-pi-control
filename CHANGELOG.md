@@ -18,8 +18,8 @@
   `lhpc rflog daemon@r1`).
 - Daemon parameters per radio (`lhpc config daemon@<rid> --daemon-param`) and per instance (`<stack>@<rid>.toml`,
   applied over the radio's row when it starts there).
-- LoRaHAM daemon v1.4.2 (c951d820): the PA over-current limit per radio (`lhpc hardware --ocp <rid> <auto|mA>`) and the
-  Meshstick library (a source-built daemon: see the update steps).
+- LoRaHAM daemon v1.5.0 (0d1802a0): the PA over-current limit per radio (`lhpc hardware --ocp <rid> <auto|mA>`), the
+  Meshstick library (a source-built daemon: see the update steps); a failing USB stick is re-opened, not fatal.
 - Reticulum: `rnode_framing` defaults to `yes` (was `no`), so LHPC boxes and RNode devices hear each other; a framed
   box and a bare box cannot.
 - MeshChat announces itself once at every start, so a box is discoverable on the air; a failed announce is logged and
