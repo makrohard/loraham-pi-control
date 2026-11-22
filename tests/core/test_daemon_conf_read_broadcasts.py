@@ -145,9 +145,25 @@ def test_only_broadcasts_then_eof_fails_closed(tmp_path, monkeypatch):
     assert st.reachable is False
 
 
-def test_broadcasts_up_to_the_read_cap_fail_closed(tmp_path, monkeypatch):
-    # 800 TX= lines (4000 bytes) then STATUS: the read stops at the 4096-byte cap inside the STATUS line; every byte
-    # read is returned, so the cap check rejects it instead of parsing a cut line.
+def test_broadcasts_and_a_reply_ending_exactly_at_the_read_cap_fail_closed(tmp_path, monkeypatch):
+    # 800 TX= lines (4000 bytes) + STATUS (96 bytes with its newline) = exactly the 4096-byte cap: every byte read is
+    # returned, so the cap check rejects the read, complete STATUS line or not.
+    assert len(b"TX=0\n" * 800 + STATUS) == daemon_control._MAX
     with _daemon(tmp_path, monkeypatch, {b"GET STATUS": [b"TX=0\n" * 800, STATUS]}) as system:
+        view = daemon_control.read_view(system, "r1")
+    assert (view.reachable, view.error) == (False, "no STATUS response")
+
+
+def test_a_reply_cut_by_the_read_cap_after_broadcasts_fails_closed(tmp_path, monkeypatch):
+    # Broadcasts fill the cap up to "FREQ=86" of a STATUS ending in FREQ=868.125: the read stops there, before the
+    # line's newline. The cut line on its own would parse (FREQ=86, a wrong value), so only the cap check, which sees
+    # every byte read, keeps it out.
+    status = b"STATUS RADIO=READY TX=0 TXRESULT=1 TXMODE=MANAGED RADIOERR=retry USBFAULT=0 FREQ=868.125\n"
+    cut = status.index(b"FREQ=86") + len(b"FREQ=86")
+    n, rem = divmod(daemon_control._MAX - cut, 5)
+    lead = b"TX=" + b"0" * (1 + rem) + b"\n" + b"TX=0\n" * (n - 1)     # 5 * n + rem bytes of broadcasts
+    assert (len(lead) + cut, cut < len(status) - 1) == (daemon_control._MAX, True)
+    assert daemon_control.parse_conf_reply(status[:cut], "STATUS").get("FREQ") == "86"
+    with _daemon(tmp_path, monkeypatch, {b"GET STATUS": [lead, status]}) as system:
         view = daemon_control.read_view(system, "r1")
     assert (view.reachable, view.error) == (False, "no STATUS response")
