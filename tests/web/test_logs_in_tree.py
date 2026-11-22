@@ -33,7 +33,7 @@ _INVENTORY = {
                 ("own", "meshcom-bridge", "rf-meshcom.log", "per radio")),
     "meshcore": (["meshcore-gps", "meshcore-node", "meshcore-webui", "meshcore-cli"],
                  ("own", "meshcore-node", "rf-meshcore.log", "per radio")),
-    "reticulum": (["rns", "lxmd", "sideband", "meshchat"], ("own", "rns", "rf-reticulum.log")),
+    "reticulum": (["rns", "lxmd", "sideband", "meshchat"], ("own", "rns", "rf-reticulum.log", "per radio")),   # B3b: RF log per radio (plan reti v21 §1)
 }
 _CTL = "LoRaHAM Pi Control"
 
@@ -330,7 +330,8 @@ def test_home_keeps_its_log_links(tmp_path, web):
 
 @pytest.mark.parametrize("sid, per, single, switch", [
     ("kiss", ["log-loraham-kiss-tnc", "rflog-kiss"], ["log-loraham-kiss-serial"], True),   # mixed
-    ("reticulum", [], None, False),                     # single-only (its RF log is one file, no radio): flat
+    ("reticulum", ["rflog-reticulum"], ["log-rns", "log-lxmd", "log-sideband", "log-meshchat"], True),   # B3b: RF log per radio (plan reti v21 §1)
+    ("voice", [], None, False),                         # single-only (no per-radio log): flat; B3b: RF log per radio (plan reti v21 §1)
     ("graywolf", ["log-graywolf", "rflog-graywolf"], None, True),                          # + the RF-log note (KISS's)
 ])
 def test_a_stacks_logs_are_grouped_per_radio_and_single(tmp_path, web, sid, per, single, switch):
@@ -496,6 +497,6 @@ def test_the_radio_switch_is_inside_per_radio_inline_and_on_the_groups_page(tmp_
 
 def test_a_single_only_stack_has_no_logs_switch(tmp_path, web):
     c, _svc = _client(web, tmp_path, radios=True)
-    doc = parse(_html(c, "/stacks/reticulum/body?radio=r1"))
-    assert doc.by_id("logs-reticulum--per-radio") is None
-    assert not doc.within(doc.by_id("logs-reticulum")).find("nav", class_="rswitch")
+    doc = parse(_html(c, "/stacks/voice/body?radio=r1"))   # B3b: RF log per radio (plan reti v21 §1)
+    assert doc.by_id("logs-voice--per-radio") is None   # B3b: RF log per radio (plan reti v21 §1)
+    assert not doc.within(doc.by_id("logs-voice")).find("nav", class_="rswitch")   # B3b: RF log per radio (plan reti v21 §1)

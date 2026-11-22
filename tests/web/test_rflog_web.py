@@ -280,7 +280,7 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web, monkeypatch, daemo
                                       ("/rflog/all", {"value": "on"}), ("/logs/rns/clear", {}),
                                       ("/rflog/clear-all", {})])
 def test_the_radio_follows_from_the_dashboard_through_the_page_and_its_bottom_forms(tmp_path, web, csrf,
-                                                                                    url, data, daemon_record):
+                                                                                    url, data, daemon_record, monkeypatch):
     """W4: Reticulum declares both bands and defaults to 868. Running on 433 (r1), its RF-log link on r1's card,
     the page it opens, and every bottom action's redirect stay on r1 — the radio is carried, never re-guessed."""
     def factory():
@@ -292,17 +292,19 @@ def test_the_radio_follows_from_the_dashboard_through_the_page_and_its_bottom_fo
         svc.launch_band = lambda sid, d="": "433" if sid == "reticulum" else d   # K6: its running band (13.12.5: no marker)
         return svc
     daemon_record("r1", "433")                   # the RF link sits in r1's recorded daemon row
+    real = instances.recorded_bands               # B3b: r1's launch record (433): its link is its file, like meshtastic's
+    monkeypatch.setattr(instances, "recorded_bands", lambda svc, sid: {"r1": "433"} if sid == "reticulum" else real(svc, sid))
     c = web(service_factory=factory)
     col433 = parse(c.get("/").get_data(as_text=True)).find("div", **{"data-radio-band": "433"})[0]
-    link = _links(parse(c.get("/").get_data(as_text=True)).within(col433), "rns", "rf-reticulum.log", "r1")
+    link = _links(parse(c.get("/").get_data(as_text=True)).within(col433), "rns", "r1/rf-reticulum.log", "r1")   # B3b: RF log per radio (plan reti v21 §1)
     assert len(link) == 1
     doc = parse(c.get(link[0]["href"]).get_data(as_text=True))
     assert [a.text for a in _row(doc, "RF log radios").find("a", **{"aria-current": "page"})] == ["r1 · 433"]
     assert doc.within(doc.by_id("rflog-switch")).field_default("radio") == "r1"
-    r = c.post(url, data={"_csrf": csrf(c), "job": "rf-reticulum.log", "radio": "r1", **data})
+    r = c.post(url, data={"_csrf": csrf(c), "job": "r1/rf-reticulum.log", "radio": "r1", **data})   # B3b: RF log per radio (plan reti v21 §1)
     loc = urlsplit(r.headers["Location"])
     assert r.status_code == 302 and loc.path == "/logs/rns"
-    assert parse_qs(loc.query) == {"job": ["rf-reticulum.log"], "radio": ["r1"]}
+    assert parse_qs(loc.query) == {"job": ["r1/rf-reticulum.log"], "radio": ["r1"]}   # B3b: RF log per radio (plan reti v21 §1)
 
 
 # ---- the viewer's records and the Decrypt toggle -----------------------------------------------
@@ -402,8 +404,8 @@ def test_a_run_log_page_keeps_the_plain_viewer(web):
 
 def test_a_running_stacks_rf_log_link_and_page_name_the_radio_it_runs_on(tmp_path, web, monkeypatch):
     """W4 (moved from the dashboard's card, W250): Reticulum declares both bands; its instance runs on r2 (its launch
-    record), so its Apps row's RF-log link carries r2 (its one file: one node, DEC-W342), and its page without a
-    radio opens on r2, never on the first radio."""
+    record), so its Apps row's RF-log link carries r2 and opens r2's own file (B3b: each interface its own radio's), and
+    that file's page without a radio opens on r2, never on the first radio."""
     from lhpc.core import instances
     monkeypatch.setattr(instances, "recorded", lambda svc, sid: {"r2"} if sid == "reticulum" else set())
 
@@ -414,6 +416,6 @@ def test_a_running_stacks_rf_log_link_and_page_name_the_radio_it_runs_on(tmp_pat
             paths=Paths(runtime_root=tmp_path))
     c = web(service_factory=factory)
     doc = parse(c.get("/stacks/reticulum/body").get_data(as_text=True))
-    assert len(_links(doc, "rns", "rf-reticulum.log", "r2")) == 1
-    page = parse(c.get("/logs/rns?job=rf-reticulum.log").get_data(as_text=True))
+    assert len(_links(doc, "rns", "r2/rf-reticulum.log", "r2")) == 1   # B3b: RF log per radio (plan reti v21 §1)
+    page = parse(c.get("/logs/rns?job=r2/rf-reticulum.log").get_data(as_text=True))   # B3b: RF log per radio (plan reti v21 §1)
     assert [a.text for a in _row(page, "RF log radios").find("a", **{"aria-current": "page"})] == ["r2 · 868"]

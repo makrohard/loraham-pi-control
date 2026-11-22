@@ -323,18 +323,20 @@ def test_meshtastic_clear_only_empties(tmp_path):
 # ---- the CLI's resolver --------------------------------------------------------------------
 
 def test_k8_the_cli_resolver_names_a_radio_never_a_band(tmp_path):
-    # K8 (W308/W310): the daemon's and an instance's RF log is the radio's `<rid>/<file>`; a one-node stack has one file
+    # K8 (W308/W310): the daemon's and an instance's RF log is the radio's `<rid>/<file>`; so is each Reticulum interface's
     svc = _svc(tmp_path)
     _logs(tmp_path, "r1/rf-kiss.log", "k\n")
+    _logs(tmp_path, "r1/rf-reticulum.log", "t\n")                       # B3b: RF log per radio (plan reti v21 §1)
     with pytest.raises(ValueError, match="logs per radio: name one, lhpc rflog daemon@<rid>"):
         svc.rflog_tail("daemon")
     with pytest.raises(ValueError, match="logs per radio: name one, lhpc rflog graywolf@<rid>"):
         svc.rflog_tail("graywolf")
-    with pytest.raises(ValueError, match="'reticulum@r1' has no RF log"):
-        svc.rflog_tail("reticulum", "r1")
+    with pytest.raises(ValueError, match="logs per radio: name one, lhpc rflog reticulum@<rid>"):   # B3b: RF log per radio (plan reti v21 §1)
+        svc.rflog_tail("reticulum")
     with pytest.raises(ValueError):
         svc.rflog_tail("chat")
     assert svc.rflog_tail("graywolf", "r1") == (str(tmp_path / "logs" / "r1" / "rf-kiss.log"), ["k"])
+    assert svc.rflog_tail("reticulum", "r1") == (str(tmp_path / "logs" / "r1" / "rf-reticulum.log"), ["t"])   # B3b: RF log per radio (plan reti v21 §1)
     assert svc.rflog_tail("daemon", "r2") == ("", [])                     # no file yet
     _logs(tmp_path, "r2/rf-daemon.log", "d\n")
     assert svc.rflog_tail("daemon", "r2")[0].endswith("logs/r2/rf-daemon.log")

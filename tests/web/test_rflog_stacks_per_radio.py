@@ -3,7 +3,8 @@ every instance writes as its own `logs/<rid>/rf-<stack>.log` (KISS, MeshCom, Mes
 {instance_dir}) opens that radio's file from every link, as the daemon's does: the stack's tree entry (with the page's
 radio when the stack can run on it, else its first radio; r1's without any radio), Home's band links (one per running
 instance, from its launch record) and the log page's radio pills, also on the band-less file's page. The band-less
-(0.13.x) file stays viewable on its own URL, never a default (OPEN-A waits for his word); Reticulum keeps its one file."""
+(0.13.x) file stays viewable on its own URL, never a default (OPEN-A waits for his word); Reticulum's too (B3b: each
+interface of its one node writes its own radio's file)."""
 
 from __future__ import annotations
 
@@ -70,10 +71,11 @@ def test_without_any_radio_the_tree_rf_log_opens_r1s_file(tmp_path, web, sid, wr
     assert _tree_rf_log(c, sid)[:2] == (f"/logs/{writer}", f"r1/{file}")
 
 
-def test_reticulum_keeps_its_one_file(tmp_path, web):
-    # OPEN-B (pick: as is): one node, one file
+def test_reticulum_opens_each_radios_own_file(tmp_path, web):
+    # OPEN-B (pick: as is): one node; B3b: each of its interfaces writes its own radio's file, like meshcore's
     c, _svc = _client(web, tmp_path)
-    assert _tree_rf_log(c, "reticulum")[1] == "rf-reticulum.log"
+    assert _tree_rf_log(c, "reticulum")[1] == "r1/rf-reticulum.log"   # B3b: RF log per radio (plan reti v21 §1)
+    assert _tree_rf_log(c, "reticulum", "r2") == ("/logs/rns", "r2/rf-reticulum.log", "r2")   # B3b: RF log per radio (plan reti v21 §1)
 
 
 def test_home_links_each_running_instance_of_the_band_to_its_own_file(tmp_path, web, monkeypatch, daemon_record):

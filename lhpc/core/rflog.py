@@ -31,7 +31,7 @@ RADIO_FILE = "rf-daemon.log"
 _RID = re.compile(r"r[1-9][0-9]?")
 # a radio's own RF log one level under logs/: the daemon's per radio, and a listed instance's of a stack that may run
 # instances (7f: kiss and meshcore write logs/{instance_dir}rf-<x>.log; chat writes none)
-RADIO_JOB = re.compile(r"(r[1-9][0-9]?)/(rf-daemon|rf-kiss|rf-meshcore|rf-meshcom|rf-meshtastic)\.log")   # K7: every instance
+RADIO_JOB = re.compile(r"(r[1-9][0-9]?)/(rf-daemon|rf-kiss|rf-meshcore|rf-meshcom|rf-meshtastic|rf-reticulum)\.log")   # K7: every instance
 GROUP = "RF-Logs"
 ON, OFF = "on", "off"
 MAX_BYTES = 5 * 1024 * 1024         # the writers' cap; LHPC applies it to meshtastic itself
@@ -66,7 +66,7 @@ class Entry:
     @property
     def instanced(self) -> bool:
         """#75: a stack's file every listed instance writes as its own `<rid>/<file>` (its writer's {instance_dir});
-        RADIO_JOB names it. Not the daemon's (per_radio) and not a one-node stack's (Reticulum: one file)."""
+        RADIO_JOB names it (Reticulum: each interface of the node its own radio's). Not the daemon's (per_radio)."""
         return not self.per_radio and bool(self.jobs) and RADIO_JOB.fullmatch(f"r1/{self.job()}") is not None
 
     def radio_job(self, rid) -> str | None:
@@ -160,7 +160,7 @@ def radio_dir_ok(paths, job: str) -> bool:
 
 def resolve_job(surface: str, rid: str = "") -> tuple[Entry, str]:
     """(entry, job) for a CLI surface and radio (K8, W308/W310: `<stack>@<rid>`, never a band): the daemon's file and an
-    instance's are the radio's `<rid>/<file>`; a one-node stack (Reticulum) has one file. Raises ValueError with the
+    instance's are the radio's `<rid>/<file>` (Reticulum's per interface of its one node). Raises ValueError with the
     message the CLI prints; used by `rflog_tail` and by `lhpc rflog --clear`, which must never read (and so never roll)
     before clearing."""
     e = entry(surface)
@@ -401,7 +401,7 @@ def switcher(svc, job: str, rid: str = "") -> dict:
         if e.per_radio:
             return e.radio_job(r)
         own = f"{r}/{e.job()}"         # #75: that radio's own file, also from the band-less (0.13.x) file's page
-        return own if by_job(own) else e.job()                               # a one-node stack: its one file
+        return own if by_job(own) else e.job()                               # a stack of one file: that file
     radios = [{"rid": r, "band": b, "current": r == shown, "target": e.writer, "job": pill_job(r, b)} for r, _n, b in rows]
     return {"radio": shown, "radios": radios, "stacks": stacks}
 

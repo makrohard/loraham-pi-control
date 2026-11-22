@@ -147,7 +147,7 @@ class RflogOpsMixin:
 
     def _rflogs_for_band(self, band: str, running: list) -> list[dict]:
         """The dashboard's RF-log links for a band: the daemon's file for it, then every running stack's: one link per
-        running instance launched on that band (its launch record, #75: `<rid>/<file>`), a one-node stack's one file."""
+        running instance launched on that band (its launch record, #75: `<rid>/<file>`), a stack of one file its file."""
         up = {s["id"] for s in running}
         out = []
         for e in self._rflog_entries():
@@ -333,7 +333,8 @@ class RflogOpsMixin:
             py = next((p for p in pys if p.is_file()), pys[-1])
             # `--config` is RNS's configdir (state/reticulum); the decoder reads its `config` file.
             extra = ["--config", str(self._paths.under("state", "reticulum")),
-                     "--meshchat", str(self._paths.under("state", "meshchat"))]
+                     "--meshchat", str(self._paths.under("state", "meshchat")),
+                     *(["--interface", f"LoRa {rid}"] if rid else [])]        # the file's own radio (B3b)
             # RNode framing is undone with the LoRa driver's own module. The driver is built
             # into the RNS venv, not LXMF's, so the decoder gets its source checkout (the
             # pinned commit) to import from — when it is installed.

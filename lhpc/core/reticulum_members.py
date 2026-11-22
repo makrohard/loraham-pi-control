@@ -322,9 +322,9 @@ def member_entries(svc, band: str) -> list[dict]:
 def members_signature(svc) -> str:
     """The dashboard signature's part for the members (a25 B6 C2): each radio's saved intent and member record, from the
     config and the records alone — never the node's RPC."""
-    rids = [r.id for r in instances.radios.load(svc._paths).radios]
-    return ",".join(f"{rid}>{instances.member_of(svc, STACK_ID, rid)}{'+' if member_record(svc, rid) else ''}"
-                    for rid in rids if instances.member_of(svc, STACK_ID, rid) or member_record(svc, rid))
+    facts = [(r.id, instances.member_of(svc, STACK_ID, r.id), member_record(svc, r.id) is not None)
+             for r in instances.radios.load(svc._paths).radios]                  # one read of each (a25 B6 nit)
+    return ",".join(f"{rid}>{intent}{'+' if rec else ''}" for rid, intent, rec in facts if intent or rec)
 
 
 def owner_members(svc, rid: str) -> list[str]:

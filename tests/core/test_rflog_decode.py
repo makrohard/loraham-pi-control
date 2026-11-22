@@ -372,3 +372,16 @@ def test_a_store_path_that_escapes_the_root_is_a_typed_error_not_a_500(tmp_path)
     res = svc.rflog_decode("meshtastic", "rf-meshtastic.log", _records(1))
     assert res["error"] == err and res["records"][0]["status"] == ""
 
+
+
+def test_a_reticulum_radios_file_decodes_with_its_own_interface(tmp_path):
+    # B3b: one RF log per radio; the decoder reads the IFAC of the file's own `[[LoRa <rid>]]`
+    # red-before (f429a19c): no --interface (the first section with an IFAC, whichever radio's)
+    svc = _svc(tmp_path)
+    _identities(tmp_path)
+    py = tmp_path / "src" / "reticulum" / ".venv" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.write_text("")
+    argv, err = svc._rflog_decoder_argv(rflog.entry("reticulum"), "r2")
+    assert err == "" and ("--interface", "LoRa r2") in zip(argv, argv[1:])
+    assert "--interface" not in svc._rflog_decoder_argv(rflog.entry("reticulum"))[0]

@@ -40,11 +40,16 @@ def test_by_job_no_longer_knows_the_013x_band_files(band):
     "r0/rf-daemon.log", "r100/rf-daemon.log", "R1/rf-daemon.log", "r01/rf-daemon.log", "r1//rf-daemon.log",
     "r1/../x", "../rf-daemon.log", "r1/../rf-daemon.log", "r1/rf-daemon.log\n", " r1/rf-daemon.log",
     "logs/r1/rf-daemon.log", "r1/r2/rf-daemon.log", "r1/rf-daemon.log.bak", "r1\\rf-daemon.log",
-    "r1/rf-reticulum.log",                                               # one node (W391): no instance files
+    "r0/rf-reticulum.log", "r1/rf-reticulum.log.1",                      # B3b: RF log per radio (plan reti v21 §1)
     "/r1/rf-daemon.log", "r1/", "rf-daemon.log", "rf-daemon-915.log", "",
 ])
 def test_by_job_refuses_every_other_name(job):
     assert rflog.by_job(job) is None
+
+
+def test_by_job_accepts_a_reticulum_interfaces_own_log_and_names_the_rid():
+    got = rflog.by_job("r1/rf-reticulum.log")                            # B3b: RF log per radio (plan reti v21 §1)
+    assert got is not None and got[0].surface == "reticulum" and got[1] == "r1"
 
 
 @pytest.mark.parametrize("job", [None, 1, b"r1/rf-daemon.log", ["r1/rf-daemon.log"], True])

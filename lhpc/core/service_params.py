@@ -2010,7 +2010,11 @@ class ParamsConfigMixin:
             values, secret_error = _values(c, fc, inst, stored, rendered_mode)
             members = []                    # B3: the node's other interfaces, each from its own store and band
             if not secret_error and c.id == _reticulum_interfaces.NODE_ID and inst is not None and inst.rid:
+                secret_error = _radio_start.ensure_rf_dir(self, inst.rid)   # each interface writes logs/<rid>/ (B3b)
                 for m in _instances.node_members(self, self._owner_stack_id(target), inst.rid):
+                    if m_why := _radio_start.ensure_rf_dir(self, m.rid):
+                        written.append(ConfigWrite(c.id, m.rid, "member-skipped", m_why))
+                        continue
                     m_values, m_why = _values(c, fc, m, self.file_config_values(target, m.band, m), rendered_mode,
                                               owner=False)
                     if m_why:                       # B5 (a25 B3 N1): that member is left out, never the owner's failure

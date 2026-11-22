@@ -1162,7 +1162,7 @@ def test_install_source_fallback_is_gated_and_confirmed(monkeypatch, capsys):
 # ---- rflog: the registry, not the generic log command ------------------------------------------
 
 @pytest.mark.parametrize("argv", [["rflog", "daemon"],                     # per radio: a radio required
-                                  ["rflog", "reticulum@r1"],               # one node: no instance file
+                                  ["rflog", "reticulum"],                  # B3b: RF log per radio (plan reti v21 §1)
                                   ["rflog", "chat"]])                      # no RF log
 def test_rflog_usage_errors_exit_two(tmp_path, monkeypatch, capsys, argv):
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path / "rt"))
@@ -1296,11 +1296,11 @@ def test_rflog_decrypt_reports_a_decoder_error_and_exits_one(tmp_path, monkeypat
     from lhpc.core.services import ControllerService
     rt = tmp_path / "rt"
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(rt))
-    (rt / "logs").mkdir(parents=True)
-    (rt / "logs" / "rf-reticulum.log").write_text("x\n")
+    (rt / "logs" / "r1").mkdir(parents=True)
+    (rt / "logs" / "r1" / "rf-reticulum.log").write_text("x\n")    # B3b: RF log per radio (plan reti v21 §1)
     monkeypatch.setattr(ControllerService, "rflog_decode",
                         lambda self, t, j, recs: _decoded([], "reticulum is not built — nothing to decode with"))
-    assert main(["rflog", "reticulum", "--decrypt"]) == 1
+    assert main(["rflog", "reticulum@r1", "--decrypt"]) == 1          # B3b: RF log per radio (plan reti v21 §1)
     out = capsys.readouterr().out
     assert out.startswith("ERR   reticulum is not built")    # rule-10: the decoder error right after the status token
 

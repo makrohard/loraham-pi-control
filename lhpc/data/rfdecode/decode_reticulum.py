@@ -61,7 +61,7 @@ class _IfacContext:
 _LORA_TYPES = ("LoRaSPIInterface", "LoRaDaemonInterface")      # loraham-rns-interface's two backends (one air format)
 
 
-def _lora_section(configdir: str):
+def _lora_section(configdir: str, interface: str = ""):
     """The LoRa interface section of the generated RNS config (0400, ours to read): one `[[LoRa <rid>]]` per radio of the
     node, either backend; the first with an IFAC (one RF log for the node), else the first."""
     path = os.path.join(configdir, "config")
@@ -74,6 +74,9 @@ def _lora_section(configdir: str):
     except Exception as exc:
         _proto.fail(f"reticulum config unreadable: {path}: {exc}")
     ifaces = cfg.get("interfaces", {}) or {}
+    if interface:                                 # the RF log's own radio (one file per interface)
+        sec = ifaces.get(interface)
+        return sec if isinstance(sec, dict) and str(sec.get("type", "")).endswith(_LORA_TYPES) else None
     lora = [sec for sec in ifaces.values() if isinstance(sec, dict) and str(sec.get("type", "")).endswith(_LORA_TYPES)]
     return next((sec for sec in lora if sec.get("networkname") or sec.get("passphrase")), lora[0] if lora else None)
 
@@ -186,8 +189,8 @@ def _lxmf_summary(dest_hash: bytes, plain: bytes) -> str:
     return _printable(plain)                  # opened, not LXMF: shown whole (text or hex)
 
 
-def make_decoder(configdir: str, meshchat: str, driver: str = ""):
-    lora = _lora_section(configdir)
+def make_decoder(configdir: str, meshchat: str, driver: str = "", interface: str = ""):
+    lora = _lora_section(configdir, interface)
     ifac = _lora_ifac(lora)
     me, ratchets = _meshchat_identity(meshchat)
     framing = None
@@ -309,8 +312,9 @@ def main() -> None:
     ap.add_argument("--config", required=True)
     ap.add_argument("--meshchat", required=True)
     ap.add_argument("--driver", default="")        # the LoRa driver's source checkout (RNode framing)
+    ap.add_argument("--interface", default="")     # `LoRa <rid>`: the section of the RF log's radio
     a = ap.parse_args()
-    _proto.run(make_decoder(a.config, a.meshchat, a.driver))
+    _proto.run(make_decoder(a.config, a.meshchat, a.driver, a.interface))
 
 
 if __name__ == "__main__":

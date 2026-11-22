@@ -117,3 +117,13 @@ def test_one_interface_block_is_swapped_removed_or_added_and_nothing_else_moves(
     assert back == text
     swapped = reticulum_node.replace_section(text, "r4", r4.replace("enabled = no", "enabled = yes"))
     assert [a for a, b in zip(text.splitlines(), swapped.splitlines(), strict=True) if a != b] == ["    enabled = no"]
+
+
+def test_each_interface_writes_its_own_radios_rf_log(tmp_path):
+    svc = _svc(tmp_path)
+    _save(tmp_path, "r1", member_of="r2")
+    text = _render(tmp_path, svc)
+    # red-before (f429a19c): every section named the node's one file logs/rf-reticulum.log
+    assert _keys(text, "r2")["rf_log_path"] == f"{tmp_path}/logs/r2/rf-reticulum.log"
+    assert _keys(text, "r1")["rf_log_path"] == f"{tmp_path}/logs/r1/rf-reticulum.log"
+    assert (tmp_path / "logs" / "r2").is_dir() and (tmp_path / "logs" / "r1").is_dir()   # the interface opens, never makes it

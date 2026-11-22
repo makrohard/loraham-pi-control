@@ -149,6 +149,24 @@ def test_the_ifac_of_a_daemon_interface_among_the_nodes_sections_unmasks(tmp_pat
     assert r["status"] == "ok" and "through the daemon" in r["decoded"]
 
 
+def test_a_radios_rf_log_decodes_with_its_own_interfaces_ifac(tmp_path):
+    # B3b: one RF log per radio; the file's own `[[LoRa <rid>]]` gives its IFAC, never another radio's
+    # red-before (f429a19c): no --interface: the first section with an IFAC (r1's) was taken for r2's file
+    me = RNS.Identity()
+    dest = RNS.Destination.hash_from_name_and_identity("lxmf.delivery", me)
+    masked = RNS.Transport.handle_outgoing_ifac(_RnsIfac("net-r2", "passphrase-of-r2", 8),
+                                                _data_packet(dest, me.encrypt(b"on r2 only")))
+    d = tmp_path / "reticulum"
+    d.mkdir()
+    (d / "config").write_text("\n".join([
+        "[reticulum]", "[interfaces]",
+        "  [[LoRa r1]]", "    type = LoRaDaemonInterface", "    networkname = net-r1", "    passphrase = passphrase-of-r1",
+        "  [[LoRa r2]]", "    type = LoRaDaemonInterface", "    networkname = net-r2",
+        "    passphrase = passphrase-of-r2"]) + "\n")
+    r = dec.make_decoder(str(d), _meshchat(tmp_path, me), interface="LoRa r2")("k", _line(masked.hex()))
+    assert r["status"] == "ok" and "on r2 only" in r["decoded"]
+
+
 def test_odd_input_is_malformed_and_a_bad_config_is_a_decoder_failure(tmp_path):
     decode = dec.make_decoder(_config(tmp_path), _meshchat(tmp_path))
     assert decode("k", "no hex here")["status"] == "malformed"
