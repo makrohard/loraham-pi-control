@@ -675,6 +675,26 @@ def csrf():
 
 
 @pytest.fixture
+def daemon_record(tmp_path):
+    """`daemon_record(rid, band, paths=None)`: a verified launch record of daemon@<rid> on `band` (a live process lhpc
+    owns, killed at teardown). Home lists a daemon under "Running on <rid>", with its row's RF-log line (dash plan c3),
+    only for such a record."""
+    import subprocess
+    import sys
+    procs = []
+
+    def _record(rid, band, paths=None):
+        procs.append(subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True))
+        svc = ControllerService(system=FakeSystem().system, paths=paths or Paths(runtime_root=tmp_path))
+        stk = svc.stack("daemon")
+        assert svc._lifecycle().record_launch(stk, stk.main_component, procs[-1].pid, band=band, extra={"rid": rid})
+    yield _record
+    for p in procs:
+        p.kill()
+        p.wait(timeout=5)
+
+
+@pytest.fixture
 def binary_receipt():
     """`binary_receipt(svc, stack="daemon", *, commits=None, extra_files=(), provenance=None,
     sha="ab"*32, probe="ok") -> BinaryReceipt`: a completed binary install of `stack` on `svc`'s

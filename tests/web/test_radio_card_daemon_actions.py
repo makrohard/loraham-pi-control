@@ -237,19 +237,25 @@ def test_add_hardware_serves_a_band_a_hat_was_added_on(tmp_path, web, csrf):
     assert svc().radio_bands() == ("433", "868")
 
 
-def test_a_cards_daemon_log_and_occupied_badge_are_its_radios(tmp_path, monkeypatch, web):
-    # G1-C28 N3: the card's Daemon log opens its radio's own start log; REMOVALS row 11: an occupied badge names the
-    # radio's state, as the band card did.
+def test_a_cards_daemon_log_and_occupied_badge_are_its_radios(tmp_path, monkeypatch, web, daemon_record):
+    # G1-C28 N3: the card's daemon log opens its radio's own start log (dash plan c3: the daemon row's "logs", the
+    # card's "Daemon log" is gone, L12); REMOVALS row 11: an occupied badge names the radio's state, as the band card did.
     _box(tmp_path)
     monkeypatch.setattr(ControllerService, "_daemon_installed", lambda self, dstat: True)
     fs = FakeSystem(unix_replies={"/tmp/loraconf-r2.sock": _READY.replace(b"RADIO=READY", b"RADIO=FAILED")})
+    daemon_record("r2", "868")
+    (tmp_path / "logs").mkdir(exist_ok=True)
+    for name in ("start-loraham-daemon-868-r2.log", "start-loraham-daemon-433-r1.log"):   # r1's is newer: never picked
+        (tmp_path / "logs" / name).write_text("x\n")
     c = web(system=fs.system)
     doc = parse(c.get("/").get_data(as_text=True))
     card = doc.find("div", class_="radio-col", **{"data-radio-rid": "r2"})[0]
     assert doc.within(card).by_id("rd-badge-r2").text.strip() == "daemon (FAILED)"
-    href = next(a["href"] for a in doc.within(card).find("a") if a.text.strip() == "Daemon log")
-    assert href == "/logs/loraham-daemon?job=start-loraham-daemon-868-r2.log"
-    assert c.get(href).status_code == 200
+    assert not [a for a in doc.within(card).find("a") if a.text.strip() == "Daemon log"]
+    href = [a["href"] for a in doc.within(card).find("a", **{"aria-label": "loraham-daemon logs"})]
+    assert href == ["/logs/loraham-daemon?radio=r2"]
+    assert c.get(href[0]).status_code == 200
+    assert c.get("/api/logs/loraham-daemon?radio=r2").get_json()["path"].endswith("/start-loraham-daemon-868-r2.log")
 
 
 def test_the_daemon_pill_text_is_one_mapping_for_the_page_and_its_poll(tmp_path, monkeypatch, web):

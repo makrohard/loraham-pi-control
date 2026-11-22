@@ -232,8 +232,8 @@ def test_clear_all_empties_every_registered_log_and_nothing_else(tmp_path, web, 
 
 # ---- the dashboard's second line -----------------------------------------------------------------
 
-def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web, monkeypatch):
-    """Under each radio card's daemon control: the daemon's file for that band, then the file of
+def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web, monkeypatch, daemon_record):
+    """In each radio card's daemon row (dash plan c3): the daemon's file for that band, then the file of
     every running stack the registry knows — on its own band only. No file exists yet: the links
     still lead to a page (200), and its viewer data reports no file (the page itself carries no
     structural empty-state marker to assert)."""
@@ -255,6 +255,8 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web, monkeypatch):
     real = instances.recorded_bands
     monkeypatch.setattr(instances, "recorded_bands",   # #75: meshtastic@r2's launch record (868): its link is its file
                         lambda svc, sid: {"r2": "868"} if sid == "meshtastic" else real(svc, sid))
+    daemon_record("r1", "433")                   # dash plan c3: a card's RF links sit in its recorded daemon's row
+    daemon_record("r2", "868")
     c = web(service_factory=factory)
     doc = parse(c.get("/").get_data(as_text=True))
     col433 = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
@@ -278,7 +280,7 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web, monkeypatch):
                                       ("/rflog/all", {"value": "on"}), ("/logs/rns/clear", {}),
                                       ("/rflog/clear-all", {})])
 def test_the_radio_follows_from_the_dashboard_through_the_page_and_its_bottom_forms(tmp_path, web, csrf,
-                                                                                    url, data):
+                                                                                    url, data, daemon_record):
     """W4: Reticulum declares both bands and defaults to 868. Running on 433 (r1), its RF-log link on r1's card,
     the page it opens, and every bottom action's redirect stay on r1 — the radio is carried, never re-guessed."""
     def factory():
@@ -289,6 +291,7 @@ def test_the_radio_follows_from_the_dashboard_through_the_page_and_its_bottom_fo
         # The band a running instance gives (K6: no band marker; a real start needs a radio)
         svc.launch_band = lambda sid, d="": "433" if sid == "reticulum" else d   # K6: its running band (13.12.5: no marker)
         return svc
+    daemon_record("r1", "433")                   # dash plan c3: the RF link sits in r1's recorded daemon row
     c = web(service_factory=factory)
     col433 = parse(c.get("/").get_data(as_text=True)).find("div", **{"data-radio-band": "433"})[0]
     link = _links(parse(c.get("/").get_data(as_text=True)).within(col433), "rns", "rf-reticulum.log", "r1")

@@ -76,7 +76,7 @@ def test_reticulum_keeps_its_one_file(tmp_path, web):
     assert _tree_rf_log(c, "reticulum")[1] == "rf-reticulum.log"
 
 
-def test_home_links_each_running_instance_of_the_band_to_its_own_file(tmp_path, web, monkeypatch):
+def test_home_links_each_running_instance_of_the_band_to_its_own_file(tmp_path, web, monkeypatch, daemon_record):
     # C3: two MeshCore instances on 868 (r2, r4: two listed radios, a launch record each) = two links, each on its own
     # radio's card (radio_start keeps a card's own files); none on the 433 card; never the band-less file
     import radios_fixture
@@ -87,6 +87,8 @@ def test_home_links_each_running_instance_of_the_band_to_its_own_file(tmp_path, 
     radios_fixture.write(tmp_path, (radios.Radio("r1", "a", "uputronics", "433", ce="ce0"),
                                     radios.Radio("r2", "b", "uputronics", "868", ce="ce1"),
                                     radios.Radio("r4", "c", "meshstick-1262", "868", usb_serial="26073012")))
+    for rid in ("r2", "r4"):                     # dash plan c3: a card's RF links sit in its recorded daemon's row
+        daemon_record(rid, "868")
     doc = parse(c.get("/").get_data(as_text=True))
     def jobs(band):
         return [parse_qs(urlsplit(a["href"]).query)["job"][0] for col in doc.find("div", **{"data-radio-band": band})

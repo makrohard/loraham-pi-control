@@ -50,14 +50,15 @@ def _no_band_file(html, where):
     assert not re.search(r"rf-daemon-(433|868)\.log", html), where
 
 
-def test_home_and_the_hardware_page_link_only_the_radios_rf_logs(tmp_path, web, monkeypatch):
+def test_home_and_the_hardware_page_link_only_the_radios_rf_logs(tmp_path, web, monkeypatch, daemon_record):
     c, svc = _client(web, tmp_path)
     monkeypatch.setattr(svc, "_daemon_installed", lambda _st: True)      # F8: the Hardware page links an installed daemon's
+    daemon_record("r1", "433")                                           # dash plan c3: the RF links sit in its daemon row
     home = _html(c, "/")
     _no_band_file(home, "/")
     doc = parse(home)
     col = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
-    pills = [(a.text.strip(), a["href"]) for a in col.find("a", class_="pill") if "loraham-daemon" in a["href"]]
+    pills = [(a.text.strip(), a["href"]) for a in col.find("a", class_="logslink") if "rf-daemon" in a["href"]]
     assert pills == [("daemon r1 (433)", "/logs/loraham-daemon?job=r1/rf-daemon.log&radio=r1")], pills
     hw = _html(c, "/hardware/radio/r1")
     _no_band_file(hw, "/hardware/radio/r1")

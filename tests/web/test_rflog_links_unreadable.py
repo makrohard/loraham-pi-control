@@ -8,26 +8,28 @@ DAEMONS = {100: ["loraham_daemon", "--radio", "433", "--id", "r1"],     # the li
            101: ["loraham_daemon", "--radio", "868", "--id", "r2"]}
 
 
-def _dashboard(web, tmp_path):
+def _dashboard(web, tmp_path, daemon_record):
+    daemon_record("r1", "433")                          # dash plan c3: the links sit in each recorded daemon's row
+    daemon_record("r2", "868")
     return web(cmdlines=DAEMONS).get("/").get_data(as_text=True)
 
 
-def test_a_logs_path_that_cannot_be_listed_is_named_not_shown_as_no_files(web, tmp_path):
+def test_a_logs_path_that_cannot_be_listed_is_named_not_shown_as_no_files(web, tmp_path, daemon_record):
     radios_fixture.write(tmp_path)                                # r1 on 433, r2 on 868
     (tmp_path / "logs").write_text("not a directory")
-    page = _dashboard(web, tmp_path)
+    page = _dashboard(web, tmp_path, daemon_record)
     assert page.count(ERROR) == 2, page.count(ERROR)              # one per band's row (433 and 868)
 
 
-def test_an_absent_logs_directory_has_no_files_and_no_warning(web, tmp_path):
+def test_an_absent_logs_directory_has_no_files_and_no_warning(web, tmp_path, daemon_record):
     radios_fixture.write(tmp_path)
     assert not (tmp_path / "logs").exists()
-    assert "cannot be listed" not in _dashboard(web, tmp_path)                    # no warning of any error kind
+    assert "cannot be listed" not in _dashboard(web, tmp_path, daemon_record)                    # no warning of any error kind
 
 
-def test_a_readable_logs_directory_links_its_radios_file(web, tmp_path):
+def test_a_readable_logs_directory_links_its_radios_file(web, tmp_path, daemon_record):
     radios_fixture.write(tmp_path)
     (tmp_path / "logs" / "r1").mkdir(parents=True)
     (tmp_path / "logs" / "r1" / "rf-daemon.log").write_text("x\n")
-    page = _dashboard(web, tmp_path)
+    page = _dashboard(web, tmp_path, daemon_record)
     assert "cannot be listed" not in page and "job=r1/rf-daemon.log" in page.replace("%2F", "/")

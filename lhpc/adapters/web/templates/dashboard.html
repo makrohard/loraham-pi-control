@@ -7,7 +7,7 @@
    row's own action on the right (`caller('act')`); line 2: the note, the addresses (non-web ports), config, logs and
    the web UI, as the 0.13.x card linked them (A23). `rid`: an instance's radio (its Settings and log for that radio),
    "" for an entry without an instance. `caller('extra')`: what follows the row (an interactive part's command). #}
-{% macro comp_row(c, s, rid) %}{% set sid = s.sid if rid else s.id %}<li class="crow">
+{% macro comp_row(c, s, rid, rf='') %}{% set sid = s.sid if rid else s.id %}<li class="crow">
                     <div class="chead"><span class="badge badge-{{ c.state }}">{{ c.state }}</span>
                       <span class="cname">{{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}</span>
                       <span class="cact">{{ caller('act') }}</span></div>
@@ -15,6 +15,7 @@
                       {% for itf in c.interfaces if not itf.is_web %}{{ iface(itf, sid, rid) }}{% endfor %}
                       {% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=sid, radio=rid or None) }}#stack-settings-{{ sid }}" aria-label="{{ c.id }} config">config</a>{% endif %}
                       {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id, radio=rid or None) }}" aria-label="{{ c.id }} logs">logs</a>{% endif %}
+                      {{ rf }}{# dash plan c3: the caller's RF-log line (the daemon row only), its radio context built by the caller #}
                       {% for itf in c.interfaces if itf.is_web %}{{ iface(itf, sid, rid) }}{% endfor %}</div>
                     {{ caller('extra') }}</li>{% endmacro %}
 {# The href of a web interface that WORKS for this viewer, else "": a PROXIED web UI via the nginx proxy per its LIVE
@@ -152,6 +153,8 @@
           <span class="rfline">RF log: {% for l in r.rflogs %}{% if not loop.first %} · {% endif %}{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a class="pill" href="{{ url_for('logs_view', target=l.target, job=l.job, radio=r.rid or None) }}">{{ l.label }}</a>{% endif %}{% endfor %}</span>
         </p>
       {% endset %}
+      {# dash plan c3: the same RF-log links (target/job/radio, error pill) in the daemon component row, logslink look #}
+      {% set rfline %}<span class="rfline">RF log: {% for l in r.rflogs %}{% if not loop.first %} · {% endif %}{% if l.error %}<span class="pill warn">{{ l.error }}</span>{% else %}<a class="logslink" href="{{ url_for('logs_view', target=l.target, job=l.job, radio=r.rid or None) }}">{{ l.label }}</a>{% endif %}{% endfor %}</span>{% endset %}
       <div class="card radio-col{{ ' radio-stray' if r.stray }}" id="radio-{{ key }}" data-radio-band="{{ r.band }}"{% if r.rid %} data-radio-rid="{{ r.rid }}"{% endif %}>
         <header>
           <h2>{% if r.rid %}{{ r.name }} ({{ r.rid }}, {{ r.band }} MHz){% else %}{{ where }}{% endif %}{% if r.stray %} <span class="pill">no listed radio</span>{% endif %}</h2>
@@ -199,13 +202,12 @@
               radio tuning. Run only one at a time on this radio.</p>
           {% endif %}
 
-          {# --- radio config (only when the daemon serves this band): Radio config, Daemon log (then the RF logs). Dash
-                 plan c1: the card has no daemon Stop / Restart of its own; a daemon with a verified launch record has its
-                 pair in its block under "Running on"; one that no record lists there (hand-started, lost or stale record)
-                 stops from Apps only (his Q15 "OK ii"). --- #}
+          {# --- the RX-TX Monitor (only when the daemon serves this band). Dash plan c1: the card has no daemon Stop /
+                 Restart of its own; a daemon with a verified launch record has its pair in its block under "Running on";
+                 one that no record lists there (hand-started, lost or stale record) stops from Apps only (his Q15 "OK ii").
+                 c3: "Radio config" + "Daemon log" are gone (the daemon row's config / logs open the same pages); its RF
+                 logs sit in that row. --- #}
           {% if up %}
-            <h3><a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon', radio=r.rid) ~ '#stack-settings-daemon' }}">Radio config</a></h3>
-            {{ links }}
             <details class="monitor" id="monitor-{{ key }}" open>
               <summary>RX-TX Monitor</summary>
               <table class="monrssi">
@@ -244,9 +246,7 @@
             {% if not r.daemon.installed %}
               <p class="muted">Daemon not installed. Install &amp; build the
                 <a href="{{ url_for('stacks_overview', open='daemon') ~ '#stackrow-daemon' }}">daemon stack</a> first.</p>
-            {% else %}
-              {{ links }}{# dash plan c1: the daemon starts from "Start a stack on rX" ("daemon <band>", first entry) #}
-            {% endif %}
+            {% endif %}{# dash plan c1: the daemon starts from "Start a stack on rX"; c3: no log links while it is stopped #}
           {% endif %}
 
           {# dash plan c2: the radio's hardware page, below the RX-TX Monitor (daemon up) or above "Running on" (stopped) #}
@@ -271,7 +271,7 @@
                 {# K1: a row per component of the instance, stopped ones too; a part's own Run/Stop names `<comp>@<rid>`;
                    W325: the instance's own Stop and Restart (target `<stack>@<rid>`) #}
                 <ul class="complist cgrid">{% for c in s.components %}
-                  {% call(part) comp_row(c, s, s.rid) %}{% if part == 'act' %}
+                  {% call(part) comp_row(c, s, s.rid, rfline if c.id == 'loraham-daemon' else '') %}{% if part == 'act' %}
                     {% if c.state in ('running', 'degraded', 'booting') and (c.optional or c.interactive) %}{{ comp_act('stop', c.id ~ '@' ~ s.rid, 'Stop') }}
                     {% elif c.state == 'stopped' and c.runnable and not c.interactive %}{{ comp_act('start', c.id ~ '@' ~ s.rid, 'Run') }}{% endif %}
                   {% elif c.interactive and c.state not in ('running', 'degraded', 'booting') %}{{ interactive_cmd(c, s, s.rid, 'runi-' ~ c.id ~ '-' ~ key, (c.commands or {}).get(s.rid, '')) }}{% endif %}{% endcall %}{% endfor %}</ul>
@@ -289,7 +289,7 @@
                   <span class="pill">{{ s.id }}</span>{{ head_web(s) }}</p>
                 {# the same row markup; an orphan keeps today's actions: state, Stop, note (its Run is withdrawn, his word) #}
                 <ul class="complist cgrid">{% for c in s.components %}
-                  {% call(part) comp_row(c, s, "") %}{% if part == 'act' %}
+                  {% call(part) comp_row(c, s, "", rfline if c.id == 'loraham-daemon' else '') %}{% if part == 'act' %}
                     {% if c.state in ('running', 'degraded') and (c.optional or c.interactive) %}{{ comp_act('stop', c.id ~ at, 'Stop') }}{% endif %}
                   {% elif c.interactive and c.state not in ('running', 'degraded') %}{{ interactive_cmd(c, s, "", 'runc-' ~ c.id ~ '-' ~ key, (c.commands or {}).get(r.rid, '')) }}{% endif %}{% endcall %}{% endfor %}</ul>
                 <p class="muted" id="noinst-{{ key }}-{{ s.id }}">No launch record or argv names the radio {{ s.name }}
