@@ -3,8 +3,10 @@ answered by the test. Structure: an RX / TX pill in the summary, no TX active / 
 Uptime | Packet RSSI, CAD state | CAD RSSI, RX pkts | TX ok/err, and after Live RSSI the FREQ / PWR / BW / SF line (names
 in the field-label look, a name never wraps from its value). Painting: the pill from STATUS TX; an older daemon (no
 RADIOERR= in STATUS) -> STATUS FREQ / POWER / SF, BW "-"; a 1.5.0 daemon -> `radio` (GET RADIO) only while its
-RADIO=READY, else "-" x4 (FAILED, UNPLUGGED, {} or no `radio` key), never STATUS; a missing value -> "-" after a value."""
+RADIO=READY, else "-" x4 (FAILED, UNPLUGGED, {} or no `radio` key), never STATUS; a missing value -> "-" after a value.
+Home's poll asks for the radio values (?radio=1); a page without the line (Hardware) polls without it."""
 import json
+from urllib.parse import parse_qs, urlsplit
 
 _READY = b"STATUS RADIO=READY ID=r3 BOUND=- TXMODE=MANAGED\n"
 _BASE = {"reachable": True, "ready": True, "label": "daemon READY", "channel": {"LIVERSSI": "-115.00"}, "stats": {}, "feed": []}
@@ -63,4 +65,19 @@ def test_the_pill_and_the_params_follow_the_poll(flask_page):
     _step(page, api, _NEW, ("869.525", "10", "250", "11"), radio=_GOT)
     _step(page, api, _NEW, ("-", "-", "-", "-"))                                           # no `radio` key at all
     _step(page, api, {k: v for k, v in _OLD.items() if k != "TX"}, ("433.175", "17", "-", "12"), pill=None)  # no TX: hidden
+    page.context.close()
+
+
+def _next_poll(page, rid):
+    with page.expect_request(lambda r: urlsplit(r.url).path == f"/api/daemon/{rid}", timeout=10000) as req:
+        pass
+    return parse_qs(urlsplit(req.value.url).query)
+
+
+def test_only_homes_poll_asks_for_the_radio_values(flask_page):
+    api = {"/api/daemon/r3": dict(_BASE, status=_NEW, radio=_GOT)}
+    page, _posts = flask_page(path="/", unix_replies={"/tmp/loraconf-r3.sock": _READY}, api=api)
+    assert _next_poll(page, "r3") == {"radio": ["1"]}
+    page.goto(urlsplit(page.url)._replace(path="/hardware", query="", fragment="").geturl(), wait_until="load")
+    assert page.locator("#rd-freq-r3").count() == 0 and _next_poll(page, "r3") == {}
     page.context.close()

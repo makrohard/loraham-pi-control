@@ -74,7 +74,9 @@
   // views are per radio (/api/daemon/<rid>), and that card shows its server-rendered state.
   function poll(rid) {
     var key = rid;
-    return fetch("/api/daemon/" + encodeURIComponent(rid))
+    // only a page that shows the radio's FREQ / PWR / BW / SF line (Home's Monitor) asks for its values (GET RADIO)
+    var q = document.getElementById("rd-freq-" + key) ? "?radio=1" : "";
+    return fetch("/api/daemon/" + encodeURIComponent(rid) + q)
       .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
       .then(function (d) {
         if (!d) return;
