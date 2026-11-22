@@ -16,7 +16,8 @@
                       {% if c.configurable %}<a class="logslink" href="{{ url_for('stacks_overview', cfg=sid, radio=rid or None) }}#stack-settings-{{ sid }}" aria-label="{{ c.id }} config">config</a>{% endif %}
                       {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id, radio=rid or None) }}" aria-label="{{ c.id }} logs">logs</a>{% endif %}
                       {{ rf }}{# dash plan c3: the caller's RF-log line (the daemon row only), its radio context built by the caller #}
-                      {% for itf in c.interfaces if itf.is_web %}{{ iface(itf, sid, rid) }}{% endfor %}</div>
+                      {% for itf in c.interfaces if itf.is_web %}{{ iface(itf, sid, rid) }}{% endfor %}
+                      {% if c.has_password %}<a class="logslink" href="{{ url_for('stacks_overview', open=sid, radio=rid or None) }}#stack-password-{{ c.id }}" aria-label="{{ c.id }} password">password</a>{% endif %}{# dash plan c14: after the web pill, its Apps Password section #}</div>
                     {{ caller('extra') }}</li>{% endmacro %}
 {# The href of a web interface that WORKS for this viewer, else "": a PROXIED web UI via the nginx proxy per its LIVE
    scope (exposed -> the reached host; loopback -> 127.0.0.1 for a LOCAL viewer only); a direct one at its endpoint

@@ -169,7 +169,7 @@ R4 = radios.Radio("r4", "stick", "meshstick-1262", "868", usb_serial="MS123456")
 MC_NODE = {"r2": 5133, "r4": 5399}                  # meshcore-node's own TCP port per instance
 MC_WEB = {"r2": 8921, "r4": 9187}                   # meshcore-webui's own port per instance
 K1_KEYS = {"id", "name", "kind", "optional", "state", "note", "configurable", "writes_log", "interfaces", "runnable",
-           "interactive", "commands", "blocker"}
+           "interactive", "commands", "blocker", "has_password"}
 
 
 def _mc(tmp_path, running, ports=()):
