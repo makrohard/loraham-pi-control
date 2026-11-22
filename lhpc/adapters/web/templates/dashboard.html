@@ -253,6 +253,8 @@
                       <span id="rd-txerr-{{ key }}">?</span></td></tr>
               </table>
               <pre class="next feed" id="rd-feed-{{ key }}">(loading RX/TX activity…)</pre>
+              {#- F20: the radio's Live radio settings, part of the Monitor (hidden while it is closed) -#}
+              {% if r.rid %}<p class="hwlink"><a class="logslink" id="rd-live-{{ key }}" href="{{ level_url('daemon', 'stack-settings-daemon--' ~ r.rid ~ '-live', r.rid) }}">Daemon live settings</a></p>{% endif %}
             </details>
           {% else %}
             {# This column is about THIS radio only — the daemon runs as an

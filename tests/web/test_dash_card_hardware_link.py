@@ -70,3 +70,18 @@ def test_stopped_card_hardware_link_at_the_bottom(web, tmp_path, monkeypatch):
     _plain_title(card)
     assert not card.present("monitor-r2")
     _last_in_card(doc, "r2", _hw_link(doc, card, "r2"))
+
+
+def test_the_monitor_ends_with_its_radios_live_settings_link(web, tmp_path, monkeypatch):
+    # F20 (his word; red before: no such link): "Daemon live settings", part of the RX-TX Monitor (inside its
+    # <details>, after the feed), links that radio's Live radio settings level, which exists (a 200 page)
+    doc = _home(web, tmp_path, monkeypatch)
+    mon, feed, a = doc.by_id("monitor-r1"), doc.by_id("rd-feed-r1"), doc.by_id("rd-live-r1")
+    assert a is not None and mon.index < feed.index < a.index <= mon.end
+    assert a.has_class("logslink") and a.text == "Daemon live settings"
+    assert a["href"] == "/stacks/daemon/menu/stack-settings-daemon--r1-live?radio=r1"
+    assert not doc.by_id("rd-live-r2")                                              # r2 stopped: no Monitor, no link
+    radios_fixture.write(tmp_path, TWO_433)
+    fake = FakeSystem(unix_replies={"/tmp/loraconf-r1.sock": READY})
+    c = web(service_factory=lambda: ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path)))
+    assert c.get(a["href"]).status_code == 200
