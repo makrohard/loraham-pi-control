@@ -340,6 +340,68 @@ try {
   }, { timeout: 7000 }, START);   // over one 3 s poll period
   await page.evaluate(() => { window.demoFetch = window.__realFetch; });
   ok("the daemon's log page streams its start-log lines");
+
+  // ---- demo logs (PLAN-DEMO-LOGS v3 §6, the rendered panels): a window shows the anonymized box log it names ----
+  // A log panel (logpanel.js) opened with every <details> around it; `src` picks one of its sources. Its text once
+  // loaded ("updated", lines), never the empty "no entries yet" / "could not load".
+  const panelText = async (path, id, src) => {
+    await render(page, path, "#" + id);
+    await page.evaluate((a) => {
+      const lp = doc().getElementById(a.id);
+      for (let r = lp.parentElement && lp.parentElement.closest("details"); r; r = r.parentElement && r.parentElement.closest("details"))
+        if (!r.open) r.open = true;
+      if (!lp.open) lp.querySelector(":scope > summary").click();
+    }, { id });
+    const loaded = (id) => page.waitForFunction((id) => {
+      const lp = doc().getElementById(id);
+      return lp.querySelector(".logpanel-status").textContent === "updated"
+        && lp.querySelector(".logpanel-text").textContent.trim() !== ""; }, { timeout: 30000 }, id);
+    await loaded(id);
+    if (src) {
+      await page.evaluate((a) => {
+        const lp = doc().getElementById(a.id), pick = lp.querySelector(".logpanel-src");
+        const o = [...pick.options].find((x) => x.value.endsWith("/" + a.src));
+        if (!o) throw new Error(a.id + ": no source " + a.src);
+        lp.querySelector(".logpanel-status").textContent = ""; lp.querySelector(".logpanel-text").textContent = "";
+        pick.value = o.value; pick.dispatchEvent(new Event("change", { bubbles: true }));
+      }, { id, src });
+      await loaded(id);
+    }
+    return page.evaluate((id) => doc().getElementById(id).querySelector(".logpanel-text").textContent, id);
+  };
+  await panelText("/stacks?open=meshcore", "log-meshcore-node");
+  ok("a program's log window (meshcore-node) shows its box log");
+  await panelText("/stacks?open=meshtastic", "build-meshtastic-web");
+  ok("a build log window (meshtastic-web) shows its box log");
+  const prev = [];
+  for (const src of ["controller-web", "controller-selfupdate", "controller-boot-restore"])
+    prev.push(await panelText("/stacks", "controller-logs", src));
+  if (new Set(prev).size !== 3) throw new Error("the controller preview shows the same text for its 3 sources");
+  ok("the controller log preview shows each of its 3 sources");
+  await render(page, "/firewall/logs", "#logbox");
+  const fw = await page.evaluate(() => doc().getElementById("logbox").textContent.trim());
+  if (!fw || fw === "(no output yet)") throw new Error("/firewall/logs: empty #logbox");
+  ok("the firewall log page shows its box log");
+
+  // ---- the daemon views on the demo's simulated 1.5.0 daemon (his Q12), r1 running: every view of the Settings
+  // tree's Monitor answers live (daemoncfg.js through demoFetch); RADIO is GET RADIO's reply (?radio=1) ----
+  const TREE = "/stacks/daemon/menu/stack-settings-daemon?radio=r1";
+  const VIEWS = ["status", "radio", "stats", "socket", "rxtx"];
+  const openViews = async () => {
+    await render(page, TREE, "#stack-settings-daemon--monitor");
+    if (!await clickSummary(page, "stack-settings-daemon--monitor")) throw new Error("the Monitor node did not open");
+    for (const k of VIEWS) await clickSummary(page, "stack-settings-daemon--monitor-" + k);
+  };
+  await openViews();
+  await page.waitForFunction(() => {
+    const t = (k) => ((doc().querySelector("#stack-settings-daemon--monitor-" + k + " .daemonview-text") || {}).textContent || "");
+    return t("status").startsWith("STATUS — r1 (live)") && /\bRADIOERR=retry\b/.test(t("status"))
+      && t("radio").startsWith("RADIO — r1 (live)") && /\bRADIO=READY\b/.test(t("radio")) && /\bMODE=LORA\b/.test(t("radio"))
+      && /\bFREQ=\d/.test(t("radio")) && /\bPOWER=\d/.test(t("radio"))
+      && t("stats").startsWith("STATS — r1 (live)") && /\bRX=\d/.test(t("stats"))
+      && /STATUS .*\bRADIOERR=retry\b/.test(t("socket")) && /\[(RX|TX)433\]/.test(t("rxtx"));
+  }, { timeout: 30000 });
+  ok("the Monitor's 5 views show the simulated 1.5.0 daemon live (STATUS RADIOERR, RADIO, STATS, Socket, RX/TX)");
   // ---- frame-only checks (the new mechanism; not red-before evidence) ----
   // (i) every product script of the page is loaded from the index directory by a RELATIVE src (on Pages that
   // directory is the repo's path: a root-relative /static/ would 404 there even where a server root makes it pass).
@@ -468,6 +530,35 @@ try {
   await ready(page);
   await daemonReady();
   ok("running state persisted across reload (r1 still READY)");
+
+  // ... and r1's daemon stopped (the daemon row's Stop daemon@r1, confirmed): every view says "Daemon not running"
+  // and asks nothing.
+  const submitted = () => page.waitForFunction(() => { const d = doc(), e = d && d.documentElement;
+    return !!e && !e.dataset.old && d.readyState === "complete"; }, { timeout: 30000 });
+  await render(page, "/stacks?open=daemon", "#stackrow-daemon");
+  await page.waitForFunction(() => [...doc().querySelectorAll("#stackrow-daemon form")].some((f) => {
+    const op = f.querySelector('input[name="op"]'), t = f.querySelector('[name="target"]');
+    return op && op.value === "stop" && t && [...(t.options || [t])].some((o) => o.value === "daemon@r1"); }), { timeout: 30000 });
+  await page.evaluate(() => {
+    const f = [...doc().querySelectorAll("#stackrow-daemon form")].find((f) => {
+      const op = f.querySelector('input[name="op"]'), t = f.querySelector('[name="target"]');
+      return op && op.value === "stop" && t && [...(t.options || [t])].some((o) => o.value === "daemon@r1"); });
+    f.querySelector('[name="target"]').value = "daemon@r1";
+    doc().documentElement.dataset.old = "1";
+    f.querySelector("button").click();
+  });
+  await submitted();
+  if (await page.evaluate(() => !!doc().querySelector('form input[name="confirmed"][value="yes"]'))) {   // its confirm page
+    await page.evaluate(() => { const f = doc().querySelector('form input[name="confirmed"][value="yes"]').form;
+      doc().documentElement.dataset.old = "1"; f.querySelector("button").click(); });
+    await submitted();
+  }
+  await openViews();
+  await page.waitForFunction((views) => views.every((k) => {
+    const v = doc().getElementById("stack-settings-daemon--monitor-" + k), down = v && v.querySelector(".dstate-down");
+    return !!down && !down.hidden && down.textContent === "Daemon not running" && !v.dvRunning
+      && !/\(live\)/.test(v.querySelector(".daemonview-text").textContent); }), { timeout: 30000 }, VIEWS);
+  ok("r1's daemon stopped: every Monitor view says Daemon not running");
 } catch (e) {
   console.error("FAIL (the check after: " + last + "):", e.message, "| pageerrors:", JSON.stringify(errs.slice(0, 5)));
   rc = 1;
