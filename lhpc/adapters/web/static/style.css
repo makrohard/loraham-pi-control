@@ -381,8 +381,8 @@ a.iface { text-decoration: none; color: var(--brand); }
   row-gap: .2rem;
   padding-right: 11.5em;   /* room for the logs + "Update" overlay */
 }
-.stacklist .stackrow > summary .col-name    { grid-column: 2; min-width: 0; overflow: hidden;
-                                               text-overflow: ellipsis; white-space: nowrap; }
+/* a name too long for its column wraps (no ellipsis) at every width (a25 N1 on S4: 861..1090 px cut long names) */
+.stacklist .stackrow > summary .col-name    { grid-column: 2; min-width: 0; white-space: normal; }
 .stacklist .stackrow > summary .col-status  { grid-column: 3; }
 .stacklist .stackrow > summary .col-version { grid-column: 4; }
 .stacklist .stackrow > summary .col-extra   { grid-column: 5; min-width: 0; display: flex;
@@ -397,7 +397,6 @@ a.iface { text-decoration: none; color: var(--brand); }
   .stacklist .stackrow > summary .col-status,
   .stacklist .stackrow > summary .col-version,
   .stacklist .stackrow > summary .col-extra { grid-column: auto; }
-  .stacklist .stackrow > summary .col-name { overflow: visible; white-space: normal; text-overflow: clip; }
   /* Every wide block scrolls inside its own box so no section overflows the phone viewport. */
   table { display: block; overflow-x: auto; max-width: 100%; }
   .wrap, main.wrap, body.narrow-page main.wrap { padding: .8rem; }
