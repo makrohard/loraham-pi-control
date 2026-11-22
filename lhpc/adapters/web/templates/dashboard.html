@@ -370,6 +370,8 @@
     {% endfor %}
   </div>
 
+  {# dash plan c12 S10 (his word): Webserver and System in one wrapping row below the radio grid, side by side when both fit #}
+  <div class="homeduo">
   {# Webserver box: LHPC console (always), then per RUNNING stack its web-UI line and a line per other
      open TCP port. Web lines: security+running pills. Port lines (no auth): one exposure-coloured
      IP:Port·label pill (green local / yellow LAN / red public) + a per-service logs link. #}
@@ -560,6 +562,7 @@
       </div>
     </details>
   </div>
+  </div>{# /homeduo #}
 {% endblock %}
 {% block scripts %}
   <script src="{{ url_for('static', filename='dash.js') }}" defer></script>
