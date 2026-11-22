@@ -210,16 +210,20 @@
                  logs sit in that row. --- #}
           {% if up %}
             <details class="monitor" id="monitor-{{ key }}" open>
-              <summary>RX-TX Monitor</summary>
+              <summary>RX-TX Monitor <span class="badge txpill" id="rd-txpill-{{ key }}" hidden></span>{# dash plan c5: RX / TX from the poll's STATUS TX #}</summary>
               <table class="monrssi">
                 <tr><th>Live RSSI</th>
                   <td><meter id="rd-rssi-{{ key }}" min="-130" max="0" low="-110" high="-90" optimum="-30"
                              value="{{ dv.liverssi or '-130' }}"></meter>
                       <span class="mono" id="rd-rssiv-{{ key }}">{{ dv.liverssi or '?' }}</span> dBm</td></tr>
               </table>
+              {# dash plan c5: the radio params in effect, painted by dash.js (daemon 1.5.0: GET RADIO while READY, else "-") #}
+              <p class="rparams">{% for k, n in (("freq", "FREQ"), ("pwr", "PWR"), ("bw", "BW"), ("sf", "SF")) %}<span class="rp"><span class="rpk">{{ n }}</span> <span class="mono rpv" id="rd-{{ k }}-{{ key }}">-</span></span>{% endfor %}</p>
               <table>
                 <tr><th>Radio</th><td class="mono" id="rd-radio-{{ key }}">{{ dv.radio or '?' }}</td>
                     <th>TX mode</th><td class="mono" id="rd-txmode-{{ key }}">{{ dv.txmode or '?' }}</td></tr>
+                <tr><th>Uptime</th><td class="mono" id="rd-uptime-{{ key }}">?</td>
+                    <th>Packet RSSI</th><td class="mono" id="rd-pktrssi-{{ key }}">?</td></tr>
                 {#- CAD state is shown as "—" while nothing has scanned: the dashboard poll is
                     deliberately passive (a CAD scan destroys a frame in flight, so a status page
                     must not run one). "Scan now" takes a real measurement on request. The daemon's
@@ -230,11 +234,7 @@
                               data-csrf="{{ csrf_token() }}"
                               title="Take one real CAD measurement. Briefly interrupts reception.">
                         Scan now</button></td>
-                    <th>TX active</th><td class="mono" id="rd-tx-{{ key }}">?</td></tr>
-                <tr><th>Packet RSSI</th><td class="mono" id="rd-pktrssi-{{ key }}">?</td>
                     <th>CAD RSSI</th><td class="mono" id="rd-cadrssi-{{ key }}">{{ dv.cadrssi or '?' }}</td></tr>
-                <tr><th>CAD wait</th><td class="mono" id="rd-cadwait-{{ key }}">{{ dv.cadwait or '?' }}</td>
-                    <th>Uptime</th><td class="mono" id="rd-uptime-{{ key }}">?</td></tr>
                 <tr><th>RX pkts</th><td class="mono" id="rd-rx-{{ key }}">?</td>
                     <th>TX ok / err</th><td class="mono"><span id="rd-txok-{{ key }}">?</span> /
                       <span id="rd-txerr-{{ key }}">?</span></td></tr>

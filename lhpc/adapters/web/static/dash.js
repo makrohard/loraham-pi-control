@@ -31,6 +31,32 @@
       + (badge.classList.contains("dbadge") ? " dbadge" : "");
   }
 
+  // Dash plan c5: the Monitor's RX / TX pill, from STATUS TX ("1" = TX, any other value RX; no STATUS: hidden).
+  function txpill(key, status) {
+    var pill = document.getElementById("rd-txpill-" + key);
+    if (!pill) return;
+    var tx = status ? status.TX : undefined;
+    pill.hidden = tx === undefined;
+    if (pill.hidden) return;
+    var on = tx === "1";
+    if (pill.textContent !== (on ? "TX" : "RX")) pill.textContent = on ? "TX" : "RX";
+    pill.className = "badge txpill " + (on ? "tx-on" : "badge-running");
+  }
+
+  // Dash plan c5 + daemon 1.5.0 seam: the FREQ / PWR / BW / SF line. A 1.5.0+ daemon (its STATUS carries RADIOERR=,
+  // the marker daemon_control.read_radio keys on) is read ONLY through `radio` (GET RADIO): its values while its
+  // RADIO=READY, else (FAILED, UNPLUGGED, any other, {} or absent) "-" for all four, never STATUS. An older daemon:
+  // STATUS FREQ / POWER / SF (BW "-": STATUS has none). A missing or "-" value is "-", also after an earlier value.
+  var PARAMS = [["freq", "FREQ"], ["pwr", "POWER"], ["bw", "BW"], ["sf", "SF"]];
+  function params(key, d) {
+    var status = d.status || {}, radio = d.radio || {};
+    var src = ("RADIOERR" in status) ? (radio.RADIO === "READY" ? radio : {}) : status;
+    PARAMS.forEach(function (p) {
+      var v = (p[0] === "bw" && src === status) ? "" : (src[p[1]] || "");
+      set("rd-" + p[0] + "-" + key, v === "" || v === "-" ? "-" : v);
+    });
+  }
+
   // Resolves to whether the poll succeeded: an HTTP or network error, an unreadable body or a throw
   // while rendering is a failure, which the caller answers with the slow interval.
   // A card's element ids end in its radio's id. A card without a radio (a stray band) is not polled: the daemon
@@ -70,11 +96,11 @@
         }
         if (d.status) {
           if (d.status.TXMODE) { set("rd-txmode-" + key, d.status.TXMODE); }
-          set("rd-tx-" + key, d.status.TX || "?");
           if (d.status.RADIO) set("rd-radio-" + key, d.status.RADIO);
           if (d.status.CADRSSI) set("rd-cadrssi-" + key, d.status.CADRSSI);
-          if (d.status.CADWAIT) set("rd-cadwait-" + key, d.status.CADWAIT);
         }
+        txpill(key, d.status);
+        params(key, d);
         if (d.stats) {
           set("rd-rx-" + key, d.stats.RX || "?");
           set("rd-txok-" + key, d.stats.TXOK || "?");

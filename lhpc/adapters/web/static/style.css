@@ -196,6 +196,14 @@ details[open] summary { margin-bottom: .4rem; }
 details.monitor > summary { font-size: 1rem; font-weight: 600; color: var(--ink);
                             margin: .6rem 0 .3rem; }
 .monrssi th { white-space: nowrap; }
+/* dash plan c5: the RX/TX pill right in the Monitor summary; the FREQ/PWR/BW/SF line (names in the field-label look,
+   values in the value font, a name never wraps away from its value) */
+details.monitor > summary .txpill { float: right; font-weight: 600; }
+.txpill.tx-on { background: var(--badge-bad-bg); color: var(--bad); border-color: var(--badge-bad-border); }
+.rparams { display: flex; flex-wrap: wrap; gap: .2rem .9rem; align-items: baseline; margin: .4rem .6rem; }
+.rparams .rp { white-space: nowrap; }
+.rparams .rpk { color: var(--muted); font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .4px; margin-right: .35rem; }
+.rparams .rpv { font-size: .92rem; }
 .monrssi td { display: flex; align-items: center; gap: .5rem; white-space: nowrap; }   /* A32: the value and its unit never break; the meter gives way */
 pre.next { background: var(--code-bg); color: var(--code-ink); border: 1px solid var(--line); padding: .6rem .8rem; border-radius: 8px; overflow-x: auto; font-size: .85rem; }
 .endpoint-ok { color: var(--ok); }
