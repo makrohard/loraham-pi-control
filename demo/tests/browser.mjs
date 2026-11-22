@@ -314,9 +314,12 @@ try {
   });
   await page.waitForFunction(() => { const d = doc(), e = d && d.documentElement;
     return !!e && !e.dataset.old && d.readyState === "complete"; }, { timeout: 30000 });
-  const posted = await page.evaluate(() => doc().title + " | " + doc().body.innerText.slice(0, 200));
-  if (/Bad Request|CSRF/i.test(posted)) throw new Error("the CSRF form after the remembered row was refused: " + posted);
-  ok("a CSRF-protected form after the remembered row is accepted");
+  const posted = await page.evaluate(() => doc().title + " | " + doc().body.innerText);
+  if (/Bad Request|CSRF/i.test(posted)) throw new Error("the CSRF form after the remembered row was refused: " + posted.slice(0, 300));
+  // Accepted means the restart's success flash (the demo's simulated restart, service.py), not merely "no CSRF error":
+  // an error page has neither.
+  if (!posted.includes("Restarted kiss (simulated).")) throw new Error("the Restart kiss@r1 after the remembered row did not flash Restarted: " + posted.slice(0, 300));
+  ok("a CSRF-protected form after the remembered row is accepted (Restarted kiss)");
 
 
   // G2 #18: a program's log page streams: the product's logs.js polls /api/logs/<target> through the bridge (the page's
