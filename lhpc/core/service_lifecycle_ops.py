@@ -2664,6 +2664,7 @@ class LifecycleOpsMixin:
         sibling's (G1-B1-PLAN N9); without one, the stack's first page of the component (the band entries)."""
         if status is None:
             return []
+        from . import fw_card
         from . import webserver as _ws
         # A status is per COMPONENT, so its web endpoint belongs to exactly one proxied page (a
         # stack may have several): that page's saved policy — never a sibling's — decides "proxied".
@@ -2704,7 +2705,7 @@ class LifecycleOpsMixin:
                     scope = ""
             entry = {"label": label, "address": sp.address, "scheme": sp.scheme or "tcp",
                      "link": link, "port": port, "is_web": is_web, "card_component": sp.card_component,
-                     "remote_ok": scope == "exposed",
+                     "remote_ok": scope == "exposed", "fw_blocked": scope == "exposed" and fw_card.port_blocked(self, port),
                      "proxy_scope": "", "proxy_port": 0, "proxy_scheme": "", "proxy_remote": False,
                      "pending": False}
             if proxied:

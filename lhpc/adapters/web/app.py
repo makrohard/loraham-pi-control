@@ -1519,6 +1519,16 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
 
     app.jinja_env.globals["own_page_url"] = _own_page_url
     app.jinja_env.globals["level_url"] = _level_url
+
+    def _level_url_if(owner: str, mid: str, radio=None) -> str:
+        """F23: a level's link only when that level exists for this console (e.g. the Firewall levels register only with
+        a firewall view), else "": never a dead link. Builds the owner's menus once per request (memoised)."""
+        try:
+            return _level_url(owner, mid, radio) if _submenus.chain(_owner_menus(owner)[1], mid) else ""
+        except Exception:
+            return ""
+
+    app.jinja_env.globals["level_url_if"] = _level_url_if
     app.jinja_env.globals["log_preview_url"] = _log_preview_url
     app.jinja_env.globals["stack_logs"] = _submenus.stack_logs
     app.jinja_env.globals["log_groups"] = _submenus.log_groups
