@@ -820,31 +820,41 @@ def _authenticate_tmp_peer(sock: socket.socket, path: str) -> None:
                       "(possible local socket squatting)")
 
 
+# The lines a LoRaHAM daemon pushes to every CONF client on its own (its docs/conf-protocol.md,
+# "Unsolicited broadcasts"; RADIO= from daemon 1.6.0). No reply starts with one of them.
+_DAEMON_BROADCASTS = (b"TX=", b"CAD=", b"RSSI=", b"RADIO=")
+
+
 class RealUnixClient:
     def request(
         self, path: str, payload: bytes, timeout: float, max_bytes: int
     ) -> bytes:
         """Connect to a Unix stream socket, send `payload`, read one bounded reply.
 
-        Stops at the first newline or `max_bytes`, whichever comes first. Raises
-        OSError on any transport problem; callers convert that to evidence.
+        A complete line the daemon sends on its own (`_DAEMON_BROADCASTS`) is dropped and the
+        read goes on; it stops at the first other complete line, EOF or `max_bytes`, and returns
+        the bytes from that line on. At `max_bytes` it returns every byte read, so a caller's
+        cap check still sees the cap. Raises OSError on any transport problem; callers convert
+        that to evidence.
         """
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
             sock.settimeout(timeout)
             sock.connect(path)
             _authenticate_tmp_peer(sock, path)      # /tmp squat defence — BEFORE any send/recv
             sock.sendall(payload)
-            chunks: list[bytes] = []
-            total = 0
-            while total < max_bytes:
-                chunk = sock.recv(min(512, max_bytes - total))
+            data = b""                              # every byte read: the cap counts them all
+            reply = b""                             # the bytes from the first non-broadcast line on
+            while len(data) < max_bytes:
+                chunk = sock.recv(min(512, max_bytes - len(data)))
                 if not chunk:
                     break
-                chunks.append(chunk)
-                total += len(chunk)
-                if b"\n" in chunk:
+                data += chunk
+                reply += chunk
+                while reply.startswith(_DAEMON_BROADCASTS) and b"\n" in reply:
+                    reply = reply.split(b"\n", 1)[1]
+                if b"\n" in reply:
                     break
-            return b"".join(chunks)
+            return data if len(data) >= max_bytes else reply
 
     def send(self, path: str, payload: bytes, timeout: float) -> None:
         """Fire-and-forget: connect, send, close. No reply is read (used for the
