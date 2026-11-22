@@ -199,8 +199,10 @@
               radio tuning. Run only one at a time on this radio.</p>
           {% endif %}
 
-          {# --- radio config (only when the daemon serves this band): Radio config, Daemon log (then the RF logs). The
-                 daemon's own Stop / Restart sit in its block under "Running on" (dash plan c1: the card's pair is gone). --- #}
+          {# --- radio config (only when the daemon serves this band): Radio config, Daemon log (then the RF logs). Dash
+                 plan c1: the card has no daemon Stop / Restart of its own; a daemon with a verified launch record has its
+                 pair in its block under "Running on"; one that no record lists there (hand-started, lost or stale record)
+                 stops from Apps only (his Q15 "OK ii"). --- #}
           {% if up %}
             <h3><a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon', radio=r.rid) ~ '#stack-settings-daemon' }}">Radio config</a></h3>
             {{ links }}

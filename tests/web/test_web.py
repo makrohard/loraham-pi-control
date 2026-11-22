@@ -1482,9 +1482,9 @@ _DAEMON_UP = {100: ["loraham_daemon", "--radio", "433", "--id", "r1"]}
 ], ids=["ready", "occupied", "offline-installed"])
 def test_the_radio_card_log_links_sit_directly_under_the_daemon_control(tmp_path, web, state, cmdlines, socks):
     """One link block per band card, defined once, in every state the daemon is installed in.
-    While the daemon serves the band: "Radio config", then the log links ("Daemon log", the RF logs); the card has no
-    daemon Stop / Restart / Start of its own any more (dash plan c1: the daemon starts from "Start a stack on rX" and
-    stops in its block under "Running on"). Daemon stopped: the links block, then the start list led by "daemon 433"."""
+    While the daemon serves the band: "Radio config", then the log links ("Daemon log", the RF logs). Dash plan c1: no
+    card-level daemon Stop / Restart / Start form; these fixtures have no launch record, so "Running on" lists no daemon
+    either (it stops from Apps, his Q15). Daemon stopped: the links block, then the start list led by "daemon 433"."""
     c = web(system=FakeSystem(cmdlines_data=cmdlines, unix_replies=socks).system)
     doc = parse(c.get("/").get_data(as_text=True))
     col = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])

@@ -1,7 +1,12 @@
 """Dash plan c1: a radio card has no daemon Start / Stop / Restart form and no "Daemon not running" hint of its own; while
 THIS radio's daemon is installed and stopped, "daemon <band>" (target daemon@<rid>, the old form's op/CSRF/from fields) is
 the first entry of "Start a stack on <rid>", exactly once, also when another radio of the band runs its daemon. Not
-installed: the note and its link stay, no entry. Driven through the rendered Home page."""
+installed: the note and its link stay, no entry. A running daemon with a verified launch record shows under "Running on
+<rid>" with its Stop / Restart (daemon@<rid>), and the card has no pair of its own; a running daemon that no record lists
+there has no Stop on Home at all (it stops from Apps, the maintainer's Q15 "OK ii"). Driven through the rendered Home page."""
+import subprocess
+import sys
+
 import pytest
 import radios_fixture
 from htmlq import parse
@@ -15,11 +20,26 @@ TWO_433 = (radios.Radio("r1", "left", "uputronics", "433", ce="ce0"), radios.Rad
 READY = b"STATUS ID={} BOUND=- RADIO=READY TX=0 TXMODE=MANAGED CADWAIT=1500 CADRSSI=-90\n"
 
 
-def _home(web, tmp_path, monkeypatch, up=(), installed=True):
+@pytest.fixture
+def procs():
+    out = []
+    yield out
+    for p in out:
+        p.kill()
+        p.wait(timeout=5)
+
+
+def _home(web, tmp_path, monkeypatch, up=(), installed=True, recorded=(), procs=None):
     radios_fixture.write(tmp_path, TWO_433)
     monkeypatch.setattr(ControllerService, "_daemon_installed", lambda self, dstat: installed)
     fake = FakeSystem(unix_replies={f"/tmp/loraconf-{rid}.sock": READY.replace(b"{}", rid.encode()) for rid in up})
-    page = web(service_factory=lambda: ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))).get("/")
+    svc = lambda: ControllerService(system=fake.system, paths=Paths(runtime_root=tmp_path))  # noqa: E731
+    for rid in recorded:                       # a verified launch record of daemon@<rid> (a live process lhpc owns)
+        procs.append(subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True))
+        s = svc()
+        stk = s.stack("daemon")
+        assert s._lifecycle().record_launch(stk, stk.main_component, procs[-1].pid, band="433", extra={"rid": rid})
+    page = web(service_factory=svc).get("/")
     assert page.status_code == 200
     return parse(page.get_data(as_text=True))
 
@@ -53,13 +73,34 @@ def test_a_stopped_installed_daemon_leads_the_start_list(web, tmp_path, monkeypa
         assert [h.text.strip() for h in card.find("h3")].count(f"Start a stack on {rid}") == 1
 
 
-def test_a_running_daemon_has_no_entry_and_no_card_pair(web, tmp_path, monkeypatch):
+def _acts(scope, forms):
+    return [(scope.within(f).field_default("op"), scope.within(f).field_default("target")) for f in forms]
+
+
+def test_a_recorded_running_daemon_stops_from_running_on_only(web, tmp_path, monkeypatch, procs):
+    doc = _home(web, tmp_path, monkeypatch, up=("r1", "r2"), recorded=("r1", "r2"), procs=procs)
+    for rid in ("r1", "r2"):
+        card = _card(doc, rid)
+        opts, _form = _start_options(card)
+        assert not [v for v, _t in opts if v.startswith("daemon")]
+        assert not [b for b in card.find("button") if b.text.strip().startswith(("Stop daemon", "Restart daemon"))]
+        rows = [p for p in card.find("p") if p.has_attr("data-stack") and p["data-stack"].startswith("daemon")]
+        assert [p["data-stack"] for p in rows] == [f"daemon@{rid}"]          # its own instance, under "Running on <rid>"
+        runs = [d for d in card.find("div", class_="runstack") if d.index < rows[0].index <= d.end]
+        assert len(runs) == 1
+        run = card.within(runs[0])
+        assert _acts(run, run.find("form", class_="act")) == [("stop", f"daemon@{rid}"), ("restart", f"daemon@{rid}")]
+        assert _acts(card, _card_daemon_acts(card)) == [("stop", f"daemon@{rid}"), ("restart", f"daemon@{rid}")]  # only there
+
+
+def test_an_unrecorded_running_daemon_has_no_home_stop(web, tmp_path, monkeypatch):
     doc = _home(web, tmp_path, monkeypatch, up=("r1", "r2"))
     for rid in ("r1", "r2"):
         card = _card(doc, rid)
         opts, _form = _start_options(card)
         assert not [v for v, _t in opts if v.startswith("daemon")]
-        assert not _card_daemon_acts(card)                         # no "Stop daemon (rX)" / "Restart daemon (rX)" on the card
+        assert not [p for p in card.find("p") if p.has_attr("data-stack") and p["data-stack"].startswith("daemon")]
+        assert not _card_daemon_acts(card)
         assert not [b for b in card.find("button") if b.text.strip().startswith(("Stop daemon", "Restart daemon"))]
 
 
