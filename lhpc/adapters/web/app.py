@@ -2600,8 +2600,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # here carries the problem note, and the next Start sends the operator back to this row.
         result = service.save_config_bundle(
             stack_id, values=values, inst=inst)                # G4-web: the instance names its band
+        # F27: addressed to its own button row (under Save configuration), never the Settings level the node's other
+        # rows share
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
-              "ok" if result.ok else "warn")
+              ("ok" if result.ok else "warn") + f" @stack-cfgacts-{stack_id}")
         return redirect(url_for("stacks_overview", radio=inst.rid if inst else None, cfg=stack_id)
                         + "#stack-settings-" + stack_id)
 
@@ -2975,7 +2977,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(400)
         inst = _settings_form_inst(stack_id)
         result = service.reset_config(stack_id, inst.band if inst else "", inst)
-        flash(result.summary, "ok" if result.ok else "warn")
+        flash(result.summary, ("ok" if result.ok else "warn") + f" @stack-cfgacts-{stack_id}")   # F27: under its row
         return redirect(url_for("stacks_overview", radio=inst.rid if inst else None, cfg=stack_id)
                         + "#stack-settings-" + stack_id)
 

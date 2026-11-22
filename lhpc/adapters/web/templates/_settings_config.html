@@ -1,4 +1,4 @@
-{% from "_macros.html" import instance_btn -%}
+{% from "_macros.html" import instance_btn, panel_banner -%}
 {#- #76: Save configuration (its button outside the form, `form=` it: still the form's default button for Enter) and
     Reset to defaults stand in one button row, as the other rows (.actrow), wrapping on a narrow screen. -#}
 {% if config_groups or view.optional %}{# F10: no empty form, no Save / Reset for it (the daemon) #}
@@ -75,6 +75,8 @@
       <button type="submit">Reset to defaults</button>
     </form>
     </div>
+    {#- F27: the result of Save configuration / Reset to defaults, directly under their row (its own address) -#}
+    {{ panel_banner(own_results('stack-cfgacts-' ~ stack.id)) }}
 {% endif %}
 
     {% if view.optional %}
