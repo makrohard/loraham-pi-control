@@ -564,7 +564,13 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 #rfview th[aria-sort="ascending"] button::after { content: " \25B2"; }
 #rfview th[aria-sort="descending"] button::after { content: " \25BC"; }
 #rfview td { font-variant-numeric: tabular-nums; white-space: nowrap; }
-#rfview td.rf-payload { font-family: ui-monospace, monospace; font-size: .8rem; max-width: 18rem; overflow: hidden; text-overflow: ellipsis; }
+/* dash plan c12 S5 (his "c" + refinement): the table takes the page's width; payload cells wrap instead of being cut at
+   18rem. The hex cell is 32 characters wide (the hex text has 2 per byte, no spaces): 16 bytes per line, a break only
+   between two bytes; the ascii / decoded cells take the rest of the row (at least 12rem) and wrap. */
+#rfview { width: 100%; }
+#rfview td.rf-payload { font-family: ui-monospace, monospace; font-size: .8rem; white-space: pre-wrap; word-break: break-all; }
+#rfview td.rf-hex { box-sizing: content-box; width: 32ch; min-width: 32ch; max-width: 32ch; }
+#rfview td.rf-payload:not(.rf-hex) { min-width: 12rem; }
 #rfview tr.rf-open td.rf-payload { white-space: pre-wrap; word-break: break-all; max-width: none; overflow: visible; }
 #rfview tr.rf-no-key td, #rfview tr.rf-undecryptable td, #rfview tr.rf-malformed td { color: var(--muted); }
 
