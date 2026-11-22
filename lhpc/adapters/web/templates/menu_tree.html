@@ -20,4 +20,12 @@
     <div class="body">
       {% for owner, kids in owners %}{{ branch(owner, kids, None) }}{% endfor %}
     </div></div>
+  {# dash plan c17 (his word): the two pages the tree cannot reach, in the tree's top-entry look #}
+  <div class="card" id="menu-other">
+    <div class="body">
+      <ul class="navtree navtree-other">
+        <li><a href="{{ url_for('dependencies_page') }}">Dependency Overview</a></li>
+        <li><a href="{{ url_for('auto_install_page') }}">Auto-install</a></li>
+      </ul>
+    </div></div>
 {% endblock %}

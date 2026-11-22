@@ -902,5 +902,6 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .card .body > .navtree { padding-left: 0; }
 .navtree li { margin: .15rem 0; }
 .navtree summary { cursor: pointer; font-weight: 600; padding: .25rem 0; }
+.navtree-other a { font-weight: 600; }   /* dash plan c17: All menus' second card, the tree's top-entry look */
 .navtree .tree-self { margin: 0 0 .1rem 1.1rem; font-size: .85rem; }
 .navtree a { display: inline-block; padding: .25rem 0; }
