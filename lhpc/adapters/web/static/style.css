@@ -371,9 +371,11 @@ a.iface { text-decoration: none; color: var(--brand); }
 /* TOP-LEVEL row headers (controller + each stack) lay out as fixed columns so the SAME field lines up
    vertically across rows: marker | name | status | version | extra. The summary reserves
    right padding for the .row-actions overlay so the flexible `col-extra` never slides under it. */
+/* dash plan c12 S4 (his "let columns grow"): on the wide page the name column grows with the row (20 % of it, at least
+   the old 11em), the same width in every row, so the columns still line up and no name is cut off */
 .stacklist .stackrow > summary {
   display: grid;
-  grid-template-columns: 1.2em 11em 6.5em 5.5em 1fr;
+  grid-template-columns: 1.2em minmax(11em, 20%) 6.5em 5.5em 1fr;
   align-items: center;
   column-gap: .5rem;
   row-gap: .2rem;
