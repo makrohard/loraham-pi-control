@@ -435,16 +435,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         except Exception:
             return {"disk_notice": None}
 
-    @app.context_processor
-    def _inject_hardware():
-        # Read-only current radio-hardware setup for the footer, on EVERY page. Config read only.
-        try:
-            sid = service.hardware_setup()
-            return {"hardware_footer": {"id": sid, "label": dict(service.hw_setups()).get(sid, sid),
-                                        "configured": service.hardware_configured()}}
-        except Exception:
-            return {"hardware_footer": {"id": "unset", "label": "Not configured", "configured": False}}
-
     @app.after_request
     def _set_headers(response):
         for key, value in _SECURITY_HEADERS.items():

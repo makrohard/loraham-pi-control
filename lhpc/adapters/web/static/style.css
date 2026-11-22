@@ -133,7 +133,6 @@ main.wrap .homeduo > .card.wsbox, main.wrap .homeduo > .card.sysbox { width: min
 }
 .site-footer { color: var(--muted); font-size: .8rem; text-align: center; padding: 1.5rem 3.2rem;
                position: relative; }   /* relative: anchors the theme toggle to the footer's right edge */
-.site-footer .sub { margin-top: .4rem; }   /* no opacity fade: muted@.85 on --bg was <4.5:1 */
 /* Footer version/head freshness indicator. */
 .ver { font-weight: 600; }
 .ver-green { color: var(--ok); }

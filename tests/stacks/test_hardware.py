@@ -261,30 +261,29 @@ def test_stacks_page_renders_when_unconfigured(tmp_path):
     r = app.test_client().get("/stacks?open=daemon&cfg=daemon")
     assert r.status_code == 200
     body = r.get_data(as_text=True)
-    assert "Radio hardware" in body                              # per-stack "configure" note shown
+    from htmlq import parse
+    notes = [n for n in parse(body).find("div", class_="depnote") if n.text.startswith("Radio hardware")]
+    assert notes, "per-stack configure note shown"               # the note itself (the footer line is gone, F17)
     # DEC-W57: the board selector is Add Hardware's HAT row now; it renders with no hardware configured.
     add = app.test_client().get("/hardware/add")
     assert add.status_code == 200 and 'id="hw-addhat"' in add.get_data(as_text=True)
 
 
-def test_footer_shows_current_hardware_friendly(tmp_path):
+@pytest.mark.parametrize("configured", [True, False])
+def test_footer_has_no_radio_hardware_line(tmp_path, configured):
+    # F17: the footer's "Radio hardware: <label>" line is gone, configured or not; the rest of the footer stays
+    from htmlq import parse
     from lhpc.adapters.web.app import create_app
     svc = _svc(tmp_path)
-    _setup(svc, "loraham")
+    if configured:
+        _setup(svc, "loraham")
     app = create_app(service_factory=lambda: svc)
     app.config["SESSION_COOKIE_SECURE"] = False
-    body = app.test_client().get("/").get_data(as_text=True)
-    assert "Radio hardware:" in body                             # 3rd footer line
-    assert "LoRaHAM dual-module" in body and "legacy" not in body
-
-
-def test_footer_unconfigured_says_not_configured(tmp_path):
-    from lhpc.adapters.web.app import create_app
-    svc = _svc(tmp_path)                                         # module opts out of the baseline -> unset
-    app = create_app(service_factory=lambda: svc)
-    app.config["SESSION_COOKIE_SECURE"] = False
-    body = app.test_client().get("/").get_data(as_text=True)
-    assert "Radio hardware:" in body and "Not configured" in body
+    doc = parse(app.test_client().get("/").get_data(as_text=True))
+    [footer] = doc.find("footer", class_="site-footer")
+    foot = doc.within(footer)
+    assert "Radio hardware" not in footer.text and not foot.find("div", class_="sub"), footer.text
+    assert "LoRaHAM Pi Control" in footer.text and "GitHub" in footer.text and foot.find("span", class_="ver")
 
 
 def test_hw_preset_label_is_friendly_never_legacy():
