@@ -1160,6 +1160,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "meshcore_running_mode": (service.meshcore_running_mode(_view_inst)
                                           if stack.id == _meshcore_mode.STACK_ID else ""),
                 "meshcore_rid": getattr(_view_inst, "rid", "") if stack.id == _meshcore_mode.STACK_ID else "",
+                # F26: the two node-name rows a repeater-name refusal marks (chat node + repeater), as the Settings
+                # form names them; the Mode banner's link carries them in `bad=`
+                "meshcore_name_fields": (_meshcore_name_fields() if stack.id == _meshcore_mode.STACK_ID else ""),
                 "installed": installed,
                 "has_source": has_source,
                 "buildable": buildable,
@@ -2947,6 +2950,11 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         flash(result.summary, "ok" if result.ok else "warn")
         return _dp_back(stack_id, rid)
 
+    def _meshcore_name_fields() -> str:
+        """F26: the Settings form fields of the chat node name and the repeater node name, comma-joined (`?bad=`)."""
+        return ",".join(service._config_field(_meshcore_mode.STACK_ID, "file", _meshcore_mode.NODE_ID, n)
+                        for n in ("node_name", "repeater_name"))
+
     @app.post("/stacks/<stack_id>/mode")
     def stack_mode_save(stack_id: str):
         """The MeshCore stack's Mode, saved from the stack body: the SAME saved setting as the
@@ -2965,9 +2973,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if why:
             abort(make_response(f"Mode: {why}", 400))
         result = service.save_config(stack_id, {"file_mode": request.form.get("mode", "")}, inst=inst)
+        # F26: the result belongs under the Mode line (its own address), never on top; a repeater-name refusal also
+        # names the two node-name rows (`bad=`), the signal for the banner's link to them (nothing is persisted)
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
-              "ok" if result.ok else "warn")
-        return redirect(url_for("stacks_overview", open=stack_id, **({"radio": rid} if rid else {})) + "#stack-mode-" + stack_id)
+              ("ok" if result.ok else "warn") + f" @stack-mode-{stack_id}")
+        named = (not result.ok and (result.data or {}).get("reason") == _meshcore_mode.REASON_REPEATER_NAME_REQUIRED)
+        return redirect(url_for("stacks_overview", open=stack_id, **({"radio": rid} if rid else {}),
+                                **({"bad": _meshcore_name_fields()} if named else {})) + "#stack-mode-" + stack_id)
 
     @app.post("/stacks/<stack_id>/config/reset")
     def stack_config_reset(stack_id: str):
