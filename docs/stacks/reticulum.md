@@ -38,7 +38,7 @@ join it — [Radios of one node](#radios-of-one-node).
 | setting | default | notes |
 |---|---|---|
 | `backend` | `daemon` | per radio: `daemon` (through the LoRaHAM daemon, any radio) or `spi` (the direct driver, SPI radios only); a save is refused while that radio's interface runs and for `spi` on a USB radio; it takes effect at the next start |
-| `frequency` | 868 500 000 Hz / 434 500 000 Hz | per band — see [Band limits](#band-limits) |
+| `frequency` | 868 500 000 Hz / 434 500 000 Hz | `backend = spi` only (these four rows): with `backend = daemon` the radio's values are on its **Daemon radio parameters** panel ([daemon](daemon.md)); per band — see [Band limits](#band-limits) |
 | `bandwidth` · `spreadingfactor` · `codingrate` | 125 000 Hz · 8 · 5 | BW 62.5–500 kHz, SF 7–12 (SF6 needs implicit-header mode, unsupported), CR 4/5–4/8 |
 | `txpower` | 14 dBm (868) / 10 dBm (433) | the driver refuses anything above the band policy: 14 dBm on 868, 10 dBm on 433 |
 | `rnode_framing` | yes | the RNode firmware's air format, so LHPC boxes and RNode devices hear each other: the driver adds the RNode header byte to every frame, splits packets at 254 bytes and programs the RNode preamble for the SF/BW (18 at SF8/BW125; an SX127x hears an RNode only with at least that). A framed box and a bare box cannot hear each other: every box of a link uses the same setting (`no` = the bare format of LHPC before 0.14.0). The start refuses, before anything is stopped, while the built driver predates the switch (`lhpc update reticulum --source pinned --yes` + `lhpc build reticulum --yes`). In the RF log a split packet is two lines; Decrypt strips and reassembles them |

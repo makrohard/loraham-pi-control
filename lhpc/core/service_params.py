@@ -190,7 +190,21 @@ class ParamsConfigMixin:
         dup = dup_run if kind == "run" else dup_file
         return f"{prefix}{comp_id}__{name}" if name in dup else f"{prefix}{name}"
 
-    def config_param_fields(self, target: str, band: str = "") -> list[dict]:
+    def _panel_owned(self, target: str, inst) -> bool:
+        """reti B2: instance `inst` of `target` takes its `from_panel` params from its daemon panel (a SAVE_ONLY stack on
+        the daemon backend), so the Config page leaves them out."""
+        from . import daemon_params
+        s = self.stack(self._owner_stack_id(target))
+        return (s is not None and s.id in daemon_params.SAVE_ONLY
+                and _instances.access(self, s, getattr(inst, "rid", "") or "") == "daemon")
+
+    def _shown_file_params(self, target: str, comp, inst) -> list:
+        """`comp`'s config-file params the Config page shows for instance `inst`: not hidden, not the daemon panel's."""
+        panel = self._panel_owned(target, inst)
+        return [p for p in (comp.config_file.params if comp.config_file else ())
+                if not p.hidden and not (panel and p.from_panel)]
+
+    def config_param_fields(self, target: str, band: str = "", inst=None) -> list[dict]:
         """Config-page editable run + file parameters as {component, name, kind ('run'|'file'), field
         (`c_`/`f_` scheme), key (canonical API key), flag, default} — the single source of truth for
         the Config POST parser to fold each submitted field into its canonical API key. [] for a
@@ -201,8 +215,7 @@ class ParamsConfigMixin:
         out: list[dict] = []
         for c in self._target_components(target):
             for kind, p in ([("run", p) for p in self._form_run_params(c)]
-                            + [("file", p) for p in (c.config_file.params if c.config_file else ())
-                               if not getattr(p, "hidden", False)]):
+                            + [("file", p) for p in self._shown_file_params(target, c, inst)]):
                 out.append({
                     "component": c.id, "name": p.name, "kind": kind, "flag": p.kind == "flag",
                     "field": self._config_field(target, kind, c.id, p.name),
@@ -236,8 +249,7 @@ class ParamsConfigMixin:
             # and the confirm:start panel (both consume this method).
             by_group: dict[str, list] = {}
             for kind, p in ([("run", p) for p in self._form_run_params(c)]
-                            + [("file", p) for p in (c.config_file.params if c.config_file else ())
-                               if not getattr(p, "hidden", False)]):
+                            + [("file", p) for p in self._shown_file_params(target, c, inst)]):
                 idrec = id_rows.get((c.id, kind, p.name))
                 default = ("" if idrec else
                            self._op_subst(self._band_default(p, cfg_band or band, inst)))
@@ -649,16 +661,14 @@ class ParamsConfigMixin:
             "sources": sources,
             # File params GROUPED by component (like run params) — each with its own fields/values.
             "file_components": [{"id": c.id, "name": c.name,
-                                 "params": [p for p in c.config_file.params if not p.hidden],
+                                 "params": self._shown_file_params(target, c, inst),
                                  "fields": {p.name: self._config_field(target, "file", c.id, p.name)
                                             for p in c.config_file.params},
                                  "values": {p.name: self._resolved_param_value(target, "file", c.id,
                                                                                p.name, cfg_band, inst)
                                             for p in c.config_file.params}}
-                                for c in members if c.config_file
-                                and any(not p.hidden for p in c.config_file.params)],
-            "file_params": [p for c in members if c.config_file
-                            for p in c.config_file.params if not p.hidden],
+                                for c in members if self._shown_file_params(target, c, inst)],
+            "file_params": [p for c in members for p in self._shown_file_params(target, c, inst)],
             "file_values": self.file_config_values(target, cfg_band, inst),
             "bands": list(bands),       # allowed bands ([] = single-band stack)
             "band": cfg_band,           # the band currently being edited
@@ -1899,7 +1909,7 @@ class ParamsConfigMixin:
             """(values, why) of component `c`'s file params for one instance (`stored`: its saved values); a node
             member's (`owner` False) renders only its LoRa section, so the Internet interface's rules are the owner's."""
             values = {}
-            secret_error = ""
+            secret_error, panel = "", None
             for p in fc.params:
                 if getattr(p, "secret_ref", ""):
                     # Separate trust layer: never `over`, never `stored`, never a default.
@@ -1958,6 +1968,16 @@ class ParamsConfigMixin:
                     except (OSError, PathContainmentError, ValueError) as exc:
                         secret_error = str(exc)
                         break
+                    continue
+                if getattr(p, "from_panel", "") and self._panel_owned(target, inst):
+                    # reti B2: a daemon radio's value is its panel's (one source, plan §1b R7); on spi the ordinary
+                    # value (a hidden one's is blank: left out)
+                    if panel is None:
+                        panel, secret_error = _radio_start.panel_section(self, self._owner_stack_id(target),
+                                                                         getattr(inst, "rid", "") or "")
+                        if secret_error:
+                            break
+                    values[p.name] = panel.get(p.key, "")
                     continue
                 if getattr(p, "from_backend", ()):      # B1: the value for the instance's backend (reticulum `type`)
                     values[p.name] = dict(p.from_backend).get(

@@ -295,14 +295,15 @@ class DaemonParamsMixin:
 
     def _daemon_param_applies(self, stack_id: str, rid: str) -> dict:
         """The daemon params lhpc APPLIES for this stack on radio `rid` — the effective value (the instance's own set
-        `<sid>@<rid>` over the radio's row dp_* over the source default; DEC-W384az) of EVERY param that has one.
+        `<sid>@<rid>` over what it inherits, radio_start.panel_dp, over the source default; DEC-W384az) of EVERY param that has one.
         Applied ONCE after the daemon is up and before the stack's own components start; the app then overwrites the
-        radio params it owns. Ordered radio-first. Empty for non-daemon stacks and a rid that is no enabled radio."""
+        radio params it owns. Ordered radio-first. Empty for non-daemon stacks, SAVE_ONLY stacks and a rid that is no
+        enabled radio."""
         from . import daemon_params
         _inst, band, why = radio_start.daemon_radio(self, rid)
-        if why or not self._has_daemon_params(stack_id):
-            return {}
-        ov = {**radio_start.row_dp(self, rid), **radio_start.instance_dp(self, stack_id, rid)}   # the instance's set wins
+        if why or not self._has_daemon_params(stack_id) or stack_id in daemon_params.SAVE_ONLY:
+            return {}                   # SAVE_ONLY (Reticulum): its interface sends its section, LHPC sends nothing
+        ov = radio_start.panel_dp(self, stack_id, rid)                    # the instance's set wins
         out, pdef = {}, radio_start.power_window(self, rid)[0]    # one list + model read for every param (G1-B3-CODE N3)
         for name in daemon_params.ALL_PARAMS:
             eff = ov.get(name) or daemon_params.default_value(stack_id, band, name, pdef)
@@ -385,6 +386,9 @@ class DaemonParamsMixin:
         if why:
             return ActionResult(False, f"Cannot apply {target}'s daemon parameters: {why}")
         name = target if is_daemon else f"{sid}@{rid}"
+        if sid in daemon_params.SAVE_ONLY:
+            return ActionResult(False, f"{name}'s daemon parameters take effect when its radio (re)connects: "
+                                       "Save them, then reconnect the radio")
         if not (is_daemon or radio_start.radio_clients(self, rid, sid)[1]):
             return ActionResult(False, f"Apply live is only available while {name} is running")
         keys = [f"lifecycle.{sid}", "claim." + radio_start.claim_key(self._paths, rid)]   # vs start/stop on its radio

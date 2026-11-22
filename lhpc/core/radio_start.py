@@ -794,33 +794,62 @@ def instance_dp(svc, sid: str, rid: str) -> dict:
             and daemon_control.validate_set(name, str(v), chip, grant, top) is None}
 
 
+def inherited_dp(svc, sid: str, rid: str) -> dict:
+    """What instance `<sid>@<rid>`'s own daemon set inherits: its radio's row (`row_dp`); nothing for a SAVE_ONLY stack
+    (Reticulum: its profile alone, plan reti v21 §1d G1 row 180 B1)."""
+    from . import daemon_params
+    return {} if sid in daemon_params.SAVE_ONLY else row_dp(svc, rid)
+
+
+def panel_dp(svc, sid: str, rid: str) -> dict:
+    """THE daemon overrides of instance `<sid>@<rid>`: its own set over what it inherits — what its panel shows, its
+    start applies and (SAVE_ONLY) its interface's section renders."""
+    return {**inherited_dp(svc, sid, rid), **instance_dp(svc, sid, rid)}
+
+
 def dp_target(svc, target: str, rid: str) -> tuple:
     """(owner stack, is the daemon, rid's band, "") of `target`'s daemon settings on radio `rid`, or ("", False, "",
-    why): rid is no enabled radio, or `target` is no daemon client able to run on it."""
+    why): rid is no enabled radio, or `target` is no daemon client able to run on it (a SAVE_ONLY stack: only on the
+    daemon backend)."""
     from . import daemon_params, instances
     _inst, band, why = daemon_radio(svc, rid)
     sid, is_daemon = svc._owner_stack_id(target), svc._is_daemon_target(target)
     if not why and not is_daemon and not (daemon_params.is_client(sid) and rid in instances.radios_able(svc, sid)):
         why = f"{target} has no daemon parameters on {rid}"
+    if not why and sid in daemon_params.SAVE_ONLY and instances.access(svc, svc.stack(sid), rid) != "daemon":
+        why = f"{sid}@{rid} uses backend spi: its radio settings are on its Config page"
     return (sid, is_daemon, band, "") if not why else ("", False, "", why)
+
+
+def _panel_rows(svc, sid: str, rid: str, band: str) -> list:
+    from . import daemon_params
+    return daemon_params.stack_view(sid, band, panel_dp(svc, sid, rid), chip_family(svc, rid) or "",
+                                    effective_high_power(svc, rid), *power_window(svc, rid))
+
+
+def panel_section(svc, sid: str, rid: str) -> tuple:
+    """({section key: value}, "") of SAVE_ONLY instance `<sid>@<rid>` — its panel's rows (the same function the panel
+    shows) in the interface's spelling — or ({}, why) when it has no panel there."""
+    from . import daemon_params
+    _sid, _is_daemon, band, why = dp_target(svc, sid, rid)
+    return ({}, why) if why else (daemon_params.section_values(_panel_rows(svc, sid, rid, band)), "")
 
 
 def params_view(svc, target: str, rid: str) -> dict:
     """DEC-W384az: the daemon settings panel of `target` on radio `rid`: the daemon's own shows rid's row dp_* over the
-    defaults; a client stack's its instance set `<sid>@<rid>` over the row over its defaults (what its start applies).
-    {} when `dp_target` refuses."""
+    defaults; a client stack's its instance set `<sid>@<rid>` over what it inherits over its defaults (`panel_dp`: what
+    its start applies; SAVE_ONLY: what its interface's section renders, Save only). {} when `dp_target` refuses."""
     from . import daemon_control, daemon_params, instances
     sid, is_daemon, band, why = dp_target(svc, target, rid)
     if why:
         return {}
-    ov = {**row_dp(svc, rid), **instance_dp(svc, sid, rid)}
     able = None if is_daemon else set(instances.radios_able(svc, sid))
     choose = [r for r in view_radios(svc._paths) if able is None or r[0] in able]     # the radios this panel can show
-    return {"stack": target, "band": band, "rid": rid, "is_daemon": is_daemon,
-            "can_apply": is_daemon or _apply_open(radio_clients(svc, rid, sid)), "radios": choose,
+    save_only = sid in daemon_params.SAVE_ONLY
+    return {"stack": target, "band": band, "rid": rid, "is_daemon": is_daemon, "save_only": save_only,
+            "can_apply": not save_only and (is_daemon or _apply_open(radio_clients(svc, rid, sid))), "radios": choose,
             "high_power": svc.high_power_state(band, daemon_control.read_view(svc._system, rid), rid),
-            "rows": daemon_params.stack_view(sid, band, ov, chip_family(svc, rid) or "", effective_high_power(svc, rid),
-                                             *power_window(svc, rid))}
+            "rows": _panel_rows(svc, sid, rid, band)}
 
 
 def _apply_open(clients) -> bool:
@@ -835,19 +864,21 @@ def save_params(svc, target: str, rid: str, values: dict):
     dp_* fields only, under the list's lock, W217). A client stack's: its instance set `dp_<PARAM>` in
     `<sid>@<rid>.toml` (locked merge; other keys survive); a value equal to what it inherits (the row, else the
     default) clears, so the set holds only what differs."""
-    from . import commands
+    from . import commands, daemon_params
     from .service_base import ActionResult
     sid, is_daemon, band, why = dp_target(svc, target, rid)
     if why:
         return ActionResult(False, f"Cannot save the daemon settings of {target} on {rid}: {why}")
     if is_daemon:
         return set_row_dp(svc, rid, None, (target, values))
+    if sid in daemon_params.SAVE_ONLY and str(values.get("MODE", "")).strip().upper() not in ("", "LORA"):
+        return ActionResult(False, f"the daemon settings of {sid}@{rid} not saved: MODE is LORA for {sid}")
     edits, err = dp_updates(svc, sid, band, values, chip_family(svc, rid) or "", effective_high_power(svc, rid),
-                            inherited=row_dp(svc, rid), pwin=power_window(svc, rid))
+                            inherited=inherited_dp(svc, sid, rid), pwin=power_window(svc, rid))
     if err:
         return ActionResult(False, err)
     if "POWER" in edits and sid in running_ceiling_stacks(svc, rid):
-        why = ceiling_change(svc, rid, {sid: edits["POWER"] or row_dp(svc, rid).get("POWER", "")},
+        why = ceiling_change(svc, rid, {sid: edits["POWER"] or inherited_dp(svc, sid, rid).get("POWER", "")},
                              cfgmod.apply_config_transaction)
         if why:
             return ActionResult(False, f"the daemon settings of {sid}@{rid} not saved: {why}")

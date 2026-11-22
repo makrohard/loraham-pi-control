@@ -4,6 +4,8 @@
 
 - Reticulum now reaches the radio through the daemon (any radio, USB too); `backend = spi` per radio
   (`lhpc config reticulum@<rid>`) keeps the direct driver on an SPI radio.
+- Reticulum on the daemon: its radio values are on the radio's Daemon radio parameters panel (Reticulum's defaults);
+  re-enter yours there (the Config page keeps frequency, SF, BW, CR and power for `backend = spi` only).
 
 ## 0.14.0
 

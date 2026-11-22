@@ -363,6 +363,9 @@ class FileParam:
     panel_power: bool = False    # hidden, derived: the instance's daemon-panel POWER (radio_start.post_power), never stored
     card_ident: int = 0          # F30: >0 = shown in the Home card's stack title (order), e.g. a node name
     from_backend: tuple = ()     # hidden, derived: ((backend, value), …) — the value for the instance's `backend` param
+    # reti B2: a daemon-panel PARAM (FREQ…): on the daemon backend the value is that panel row's (radio_start.
+    # panel_section), never stored here; on spi a shown one is the Config page's own, a hidden one is left out.
+    from_panel: str = ""
 
 
 @dataclass(frozen=True)

@@ -29,6 +29,10 @@ OPERATOR_PARAMS = ("CADWAIT", "CADIDLE", "TXQUEUE", "CADMONITOR", "CADRSSI", "CA
 # change takes effect at their next start (Apply live leaves it out).
 POWER_OWNED = frozenset({"chat", "kiss"})
 POWER_AT_START = frozenset({"kiss"})
+# Reticulum on the daemon (plan reti v21 §1b R7, §1d RED-2): its interface is the one runtime applier — it sends the
+# panel's values (rendered into its config section, `section_values`) at every (re)connect. So every row is
+# operator-owned, takes effect at the radio's next (re)connect, and is Save-only: no LHPC SET, no Apply live.
+SAVE_ONLY = frozenset({"reticulum"})
 
 # Params rendered as a dropdown (fixed enum or small discrete range). Must match daemon_control.
 DROPDOWN_CHOICES = {
@@ -150,11 +154,26 @@ STACK_DEFAULTS: dict[str, dict[str, dict[str, str]]] = {
     # config). Never greyed. FREQ / CADWAIT / CADIDLE come from _BASE.
     "daemon": {"*": {"TXMODE": "MANAGED", "SF": "12", "BW": "125.0", "CR": "5",
                      "CRC": "1", "PREAMBLE": "8", "SYNC": "0x12", "POWER": "17"}},
+    # The Reticulum profile (plan reti v21 §1b). No PREAMBLE: without a saved one the interface derives it (the RNode
+    # preamble for the SF/BW with RNode framing, else 8). POWER = the band cap.
+    "reticulum": {
+        "*": {"MODE": "LORA", "TXMODE": "MANAGED", "SF": "8", "BW": "125.0", "CR": "5", "CRC": "1", "LDRO": "AUTO",
+              "SYNC": "0x12", "TXQUEUE": "1", "CADIDLE": "50", "CADTXAFTERTIMEOUT": "0"},
+        "433": {"FREQ": "434.500", "POWER": "10"},
+        "868": {"FREQ": "868.500", "POWER": "14"},
+    },
 }
 
 # Stacks that talk to the daemon (get a panel). The `daemon` stack itself is handled per-radio
 # (its base config, nothing greyed). Direct-SPI stacks (meshtastic) have no daemon panel.
-CLIENT_STACKS = ("chat", "kiss", "voice", "meshcom", "meshcore")
+CLIENT_STACKS = ("chat", "kiss", "voice", "meshcom", "meshcore", "reticulum")
+
+# A SAVE_ONLY panel's param -> its key in the interface's config section (the seam's spelling, loraham-rns-interface
+# section.py). MODE is not rendered: Reticulum is LoRa only (its panel offers LORA alone).
+SECTION_KEYS = {"FREQ": "frequency", "BW": "bandwidth", "SF": "spreadingfactor", "CR": "codingrate",
+                "POWER": "txpower", "PREAMBLE": "preamble", "SYNC": "syncword", "CRC": "crc", "LDRO": "ldro",
+                "TXMODE": "txmode", "TXQUEUE": "txqueue", "CADIDLE": "cadidle", "CADWAIT": "cadwait",
+                "CADRSSI": "cadrssi", "CADMONITOR": "cadmonitor", "CADTXAFTERTIMEOUT": "cadtxaftertimeout"}
 
 
 def is_client(stack_id: str) -> bool:
@@ -178,7 +197,8 @@ def default_value(stack_id: str, band: str, name: str, power_default: int | None
 def _app_owned(stack_id: str, band: str, name: str) -> bool:
     """True when the client app SETs this param after start (so the panel greys it, and it is
     overwritten). The daemon has no app (never greyed); LBT timing is never app-owned."""
-    if not is_client(stack_id) or name in OPERATOR_PARAMS or (name == "POWER" and stack_id in POWER_OWNED):
+    if (not is_client(stack_id) or stack_id in SAVE_ONLY or name in OPERATOR_PARAMS
+            or (name == "POWER" and stack_id in POWER_OWNED)):
         return False
     per = STACK_DEFAULTS.get(stack_id, {})
     return any(name in per.get(key, {}) for key in (band, "*"))
@@ -203,8 +223,23 @@ def stack_view(stack_id: str, band: str, overrides: dict[str, str] | None = None
             rows.append({"name": name, "group": group,
                          "value": overrides.get(name) or dv, "default": dv,
                          "app_owned": _app_owned(stack_id, band, name),
-                         "at_start": name == "POWER" and stack_id in POWER_AT_START,
+                         "at_start": (name == "POWER" and stack_id in POWER_AT_START) or stack_id in SAVE_ONLY,
                          "desc": PARAM_DESC.get(name, ""),
-                         "choices": list(DROPDOWN_CHOICES.get(name, ())),
+                         "choices": ["LORA"] if name == "MODE" and stack_id in SAVE_ONLY
+                         else list(DROPDOWN_CHOICES.get(name, ())),
                          "num": {"min": num[0], "max": num[1]} if num else None})
     return rows
+
+
+def section_values(rows) -> dict[str, str]:
+    """{section key: value} of a SAVE_ONLY panel's `rows` (stack_view), in the interface's units: FREQ MHz -> Hz,
+    BW kHz -> Hz, the rest as shown. A row without a value is left out (the interface's default)."""
+    from decimal import Decimal
+    out = {}
+    for r in rows:
+        key, value = SECTION_KEYS.get(r["name"]), str(r["value"]).strip()
+        if key and value:
+            scale = {"FREQ": 1_000_000, "BW": 1000}.get(r["name"])
+            out[key] = str(int(Decimal(value) * scale)) if scale else value
+    return out
+

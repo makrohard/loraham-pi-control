@@ -3360,6 +3360,7 @@ label = "Airtime accounting directory"
 [[stack.component.config_file.param]]
 name = "frequency"
 key = "frequency"
+from_panel = "FREQ"
 section = "interfaces/LoRa"
 kind = "int"
 default = "868500000"
@@ -3370,6 +3371,7 @@ label = "Frequency Hz"
 [[stack.component.config_file.param]]
 name = "bandwidth"
 key = "bandwidth"
+from_panel = "BW"
 section = "interfaces/LoRa"
 kind = "enum"
 choices = ["62500", "125000", "250000", "500000"]
@@ -3378,6 +3380,7 @@ label = "Bandwidth Hz"
 [[stack.component.config_file.param]]
 name = "spreadingfactor"
 key = "spreadingfactor"
+from_panel = "SF"
 section = "interfaces/LoRa"
 kind = "int"
 default = "8"
@@ -3387,6 +3390,7 @@ label = "Spreading factor (SF7-12; SF6 needs implicit-header mode, unsupported)"
 [[stack.component.config_file.param]]
 name = "codingrate"
 key = "codingrate"
+from_panel = "CR"
 section = "interfaces/LoRa"
 kind = "int"
 default = "5"
@@ -3396,6 +3400,7 @@ label = "Coding rate (4/n)"
 [[stack.component.config_file.param]]
 name = "txpower"
 key = "txpower"
+from_panel = "POWER"
 radio_power = true
 section = "interfaces/LoRa"
 kind = "int"
@@ -3404,9 +3409,122 @@ band_defaults = { 433 = "10", 868 = "14" }
 min = 0
 max = 17
 label = "TX power dBm — 868 SRD allows 25 mW (14 dBm); the 433 SRD band is 10 mW ERP (10 dBm)"
+# The daemon backend's other radio values: from the radio's Daemon radio parameters panel (reti B2; `from_panel`
+# also on the five above: on the daemon backend their value is the panel's, the Config page drops them). Left out
+# on spi and when blank: `preamble` only when saved there (else the driver derives the RNode preamble for the SF/BW).
+[[stack.component.config_file.param]]
+name = "preamble"
+key = "preamble"
+from_panel = "PREAMBLE"
+section = "interfaces/LoRa"
+kind = "str"
+default = ""
+hidden = true
+omit_if_empty = true
+label = "PREAMBLE (from the daemon panel)"
+[[stack.component.config_file.param]]
+name = "syncword"
+key = "syncword"
+from_panel = "SYNC"
+section = "interfaces/LoRa"
+kind = "str"
+default = ""
+hidden = true
+omit_if_empty = true
+label = "SYNC (from the daemon panel)"
+[[stack.component.config_file.param]]
+name = "crc"
+key = "crc"
+from_panel = "CRC"
+section = "interfaces/LoRa"
+kind = "str"
+default = ""
+hidden = true
+omit_if_empty = true
+label = "CRC (from the daemon panel)"
+[[stack.component.config_file.param]]
+name = "ldro"
+key = "ldro"
+from_panel = "LDRO"
+section = "interfaces/LoRa"
+kind = "str"
+default = ""
+hidden = true
+omit_if_empty = true
+label = "LDRO (from the daemon panel)"
+[[stack.component.config_file.param]]
+name = "txmode"
+key = "txmode"
+from_panel = "TXMODE"
+section = "interfaces/LoRa"
+kind = "str"
+default = ""
+hidden = true
+omit_if_empty = true
+label = "TXMODE (from the daemon panel)"
+[[stack.component.config_file.param]]
+name = "txqueue"
+key = "txqueue"
+from_panel = "TXQUEUE"
+section = "interfaces/LoRa"
+kind = "str"
+default = ""
+hidden = true
+omit_if_empty = true
+label = "TXQUEUE (from the daemon panel)"
+[[stack.component.config_file.param]]
+name = "cadidle"
+key = "cadidle"
+from_panel = "CADIDLE"
+section = "interfaces/LoRa"
+kind = "str"
+default = ""
+hidden = true
+omit_if_empty = true
+label = "CADIDLE (from the daemon panel)"
+[[stack.component.config_file.param]]
+name = "cadwait"
+key = "cadwait"
+from_panel = "CADWAIT"
+section = "interfaces/LoRa"
+kind = "str"
+default = ""
+hidden = true
+omit_if_empty = true
+label = "CADWAIT (from the daemon panel)"
+[[stack.component.config_file.param]]
+name = "cadrssi"
+key = "cadrssi"
+from_panel = "CADRSSI"
+section = "interfaces/LoRa"
+kind = "str"
+default = ""
+hidden = true
+omit_if_empty = true
+label = "CADRSSI (from the daemon panel)"
+[[stack.component.config_file.param]]
+name = "cadmonitor"
+key = "cadmonitor"
+from_panel = "CADMONITOR"
+section = "interfaces/LoRa"
+kind = "str"
+default = ""
+hidden = true
+omit_if_empty = true
+label = "CADMONITOR (from the daemon panel)"
+[[stack.component.config_file.param]]
+name = "cadtxaftertimeout"
+key = "cadtxaftertimeout"
+from_panel = "CADTXAFTERTIMEOUT"
+section = "interfaces/LoRa"
+kind = "str"
+default = ""
+hidden = true
+omit_if_empty = true
+label = "CADTXAFTERTIMEOUT (from the daemon panel)"
 # RNode air framing (driver `rnode_framing`): the RNode firmware's one header byte per frame,
 # packets split at 254 bytes, and the RNode preamble for the SF/BW — the driver derives that
-# preamble itself, so NO `preamble` key is rendered here (an explicit one would override it).
+# preamble itself unless the daemon panel saved one (`preamble` above).
 [[stack.component.config_file.param]]
 name = "rnode_framing"
 key = "rnode_framing"

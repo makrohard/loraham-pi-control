@@ -17,7 +17,7 @@ import re
 import tomllib
 from pathlib import Path
 
-from . import commands, validators
+from . import commands, daemon_params, validators
 from .assets import asset_path
 from .model import (
     BinarySpec,
@@ -83,6 +83,7 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             panel_power=p.get("panel_power", False) is True,
             card_ident=_card_ident(p, "config_file"),
             from_backend=tuple((str(k), str(v)) for k, v in (p.get("from_backend", {}) or {}).items()),
+            from_panel=str(p.get("from_panel", "")),
         )
         for p in raw.get("param", [])
     )
@@ -128,6 +129,9 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             raise ManifestError(f"param {prm.name!r} has panel_power and must be a hidden int")
         if prm.from_backend and not (prm.hidden and prm.kind == "str"):
             raise ManifestError(f"param {prm.name!r} has from_backend and must be a hidden str")
+        if prm.from_panel and (prm.from_panel not in daemon_params.SECTION_KEYS or (prm.hidden and not prm.omit_if_empty)):
+            raise ManifestError(f"param {prm.name!r}: from_panel {prm.from_panel!r} must name a panel row of "
+                                f"{', '.join(daemon_params.SECTION_KEYS)}; a hidden one is omit_if_empty")
         if prm.secret_ref and prm.secret_file:
             raise ManifestError(f"param {prm.name!r} declares both secret_ref and secret_file "
                                 f"— a secret has exactly one source")

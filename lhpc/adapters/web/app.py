@@ -2714,7 +2714,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # `file_` prefix) BEFORE save — so duplicate names never flatten and unqualified duplicates
         # are rejected by the canonical bundle path.
         values = {}
-        for f in service.config_param_fields(stack_id, band):
+        for f in service.config_param_fields(stack_id, band, inst):
             if f["flag"]:
                 v = "1" if request.form.get(f["field"]) else ""
             else:

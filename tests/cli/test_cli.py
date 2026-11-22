@@ -534,7 +534,7 @@ def test_config_ambiguous_param_refuses_without_mutating(monkeypatch):
         def _is_daemon_target(self, s):
             return False
 
-        def config_param_fields(self, stack, band):
+        def config_param_fields(self, stack, band, inst=None):
             return [{"component": "a", "name": "call", "kind": "run", "key": "a.call", "default": ""},
                     {"component": "b", "name": "call", "kind": "run", "key": "b.call", "default": ""}]
 

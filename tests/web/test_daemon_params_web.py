@@ -598,3 +598,13 @@ def test_app_apply_holds_the_band_claim_against_a_competing_start(tmp_path, monk
     monkeypatch.setattr(radio_start, "radio_clients", used)
     assert svc.apply_daemon_params("meshcom", rid="r1").data.get("attempted")
     assert refused == ["meshcore"]
+
+
+@pytest.mark.contract
+def test_reticulum_panel_is_save_only(web):
+    # reti B2: the interface sends its section at every (re)connect, LHPC sends nothing: Save, never Apply live
+    body = web().get("/stacks?open=reticulum").get_data(as_text=True)
+    row = _row(body, "reticulum")
+    assert "Daemon radio parameters" in row.text
+    names = [b.text for b in row.find("button")]
+    assert "Reset to defaults" in names and "Apply live" not in names

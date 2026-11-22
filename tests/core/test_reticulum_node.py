@@ -57,7 +57,8 @@ def test_an_owner_alone_renders_its_own_named_interface_and_the_runner_names_it(
 
 def test_members_render_disabled_from_their_own_settings_and_band(tmp_path):
     svc = _svc(tmp_path, (*BOX_H[:2], dataclasses.replace(BOX_H[2], enabled=False), BOX_H[3]))
-    _save(tmp_path, "r4", member_of="r2", file_frequency="868300000")     # r4 (868, USB, daemon): a member of r2
+    _save(tmp_path, "r4", member_of="r2", dp_FREQ="868.300")             # r4 (868, USB, daemon): a member of r2; B2: its
+    #                                                                      radio values are its own daemon panel's
     _save(tmp_path, "r1", member_of="r2")                                   # r1 (433): a member on the other band
     _save(tmp_path, "r3", member_of="r2")                                   # r3: disabled radio -> absent
     text = _render(tmp_path, svc)

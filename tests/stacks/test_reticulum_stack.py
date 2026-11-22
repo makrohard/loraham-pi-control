@@ -1025,7 +1025,10 @@ def test_rnode_framing_is_on_by_default_and_off_is_saved_as_a_file_value():
     """The maintainer's 0.14.0 word: framing ON everywhere, so LHPC boxes and RNode devices hear
     each other. Off is the operator's override and is kept as one (stored, not dropped as a default)."""
     by_name = {p.name: p for p in _rns_file_params()[0]}
-    assert by_name["rnode_framing"].default == "yes" and "preamble" not in by_name
+    assert by_name["rnode_framing"].default == "yes"
+    # reti B2: a `preamble` key only from the daemon panel, when saved there (blank: left out, the driver derives it)
+    assert (by_name["preamble"].from_panel, by_name["preamble"].default, by_name["preamble"].omit_if_empty) == (
+        "PREAMBLE", "", True)
     from lhpc.core.services import ControllerService
     svc = ControllerService()
     assert svc.file_config_values("reticulum")["rnode_framing"] == "yes"

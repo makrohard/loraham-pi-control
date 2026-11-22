@@ -395,9 +395,14 @@ def _cmd_config(svc, args) -> int:
         return _config_list(svc, stack, inst)
 
     # show / set a single parameter — resolve the name to its canonical key (NO first-match).
-    fields = svc.config_param_fields(stack, band)
+    fields = svc.config_param_fields(stack, band, inst)
     matches = [f for f in fields
                if f["name"] == args.param or f"{f['component']}.{f['name']}" == args.param]
+    if not matches and svc._panel_owned(stack, inst) and (panel := next(   # reti B2: on the daemon backend, the panel's
+            (p.from_panel for c in svc.stack(stack).components for p in (c.config_file.params if c.config_file else ())
+             if p.name == args.param and p.from_panel), "")):
+        print(f"ERR   {args.param} of {target} is on its daemon panel: lhpc config {target} --daemon-param {panel}=VALUE")
+        return 1
     if not matches:
         hint = svc.hmac_managed_param_hint(stack, args.param)
         if hint:
