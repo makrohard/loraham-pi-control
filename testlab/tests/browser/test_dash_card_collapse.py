@@ -57,3 +57,17 @@ def test_a_collapsed_card_keeps_polling_and_its_pill_live(flask_page):
         page.wait_for_function("l => document.getElementById('rd-badge-r3').textContent === l", arg=label)
         assert page.locator("#rd-badge-r3").is_visible(), label
     page.context.close()
+
+
+def test_the_cards_summary_keeps_the_phone_header_inset(flask_page):
+    # a25 N2: the phone rule's .7rem side padding (was on the card <header>) applies to the radio card's summary
+    page, _posts = flask_page(path="/", unix_replies={"/tmp/loraconf-r3.sock": _READY}, api={"/api/daemon/r3": _reply("daemon READY")})
+    pad = """() => { const s = getComputedStyle(document.querySelector('#radiobox-r3 > summary'));
+      return [s.paddingLeft, s.paddingRight, parseFloat(getComputedStyle(document.documentElement).fontSize)]; }"""
+    page.set_viewport_size({"width": 390, "height": 900})
+    p = page.evaluate(pad)
+    assert p[:2] == [f"{round(.7 * p[2], 2):g}px"] * 2, p
+    page.set_viewport_size({"width": 1280, "height": 900})
+    p = page.evaluate(pad)
+    assert p[:2] == [f"{round(1 * p[2], 2):g}px"] * 2, p
+    page.context.close()

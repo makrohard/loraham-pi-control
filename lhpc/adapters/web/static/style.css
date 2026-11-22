@@ -735,6 +735,7 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .radio-col > details.radiobox > summary h2 { margin: 0; font-size: 1.05rem; display: inline; }
 .radio-col > details.radiobox > summary .badge { margin-left: auto; }
 .radio-col > details.radiobox[open] > summary { border-bottom: 1px solid var(--line); margin-bottom: 0; }
+@media (max-width: 860px) { .radio-col > details.radiobox > summary { padding-left: .7rem; padding-right: .7rem; } }   /* as the card header did (a25 N2) */
 .systab { table-layout: fixed; width: 100%; border-collapse: collapse; }
 .systab th { width: 4.6rem; text-align: left; font-weight: 600; font-size: .88rem;
              padding: .3rem .4rem .3rem 0; }
