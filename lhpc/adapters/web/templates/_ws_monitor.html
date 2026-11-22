@@ -1,5 +1,6 @@
-{% from "_macros.html" import depnote_classes -%}
-<details class="advcfg" id="webserver-row--monitor">
+{% from "_macros.html" import depnote_classes, panel_banner -%}
+{#- F16: its results show INSIDE it, under Verify (own_results), and open it -#}
+<details class="advcfg" id="webserver-row--monitor"{% if panel_results('webserver-row--monitor') %} open{% endif %}>
     <summary>Monitor</summary>
     <section class="cfgsec">
       {% for w in mon.warnings %}<p class="depnote {{ depnote_classes(w.level) }}">{{ w.text }}</p>{% endfor %}
@@ -38,5 +39,6 @@
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
         <button type="submit">Verify now</button>
       </form>
+      {{ panel_banner(own_results('webserver-row--monitor')) }}
     </section>
   </details>

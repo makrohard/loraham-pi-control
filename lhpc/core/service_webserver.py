@@ -171,13 +171,13 @@ class WebserverOpsMixin:
         except Exception:
             return True                     # cannot prove containment -> keep the warning
 
-    def _ws_verify(self, cfg, proxies, *, probe_console: bool = False) -> dict:
+    def _ws_verify(self, cfg, proxies, *, probe_console: bool = False, console_serving: bool = False) -> dict:
         """THE single seam through which this mixin calls `webserver.verify()`: it supplies the
         containment-aware bypass test, and (by NOT passing an applied snapshot) guarantees that
         verifying never advances one. Activation is recorded separately, by `_record_applied`."""
         from . import webserver as _ws
         return _ws.verify(self._system, self._paths, cfg, proxies, probe_console=probe_console,
-                          bypassable=self._upstream_bypassable)
+                          bypassable=self._upstream_bypassable, console_serving=console_serving)
 
     def _record_applied(self, cfg, proxies) -> None:
         """Advance the applied-policy snapshot. Called ONLY where activation is proven: the config
@@ -264,7 +264,7 @@ class WebserverOpsMixin:
         return self.webserver_apply()
 
     @invalidates_snapshot
-    def webserver_verify(self) -> ActionResult:
+    def webserver_verify(self, *, console_serving: bool = False) -> ActionResult:
         """Explicit verification: assemble + persist the effective-evidence checklist.
 
         Validates the SAME config `apply` would promote — stack web-UI proxies included. Verifying a
@@ -273,7 +273,7 @@ class WebserverOpsMixin:
         nothing about whether nginx ever loaded it."""
         from . import pki as _pki
         ev = self._ws_verify(self.config().webserver, self._stack_web_proxies(),
-                             probe_console=True)
+                             probe_console=True, console_serving=console_serving)
         failed = [k for k, v in ev["checks"].items() if v == "failed"]
         ok = not failed
         summary = "webserver verified" if ok else f"verification found issues: {', '.join(failed)}"

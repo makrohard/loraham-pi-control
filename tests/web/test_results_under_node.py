@@ -25,7 +25,7 @@ def _slot(doc, node_id):
     return [b for b in doc.find("div", class_="panel-result") if b.index == anchor.end + 1]
 
 
-@pytest.mark.parametrize("level", ["controller/webserver-row--monitor", "controller/webserver-row"])
+@pytest.mark.parametrize("level", ["controller/webserver-row"])
 def test_verify_from_the_apps_page_shows_under_its_node_and_nothing_on_top(web, csrf, level):
     # red before c9: Verify's result was a top flash (and stacks_state.js scrolled there)
     c = web()
@@ -52,7 +52,39 @@ def test_a_result_whose_level_is_not_rendered_shows_on_top(web, csrf):
     assert top and not banners
 
 
+def _inside_monitor(doc, banners):
+    """F16: the Monitor's result banner INSIDE the Monitor node, after its Verify control, the node open."""
+    node = doc.by_id("webserver-row--monitor")
+    [form] = [f for f in doc.find("form") if f["action"] == _VERIFY]
+    assert node.has_attr("open"), "a result opens the Monitor"
+    assert len(banners) == 1, banners                                      # shown once, not again in its slot
+    assert node.index < banners[0].index <= node.end and banners[0].index > form.end
+
+
+def test_verify_from_the_apps_page_shows_inside_the_monitor_and_nothing_on_top(web, csrf):
+    # red before F16: the Monitor's result sat in page_actions' slot, outside the node (between Monitor and Certificates)
+    c = web()
+    r = c.post(_VERIFY, data={"_csrf": csrf(c), "_level": "controller/webserver-row--monitor"})
+    assert r.status_code == 302
+    doc, banners, top = _results(c)
+    assert banners and not top, (banners, top)
+    _inside_monitor(doc, banners)
+
+
 def test_a_result_from_a_level_page_shows_under_that_level(web, csrf):
+    c = web()
+    page = "/stacks/controller/menu/webserver-row--certificates"
+    doc = parse(c.get(page).get_data(as_text=True))
+    [form] = [f for f in doc.find("form") if f["action"] == "/webserver/init"]
+    data = {i["name"]: i["value"] for i in doc.within(form).find("input") if i["type"] == "hidden"}
+    r = c.post("/webserver/init", data=data)
+    assert r.headers["Location"].split("#")[0] == page
+    doc, banners, top = _results(c, page)
+    assert banners and not top
+    assert _slot(doc, "webserver-row--certificates") == banners           # directly under that level
+
+
+def test_a_result_from_the_monitor_page_shows_inside_the_monitor(web, csrf):
     c = web()
     page = "/stacks/controller/menu/webserver-row--monitor"
     doc = parse(c.get(page).get_data(as_text=True))
@@ -62,7 +94,7 @@ def test_a_result_from_a_level_page_shows_under_that_level(web, csrf):
     assert r.headers["Location"].split("#")[0] == page
     doc, banners, top = _results(c, page)
     assert banners and not top
-    assert _slot(doc, "webserver-row--monitor") == banners                # directly under that level
+    _inside_monitor(doc, banners)
 
 
 def test_an_addressed_result_keeps_its_address(web, csrf):

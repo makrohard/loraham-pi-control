@@ -349,7 +349,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     # whose panel is not on the page still shows (at the top). Without `@` an entry is global, as before.
     def _flash_entries() -> list:
         if "flash_entries" not in _g:
-            _g.flash_entries, _g.flash_taken = [], set()
+            _g.flash_entries, _g.flash_taken, _g.flash_shown = [], set(), set()
             for cat, msg in get_flashed_messages(with_categories=True):
                 words = str(cat).split()
                 dest = next((w[1:] for w in words if w.startswith("@")), "")
@@ -360,14 +360,22 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         """(severity, text) of the results addressed to the panel `dest`, in flash order."""
         entries = _flash_entries()
         _g.flash_taken.add(dest)
-        return [(sev, msg) for sev, d, msg in entries if d == dest]
+        return [] if dest in _g.flash_shown else [(sev, msg) for sev, d, msg in entries if d == dest]
+
+    def _own_results(dest: str) -> list:
+        """F16: the results of the panel `dest` for a banner the panel renders INSIDE itself. Call it only where
+        that banner renders: from then on `panel_results(dest)` is empty, so its slot and the page do not repeat it."""
+        rs = _panel_results(dest)
+        _g.flash_shown.add(dest)
+        return rs
 
     def _page_results() -> list:
         """(severity, text) of the results no panel took: the global ones and any whose panel is absent."""
         entries = _flash_entries()
         return [(sev, msg) for sev, d, msg in entries if not d or d not in _g.flash_taken]
 
-    app.jinja_env.globals.update(panel_results=_panel_results, page_results=_page_results)
+    app.jinja_env.globals.update(panel_results=_panel_results, page_results=_page_results,
+                                 own_results=_own_results)
 
     @app.context_processor
     def _inject_selfupdate():
@@ -3228,7 +3236,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     def webserver_verify():
         if not _csrf_ok():
             abort(400)
-        r = service.webserver_verify()
+        # This console answers this request: that proves it is serving (not that its unit is active).
+        r = service.webserver_verify(console_serving=True)
         flash(r.summary, "ok" if r.ok else "warn")
         return _ws_back()
 

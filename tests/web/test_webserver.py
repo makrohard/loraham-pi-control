@@ -2358,6 +2358,28 @@ def test_verify_fails_when_the_console_is_not_serving(tmp_path):
     assert res2.data["checks"]["console_running"] == "ok"
 
 
+def test_console_verify_reports_the_serving_console_running(tmp_path, web, csrf, monkeypatch):
+    """F16: Verify sent from the console flagged console_running as an issue. The console's own
+    sandbox denies it the user bus (lhpc-web.service InaccessiblePaths=%t/bus %t/systemd/private), so
+    `systemctl --user is-active` always fails there; the request being answered is the proof."""
+    paths = _paths(tmp_path)
+    _pki_full(paths)
+    conf_path = str(paths.under(*webserver.NGINX_CONF_STAGED))
+    unit = ("systemctl", "--user", "is-active", "--quiet", "lhpc-web.service")
+    denied = CR(1, "", "Failed to connect to bus: Operation not permitted")     # what the sandbox answers
+    svc = ControllerService(system=FakeSystem(commands={**_fake(conf_path).commands, unit: denied}).system,
+                            paths=paths)
+    monkeypatch.setattr(webserver, "listener_scope", lambda system, port: "loopback")   # the fake has no /proc
+    c = web(service_factory=lambda: svc)
+    r = c.post("/webserver/verify", data={"_csrf": csrf(c)})
+    assert r.status_code in (302, 303)
+    shown = c.get(r.headers["Location"]).get_data(as_text=True)
+    assert "console_running" not in shown, "the serving console reported as an issue"
+    assert "webserver verified" in shown                                        # the green summary
+    assert webserver.read_evidence(paths)["checks"]["console_running"] == "ok"  # persisted as shown
+    assert svc.webserver_verify().data["checks"]["console_running"] == "failed"   # outside the console: probed
+
+
 def test_a_cidr_set_covering_the_whole_internet_is_public_not_lan():
     # `0.0.0.0/1` + `128.0.0.0/1` IS the whole IPv4 internet, but neither entry is a default
     # route — so a per-entry `/0` test called it a restricted LAN, skipping the elevated

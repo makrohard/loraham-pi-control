@@ -1287,7 +1287,7 @@ def monitor_view(paths: Paths, cfg: WebserverConfig, live_listener_scope: str | 
 
 
 def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=(),
-           probe_console: bool = False, bypassable=None) -> dict:
+           probe_console: bool = False, bypassable=None, console_serving: bool = False) -> dict:
     """Assemble the effective-state proof checklist and PERSIST it as evidence. Static + config
     checks are proven here (deps present, CA/cert present, nginx -t valid). The console's LISTENER
     SCOPE is proven from /proc/net/tcp (local evidence, not a network/subprocess probe); the
@@ -1356,7 +1356,13 @@ def verify(system, paths: Paths, cfg: WebserverConfig, stack_webs=(),
     # `probe_console` only on the EXPLICIT verify: `apply` shares this function to
     # validate the config it is about to promote, and must not gain a subprocess call
     # (its tests pin that a reload-only apply touches systemctl not at all).
-    if probe_console:
+    # `console_serving`: the caller IS the console, answering this request. That proves the console
+    # process answers, not that lhpc-web.service is active (a hand-run `lhpc web` reads green too).
+    # Inside the unit `systemctl --user` cannot answer at all: its sandbox denies the user bus
+    # (InaccessiblePaths=%t/bus %t/systemd/private), so probing there always read "failed".
+    if console_serving:
+        checks["console_running"] = "ok"
+    elif probe_console:
         from .updater_units import WEB_UNIT
         act = system.runner.run(["systemctl", "--user", "is-active", "--quiet", WEB_UNIT], 5.0)
         if getattr(act, "not_found", False):
