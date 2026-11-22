@@ -293,13 +293,14 @@ def test_hw_preset_label_is_friendly_never_legacy():
     assert config.hw_preset_label("uputronics-ce0") == "Uputronics CE0"
 
 
-def test_dashboard_narrows_in_single_radio_setup(tmp_path):
+def test_dashboard_is_wide_in_single_and_dual_radio_setups(tmp_path):
+    # dash plan c11 (his yes, 19:18Z): no dash-narrow page any more; one radio is one column of the wide grid
     from lhpc.adapters.web.app import create_app
     svc = _svc(tmp_path)
     _setup(svc, "loraham")
     app = create_app(service_factory=lambda: svc)
     app.config["SESSION_COOKIE_SECURE"] = False
     c = app.test_client()
-    assert not _body_has_class(c.get("/").get_data(as_text=True), "dash-narrow")   # dual -> full width
+    assert not _body_has_class(c.get("/").get_data(as_text=True), "dash-narrow")   # dual
     _setup(svc, "waveshare-433")
-    assert _body_has_class(c.get("/").get_data(as_text=True), "dash-narrow")       # single -> narrowed
+    assert not _body_has_class(c.get("/").get_data(as_text=True), "dash-narrow")   # single: the same wide page

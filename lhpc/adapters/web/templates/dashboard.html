@@ -1,8 +1,6 @@
 {% extends "base.html" %}
 {% from "_macros.html" import cmdbox, webserver_pills, banner, daemon_badge %}
 {% block title %}dashboard — LoRaHAM Pi Control{% endblock %}
-{# One band on the hardware list: narrow the whole page (header/footer/boxes/banners) to the single radio box's width. #}
-{% block body_class %}{% if radios | length < 2 %}dash-narrow{% endif %}{% endblock %}{# G1-G4W N1: one card, one column #}
 {# U2 (K1, layout B): ONE component row for every instance's and orphan's rows (G1-C49). Line 1: state, name and the
    row's own action on the right (`caller('act')`); line 2: the note, the addresses (non-web ports), config, logs and
    the web UI, as the 0.13.x card linked them (A23). `rid`: an instance's radio (its Settings and log for that radio),

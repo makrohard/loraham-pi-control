@@ -82,9 +82,9 @@ def test_the_banner_tells_no_list_from_radios_none_enabled(web, tmp_path, case):
         assert "No radio hardware is set up yet." not in page
 
 
-@pytest.mark.parametrize("rows, narrow", [(TWO_433[:1], True), (TWO_433, False),
-                                          (TWO_433 + (radios_fixture.R3,), False)], ids=["one", "two", "three"])
-def test_g1_g4w_n1_one_card_is_one_column_two_or_more_are_the_grid(web, tmp_path, rows, narrow):
+@pytest.mark.parametrize("rows", [TWO_433[:1], TWO_433, TWO_433 + (radios_fixture.R3,)], ids=["one", "two", "three"])
+def test_every_radio_count_is_the_same_wide_grid(web, tmp_path, rows):
+    # dash plan c11 (his yes, 19:18Z): dash-narrow is gone; one card is one 484 px column of the same grid
     r, doc = _page(web, tmp_path, rows=rows)
     assert r.status_code == 200 and len(doc.find("div", class_="radio-col")) == len(rows)
-    assert doc.find("body")[0].has_class("dash-narrow") is narrow
+    assert not doc.find("body")[0].has_class("dash-narrow")

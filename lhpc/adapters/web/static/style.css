@@ -106,10 +106,6 @@ h3 { font-size: 1rem; margin: .6rem 0 .35rem; }
   .brand-short { display: inline; }
 }
 .wrap { max-width: 1024px; margin: 0 auto; padding: 1.25rem; }
-/* Single-radio mode (Dashboard only): narrow the whole page — header, nav, main, footer, boxes and
-   banners — to half width, matching the single radio box (the radio grid becomes one column). */
-body.dash-narrow .wrap { max-width: 512px; }
-body.dash-narrow .radiogrid { grid-template-columns: 1fr; }
 .nav { background: #08305c; box-shadow: var(--shadow); }
 .nav .wrap { display: flex; flex-wrap: wrap; gap: .25rem .9rem; padding-top: .5rem; padding-bottom: .5rem; }
 .nav a { color: #cfe0f3; font-size: .9rem; }
@@ -252,8 +248,9 @@ button:hover { background: var(--btn-bg); color: var(--btn-ink); border-color: v
             border: 1px solid var(--line); border-radius: 8px; padding: .25rem .5rem; }
 .grouplabel { font-size: .68rem; text-transform: uppercase; letter-spacing: .5px;
               color: var(--muted); margin-right: .2rem; }
-.radiogrid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
-@media (max-width: 760px) { .radiogrid { grid-template-columns: 1fr; } }
+/* dash plan c11: left-aligned radio columns of 484 px, as many as fit; on a small screen one column shrinks to the width */
+.radiogrid { display: grid; grid-template-columns: repeat(auto-fill, min(484px, 100%)); justify-content: start;
+             gap: 1rem; align-items: start; }
 .radio-col .feed { max-height: 9rem; overflow: auto; }
 .runstack { border: 1px solid var(--line); border-radius: 8px; padding: .5rem .6rem; margin: .4rem 0; }
 .complist { list-style: none; padding-left: 0; margin: .3rem 0; }
