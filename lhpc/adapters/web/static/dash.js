@@ -54,16 +54,17 @@
     pill.className = "badge txpill " + (on ? "tx-on" : "badge-running");
   }
 
-  // the FREQ / PWR / BW / SF line. A 1.5.0+ daemon (its STATUS carries RADIOERR=,
+  // the FREQ / PWR / BW / SF / SYNC line. A 1.5.0+ daemon (its STATUS carries RADIOERR=,
   // the marker daemon_control.read_radio keys on) is read ONLY through `radio` (GET RADIO): its values while its
-  // RADIO=READY, else (FAILED, UNPLUGGED, any other, {} or absent) "-" for all four, never STATUS. An older daemon:
-  // STATUS FREQ / POWER / SF (BW "-": STATUS has none). A missing or "-" value is "-", also after an earlier value.
-  var PARAMS = [["freq", "FREQ"], ["pwr", "POWER"], ["bw", "BW"], ["sf", "SF"]];
+  // RADIO=READY, else (FAILED, UNPLUGGED, any other, {} or absent) "-" for all, never STATUS. An older daemon:
+  // STATUS FREQ / POWER / SF (BW and SYNC "-": STATUS has none). A missing or "-" value is "-", also after an earlier
+  // value.
+  var PARAMS = [["freq", "FREQ"], ["pwr", "POWER"], ["bw", "BW"], ["sf", "SF"], ["sync", "SYNC"]];
   function params(key, d) {
     var status = d.status || {}, radio = d.radio || {};
     var src = ("RADIOERR" in status) ? (radio.RADIO === "READY" ? radio : {}) : status;
     PARAMS.forEach(function (p) {
-      var v = (p[0] === "bw" && src === status) ? "" : (src[p[1]] || "");
+      var v = ((p[0] === "bw" || p[0] === "sync") && src === status) ? "" : (src[p[1]] || "");
       set("rd-" + p[0] + "-" + key, v === "" || v === "-" ? "-" : v);
     });
   }

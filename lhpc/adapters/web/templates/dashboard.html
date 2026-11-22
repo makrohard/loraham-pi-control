@@ -236,7 +236,7 @@
                       <span class="mono" id="rd-rssiv-{{ key }}">{{ dv.liverssi or '?' }}</span> dBm</td></tr>
               </table>
               {# the radio params in effect, painted by dash.js (daemon 1.5.0: GET RADIO while READY, else "-") #}
-              <p class="rparams">{% for k, n in (("freq", "FREQ"), ("pwr", "PWR"), ("bw", "BW"), ("sf", "SF")) %}<span class="rp"><span class="rpk">{{ n }}</span> <span class="mono rpv" id="rd-{{ k }}-{{ key }}">-</span></span>{% endfor %}</p>
+              <p class="rparams">{% for k, n in (("freq", "FREQ"), ("pwr", "PWR"), ("bw", "BW"), ("sf", "SF"), ("sync", "SYNC")) %}<span class="rp"><span class="rpk">{{ n }}</span> <span class="mono rpv" id="rd-{{ k }}-{{ key }}">-</span></span>{% endfor %}</p>
               <table>
                 <tr><th>Radio</th><td class="mono" id="rd-radio-{{ key }}">{{ dv.radio or '?' }}</td>
                     <th>TX mode</th><td class="mono" id="rd-txmode-{{ key }}">{{ dv.txmode or '?' }}</td></tr>
