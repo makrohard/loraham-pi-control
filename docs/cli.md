@@ -195,7 +195,7 @@ lhpc hardware uputronics-433 # Uputronics 433 only (CE0)
 lhpc hardware uputronics-868 # Uputronics 868 only (CE1)
 lhpc hardware waveshare-433  # Waveshare SX1262 (433)
 lhpc hardware waveshare-868  # Waveshare SX1262 (868)
-lhpc hardware --high-power r1 on|off  # allow POWER=20 on radio r1 (an SX127x board); takes effect at its daemon's next start
+lhpc hardware --high-power r1 on|off  # allow POWER=20 on radio r1 (an SX127x board; 21-22 on a Meshstick); takes effect at its daemon's next start
 lhpc hardware --ocp r1 auto|<mA>      # radio r1's PA over-current limit (auto: 140 with high power, else 100); next daemon start
 ```
 

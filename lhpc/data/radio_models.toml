@@ -4,9 +4,9 @@
 # Per row: `id`, `label`, `short` (<= 7 characters, for default radio names), `transport` (spi | usb-ch341),
 # `chip` (sx127x | sx1262), `bands`, `power_default_dbm` (the POWER every stack starts at, at most: USB 14, SPI 17;
 # a default, not a limit: the chip range is the limit), an optional `power_max_dbm` (only an SX1262 rated above the
-# chip table's 20: the Meshstick's 22, its daemon preset's ceiling) and
-# `high_power_switch` (the daemon's `--high-power` +20 dBm permission applies), `direct` (meshtastic's
-# YAML `Module` when meshtasticd drives the radio itself), `usb` ({vid, pid} and an optional
+# chip table's 20: the Meshstick's 22, its daemon preset's ceiling; above 20 only with the switch) and
+# `high_power_switch` (the daemon's `--high-power` permission applies: SX127x 20, a raised SX1262 top),
+# `direct` (meshtastic's YAML `Module` when meshtasticd drives the radio itself), `usb` ({vid, pid} and an optional
 # `product`; USB rows only; the Meshstick's bridge reports no product string).
 # Each `variant` is one daemon `--hw` preset with the lines it uses, named as the daemon's profile fields (BCM
 # lines on SPI; on a USB stick the bridge's D-lines, no Pi line claimed); `band` fixes the band (a board with
@@ -81,7 +81,7 @@ chip = "sx1262"
 bands = ["868"]
 power_default_dbm = 14
 power_max_dbm = 22
-high_power_switch = false
+high_power_switch = true
 usb = { vid = "1a86", pid = "5512" }
 direct = { module = "sx1262", spidev = "ch341" }
 

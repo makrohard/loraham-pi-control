@@ -7,7 +7,7 @@
 - USB radios: Meshstick and PINE64 adapter (868 MHz), CH341A + RFM98PW stick (433 MHz); Hardware adds and binds a
   stick. A USB radios page and a build guide for the 433 MHz stick are in the docs.
 - Radio power: USB radios start at 14 dBm, SPI radios at 17; a POWER set by hand stays. The limit is the chip's range:
-  SX127x 2–17 (20 with high power), SX1262 0–20, Meshstick 0–22. A MeshCom node gets the radio's POWER at every start.
+  SX127x 2–17, SX1262 0–20, high power: SX127x 20, Meshstick 21–22. A MeshCom node gets the radio's POWER at every start.
 - KISS: the TNC (v0.6.4, power 0–22) reads config/files/<rid>/loraham_kiss_tnc.conf (kiss's POWER, at the next start);
   the keys of its loraham_kiss_tnc.conf.example (sf, bw, cr, syncword, ldro, TX timings) are unread: shipped defaults.
 - A stick next to the board's radio: two radios on one band each run their own daemon: address one by its radio id

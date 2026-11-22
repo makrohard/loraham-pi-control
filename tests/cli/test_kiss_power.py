@@ -137,10 +137,11 @@ def test_the_loader_admits_panel_power_only_on_a_hidden_int(extra):
 @pytest.mark.parametrize("power", ["21", "22"])
 def test_kiss_on_the_meshstick_takes_21_and_22_into_its_file(box, tmp_path, power):
     # G1-RADIO-POWER-CODE B1: LHPC admits the Meshstick's 21..22 for kiss (his P7) and writes it into the TNC's file;
-    # the pinned TNC (v0.6.4) parses power 0..22, so the start is not stopped by its own config load
+    # the pinned TNC (v0.6.4) parses power 0..22, so the start is not stopped by its own config load. Daemon 1.5.0:
+    # 21..22 need the radio's high-power grant (the refusal without it: test_radio_power_defaults)
     from lhpc.adapters.cli import main as cli
     from radios_fixture import R2_868, R3
-    run = box((R1, R2_868, R3), ports=(8267,))
+    run = box((R1, R2_868, dataclasses.replace(R3, high_power=True, high_power_band="868")), ports=(8267,))
     assert cli.ControllerService().save_daemon_params("kiss", {"POWER": power}, rid="r3").ok
     rc, out, launches = run("start", "kiss@r3")
     assert rc == 0 and ("loraham-kiss-tnc", "868", "r3") in launches, out

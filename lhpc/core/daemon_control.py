@@ -360,7 +360,8 @@ def validate_set(key: str, value: str, family: str = "", high_power: bool = Fals
     that way), and its default of False must never turn that second check into a refusal of an
     already-authorised 20: the union admits 20 regardless. The authorisation boundary for a LIVE
     20 is `live_power_error`, not this function. `power_top` (the radio's model `power_max_dbm`, the Meshstick's 22)
-    RAISES the continuous window's top above the chip table; nothing narrows it (the chip range is the only limit).
+    RAISES the continuous window's top above the chip table, only with `high_power` (daemon 1.5.0: 21-22 need
+    `--high-power`); nothing narrows it (the chip range is the only limit).
     """
     key = key.upper()
     value = value.upper()
@@ -370,7 +371,8 @@ def validate_set(key: str, value: str, family: str = "", high_power: bool = Fals
         return None
     if key in _ALLOWED_SET_INT:
         lo, hi = int_range(key, family)
-        hi = max(hi, power_top) if key == "POWER" and power_top is not None else hi
+        raised = power_top if key == "POWER" and power_top is not None and power_top > hi else None
+        hi = raised if raised is not None and high_power else hi
         if not _INT_RE.fullmatch(value):
             return f"{key} must be an integer in [{lo}, {hi}]"
         try:
@@ -379,6 +381,8 @@ def validate_set(key: str, value: str, family: str = "", high_power: bool = Fals
             return f"{key} must be an integer in [{lo}, {hi}]"
         if lo <= n <= hi:
             return None
+        if raised is not None and hi < n <= raised:
+            return f"{key} must be in [{lo}, {hi}] (or up to {raised} with the radio's high-power switch on)"
         extra = _POWER_EXTRA.get(family, frozenset()) if key == "POWER" else frozenset()
         if n in extra and high_power:
             return None
@@ -480,8 +484,8 @@ def live_power_error(value: str, running_family: str, live_high_power: bool | No
     with `ERR`), or refuses a legitimate `POWER=0` on a
     running SX1262.
 
-      * running SX1262           -> 0..20, or 0..`power_top` on a model that raises it (the Meshstick's
-                                    22); the permission is irrelevant
+      * running SX1262           -> 0..20; 21..`power_top` on a model that raises it (the Meshstick's
+                                    22) under the same grant rule as the SX127x 20 (daemon 1.5.0)
       * running SX127x           -> 2..17, or exactly 20 only when the running daemon reports
                                     HIGHPOWER=1 AND the band's switch is saved on; 0/1 and
                                     18/19 refused
@@ -496,29 +500,39 @@ def live_power_error(value: str, running_family: str, live_high_power: bool | No
     except ValueError:
         return "POWER must be an integer"
     if running_family == "sx1262":
-        hi = max(20, power_top or 0)
-        return None if 0 <= n <= hi else f"POWER must be in [0, {hi}] on the running SX1262"
+        top = max(20, power_top or 0)
+        if 0 <= n <= 20:
+            return None
+        if n <= top:
+            return _grant_refusal(n, live_high_power, saved_on)
+        return f"POWER must be in [0, {top}] on the running SX1262"
     if running_family == "sx127x":
         if 2 <= n <= 17:
             return None
         if n == 20:
-            if live_high_power is True and saved_on:
-                return None
-            if live_high_power is True:
-                return ("POWER=20 refused: the radio's +20 dBm permission is saved off; the "
-                        "running daemon still holds it until it is restarted")
-            if live_high_power is False:
-                return ("POWER=20 refused: high-power permission is not enabled on the running "
-                        "daemon (grant it to the radio in the daemon Hardware settings, then restart "
-                        "its daemon)")
-            return ("POWER=20 refused: the running daemon does not report HIGHPOWER= (older "
-                    "daemon) — update it")
+            return _grant_refusal(n, live_high_power, saved_on)
         return "POWER must be in [2, 17] on the running SX127x (or exactly 20 with high-power)"
     if 2 <= n <= 17:
         return None
     return (f"POWER={n} refused: the running daemon does not report its chip family (older "
             "daemon or not reachable), so only 2..17 can be sent live — update or restart "
             "the daemon")
+
+
+def _grant_refusal(n: int, live_high_power: bool | None, saved_on: bool) -> str | None:
+    """A POWER only the high-power grant admits (SX127x 20, the Meshstick's 21-22): None when the running daemon
+    holds the permission AND the radio's grant is saved on, else the reason."""
+    if live_high_power is True and saved_on:
+        return None
+    if live_high_power is True:
+        return (f"POWER={n} refused: the radio's +20 dBm permission is saved off; the "
+                "running daemon still holds it until it is restarted")
+    if live_high_power is False:
+        return (f"POWER={n} refused: high-power permission is not enabled on the running "
+                "daemon (grant it to the radio in the daemon Hardware settings, then restart "
+                "its daemon)")
+    return (f"POWER={n} refused: the running daemon does not report HIGHPOWER= (older "
+            "daemon) — update it")
 
 
 def canonical_value(key: str, value: str) -> str:

@@ -1,7 +1,7 @@
 """Radio power (RADIO-POWER item 1, the maintainer's decision 1b377343, R1-R3, and his P7): the chip range is the only
 POWER limit, a USB radio's default is 14 dBm and an SPI radio's 17, every stack's default is the lower of its own and
 its radio's, and nothing warns above the default. The Meshstick is rated 22 dBm (its daemon preset's ceiling), so LHPC
-admits 0..22 there and 0..20 on every other SX1262. Through the console's Apply, the panel's Save and view, the Hardware
+admits 21..22 there with its high-power switch on (daemon 1.5.0: `--high-power`) and 0..20 on every other SX1262. Through the console's Apply, the panel's Save and view, the Hardware
 page and `lhpc hardware`, and the stacks' own config files. Replaces the A34 model-maximum tests."""
 import dataclasses
 
@@ -168,18 +168,43 @@ def test_the_loader_holds_the_power_fields_to_the_chip(tmp_path, edit, reason):
         radio_models.load(path)
 
 
-def test_the_meshstick_takes_22_and_no_other_sx1262_does(tmp_path):
-    # his P7 ("Let LPHC allow 22"): red-before: 22 refused "POWER must be in [0, 20]" on the Meshstick
+def test_the_meshstick_takes_22_only_with_its_high_power_switch(tmp_path):
+    # his P7 ("Let LPHC allow 22") under daemon 1.5.0 (21-22 need --high-power; plan 1.5.0 §8c, his word "High-power
+    # option shall surface in LHPC"): the save gate, the panel range, the argv and the live gate move together.
+    # red-before: 22 saved and sent without the switch; the Meshstick's grant was refused ("has no high-power switch")
     svc, fake = _svc(tmp_path)
+    res = svc.save_daemon_params("daemon", {"POWER": "22"}, rid="r5")
+    assert not res.ok and "POWER must be in [0, 20] (or up to 22 with the radio's high-power switch on)" in res.summary
+    assert svc.save_daemon_params("daemon", {"POWER": "20"}, rid="r5").ok
+    assert _power_row(svc, "daemon", "r5")["num"]["max"] == "20"
+    assert "--high-power" not in _argv(svc, "r5")
+    assert svc.high_power_state("868", rid="r5")["switch"] is True                    # the panel's control is live
+    assert svc.set_high_power("r5", "on").ok                                         # the per-radio grant
+    assert "--high-power" in _argv(svc, "r5")                                        # at the next start
     assert svc.save_daemon_params("daemon", {"POWER": "22"}, rid="r5").ok
     res = svc.save_daemon_params("daemon", {"POWER": "23"}, rid="r5")
     assert not res.ok and "POWER must be in [0, 22]" in res.summary, res.summary
     assert _power_row(svc, "daemon", "r5")["num"]["max"] == "22"
-    res = svc.save_daemon_params("daemon", {"POWER": "21"}, rid="r4")
-    assert not res.ok and "POWER must be in [0, 20]" in res.summary, res.summary
     assert radios.load(svc._paths).kind == radios.VALID                              # the list keeps the 22
-    res = svc.apply_daemon_params("daemon", rid="r5")                                # the live gate passes 22
+    fake.serve["/tmp/loraconf-r5.sock"]["HIGHPOWER"] = "0"                          # still the old daemon
+    res = svc.apply_daemon_params("daemon", rid="r5")
+    assert ("/tmp/loraconf-r5.sock", "SET POWER=22") not in fake.sent, fake.sent
+    fake.serve["/tmp/loraconf-r5.sock"]["HIGHPOWER"] = "1"                          # restarted with the flag
+    res = svc.apply_daemon_params("daemon", rid="r5")
     assert ("/tmp/loraconf-r5.sock", "SET POWER=22") in fake.sent, (fake.sent, res.summary, res.details)
-    svc, _fake = _svc(tmp_path / "instance")                                         # its row holds no POWER
+    res = svc.save_daemon_params("daemon", {"POWER": "21"}, rid="r4")                # no other SX1262
+    assert not res.ok and "POWER must be in [0, 20]" in res.summary, res.summary
+    assert svc.high_power_state("868", rid="r4")["switch"] is False
+    svc, _fake = _svc(tmp_path / "instance", (*ROWS[:4], dataclasses.replace(STICK, high_power=True,
+                                                                              high_power_band="868")))
     cfgmod.save_stack_config(svc._paths, "meshcore", {"dp_POWER": "22"}, inst=commands.Instance("r5"))
     assert _power_row(svc, "meshcore", "r5")["value"] == "22"                        # an instance's own 22 is read
+
+
+def _argv(svc, rid):
+    from lhpc.core import radio_start
+    from lhpc.core.config import Config
+    from lhpc.core.manifest import load_manifest
+    daemon = next(c for st in load_manifest() for c in st.components if c.id == "loraham-daemon")
+    params, _refusal, _notes = radio_start.start_plan(svc, rid)
+    return commands.expand_argv(daemon.run_argv, daemon, params, Config().operator, "/rt", "/rt/src/x", "868")

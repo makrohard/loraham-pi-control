@@ -135,7 +135,7 @@ class DaemonParamsMixin:
         grant beside the RUNNING daemon's own report, never one masquerading as the other:
           saved       the grant (`_granted`)
           live        HIGHPOWER= from STATUS (True/False), None = unknown/unreachable/older daemon
-          family      the RUNNING family from CHIPFAMILY= ("" = unknown); saved_family beside it
+          family      the RUNNING family from CHIPFAMILY= ("" = unknown); saved_family, switch (its model has one) beside it
           warn        the SX127x hazard banner is due: running family sx127x AND live permission on
           mismatch    a sentence when saved and running disagree, else ""
         `view` is an already-read DaemonView (passive STATUS); read here when absent."""
@@ -146,21 +146,21 @@ class DaemonParamsMixin:
         live = daemon_control.high_power_from_status(status) if view.reachable else None
         fam = daemon_control.chip_family_from_status(status) if view.reachable else ""
         saved_family = self.radio_chip_family(self._one_rid(band, rid))
+        switch = radio_start.has_high_power_switch(self, self._one_rid(band, rid))
         mismatch = ""
-        # The permission is inert on a running SX1262, so saved/running disagreement about it is
-        # not worth a line there; a family disagreement always is.
+        # Inert on a running SX1262 without a switch: no saved/running line there; a family disagreement always is.
         if view.reachable and fam and saved_family and fam != saved_family:
             mismatch = (f"the running daemon is {fam} while the hardware list's radio is "
                         f"{saved_family} — restart the daemon")
-        elif view.reachable and fam != "sx1262" and live is True and not saved:
+        elif view.reachable and (fam != "sx1262" or switch) and live is True and not saved:
             mismatch = ("not granted, but the running daemon still holds the +20 dBm permission — "
                         "restart the daemon to revoke it")
-        elif view.reachable and fam != "sx1262" and live is False and saved:
+        elif view.reachable and (fam != "sx1262" or switch) and live is False and saved:
             mismatch = "granted, but the running daemon was started without it — restart the daemon to enable it"
         elif view.reachable and live is None and saved:
             mismatch = "granted, but the running daemon does not report HIGHPOWER= (older daemon) — update it"
         return {"band": band, "rid": rid, "saved": saved, "live": live, "family": fam,
-                "saved_family": saved_family, "reachable": view.reachable,
+                "saved_family": saved_family, "switch": switch, "reachable": view.reachable,
                 "warn": bool(fam == "sx127x" and live is True), "mismatch": mismatch}
 
     @invalidates_snapshot

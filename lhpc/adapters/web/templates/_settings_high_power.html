@@ -1,18 +1,19 @@
 {#- UI-REORG s3: the selected radio's +20 dBm permission (view.high_power holds that one radio). Family = the SAVED one
-    (hardware list): SX1262 needs no permission (control and Save disabled); unknown: selectable, with a warning. -#}
+    (hardware list): an SX1262 without a switch needs no permission (control and Save disabled); the Meshstick's
+    switch admits 21-22 (daemon 1.5.0); unknown: selectable, with a warning. -#}
 <details class="advcfg" id="high-power-daemon">
             <summary>High-power +20 dBm permission · {{ view.high_power[0].rid }}</summary>
-            <p class="muted">Allow <code>POWER=20</code> on a radio. Default off; the radio's daemon
+            <p class="muted">Allow <code>POWER=20</code> on an SX127x radio, <code>21</code>–<code>22</code> on a Meshstick. Default off; the radio's daemon
               must be restarted for a change to take effect, and a running daemon keeps
               the permission it was started with. <strong>At +20 dBm the transmit duty cycle must
               not exceed 1 %</strong> (SX1276/7/8 datasheet §5.4.3), the antenna VSWR must stay
               ≤ 3:1, and the chip needs suitable supply and cooling. <strong>LHPC does not measure
               or enforce the duty cycle.</strong> Outside-spec operation can damage hardware —
               <strong>warranty void if disregarded.</strong> Unvalidated on the LoRaHAM 433 RFM98PW:
-              its module documentation does not specify this drive condition. No effect on an
-              SX1262.</p>
+              its module documentation does not specify this drive condition. No effect on any
+              other SX1262.</p>
             {% for hp in view.high_power %}
-              {% set _off = hp.saved_family == 'sx1262' %}
+              {% set _off = hp.saved_family == 'sx1262' and not hp.switch %}
               <form method="post" action="{{ url_for('hardware_high_power') }}" class="act">
                 <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
                 <input type="hidden" name="rid" value="{{ hp.rid }}">

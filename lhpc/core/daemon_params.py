@@ -69,12 +69,12 @@ def numeric_range(name: str, family: str = "",
     defect this exists to prevent. `family` "" keeps the union. With the band's high-power
     switch saved on, the SX127x upper bound shown is 20 (the disjoint extra the switch unlocks);
     18 and 19 inside that span are still refused by the server gate, which the row's
-    description says.
+    description says. A model's raised top (`power_top`, the Meshstick's 22) is shown only with the switch on.
     """
     if name == "POWER":
         from . import daemon_control
         lo, hi = daemon_control.int_range("POWER", family)
-        hi = hi if power_top is None else max(hi, power_top)          # a model rated above its chip (Meshstick 22)
+        hi = max(hi, power_top) if power_top is not None and high_power else hi   # Meshstick 21-22: its grant (1.5.0)
         if high_power:
             extra = daemon_control._POWER_EXTRA.get(family, frozenset())
             if extra:
@@ -95,7 +95,8 @@ PARAM_DESC = {
     "PREAMBLE": "Preamble length, symbols.",
     "SYNC": "LoRa sync word / network id, e.g. 0x12.",
     "POWER": ("TX power, dBm (the chip's setting). SX127x: 2–17, or exactly 20 with the band's "
-              "high-power switch on — 18 and 19 are refused by the daemon. SX1262: 0–20 (Meshstick 0–22)."),
+              "high-power switch on — 18 and 19 are refused by the daemon. SX1262: 0–20 (Meshstick: 21–22 with "
+              "its high-power switch on)."),
     "TXMODE": "MANAGED = listen-before-talk; DIRECT = transmit immediately.",
     "TXQUEUE": "Queue outgoing frames instead of dropping when busy: 0 / 1.",
     "CADMONITOR": "Continuous channel-activity monitor: 0 / 1.",

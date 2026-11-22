@@ -883,6 +883,13 @@ def effective_high_power(svc, rid: str) -> bool:
         return False
 
 
+def has_high_power_switch(svc, rid: str) -> bool:
+    """Radio `rid`'s model has a high-power switch (radio_models `high_power_switch`); False for no such radio."""
+    row = next((r for r in radios.load(svc._paths).radios if r.id == rid), None) if rid else None
+    model = radio_models.load().get(row.model) if row else None
+    return bool(model and model.high_power_switch)
+
+
 def set_row_fields(svc, rid: str, fields, done: str, restart=()):
     """Write `fields(row)` (row settings, e.g. high_power, read from the row as it is under the lock) into radio
     `rid`'s row and nothing else, under the hardware list's lock (W217). `restart` names the fields its daemon reads
