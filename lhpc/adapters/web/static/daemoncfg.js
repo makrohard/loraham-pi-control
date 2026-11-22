@@ -1,7 +1,7 @@
 // DAEMON-MONITOR-TREE: a radio's live daemon views (_daemon_view.html) under its Monitor, read-only over the
 // /api/daemon endpoints. UI-REORG s4 + F14: in the tree a view is its own closed <details>; it asks only while
 // SHOWN (it and every <details> around it open, in the page, the tab visible: shown.js): STATUS / STATS one read of
-// /api/daemon/<rid>
+// /api/daemon/<rid>, RADIO of /api/daemon/<rid>?radio=1 (the one read that asks GET RADIO, G2-LHPCRADIO B1),
 // per show and per Reload;
 // SOCKET a rolling 22-line window polled from the config socket each second; "RX/TX View" the dashboard's
 // RX/TX feed every 3 s; on a Monitor's own page (data-fullpage) every view repeats every 3 s. Hiding stops the
@@ -82,7 +82,7 @@
       text.textContent = "loading…";
       status.textContent = "";
       poll = function () {
-        ask(panel, "", function (d, failed) {
+        ask(panel, kind === "radio" ? "?radio=1" : "", function (d, failed) {   // only RADIO asks GET RADIO
           if (failed) { text.textContent = "request failed"; status.textContent = full ? "" : "Reload to ask again"; return; }
           text.textContent = !d || !d.reachable ? "daemon not reachable on " + rid
             : kind.toUpperCase() + " — " + rid + " (live)\n"

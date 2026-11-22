@@ -22,8 +22,9 @@ TREE = f"/stacks/daemon/menu/stack-settings-daemon?radio={RID}"           # the 
 LIVE = f"/stacks/daemon/menu/stack-settings-daemon--{RID}-live?radio={RID}"
 _REPLY = {"": {"reachable": True, "status": {"RADIO": "READY"}, "stats": {"RX": "7"}},
           "/socket": {"reachable": True, "line": "STATUS RADIO=READY"},
-          "/feed": {"feed": ["RX one", "TX two"]}}
-API = re.compile(r".*/api/daemon/" + RID + r"(/socket|/feed)?$")
+          "/feed": {"feed": ["RX one", "TX two"]},
+          "?radio=1": {"reachable": True, "status": {"RADIO": "READY"}, "stats": {"RX": "7"}, "radio": {}}}
+API = re.compile(r".*/api/daemon/" + RID + r"(/socket|/feed|\?radio=1)?$")          # ?radio=1: the RADIO view only
 _MON = "#stack-settings-daemon--monitor"
 _KINDS = ("status", "radio", "stats", "socket", "rxtx")
 
@@ -37,7 +38,7 @@ def _badge_answer(route, up):
 
 
 def _serve(page, state=None):
-    """Answer the daemon APIs, counting the views' requests by path ("", "/socket", "/feed"); `state` {"up": bool}: the
+    """Answer the daemon APIs, counting the views' requests by path ("", "?radio=1", "/socket", "/feed"); `state` {"up": bool}: the
     badge poll's (dash.js) answer, read at each poll (default up). The clock and the route are installed, then the page
     is loaded again (its views start under them). Returns (seen, settled, held): `held` {"path": p, "routes": []} keeps
     the replies of path p once the test sets it (answered later by the test)."""
@@ -125,7 +126,7 @@ def _loaded(page, settled, seen):
     for kind in _KINDS:
         page.wait_for_function("s => !document.querySelector(s).dvBusy", arg=_sel(kind), timeout=15000)
     settled()
-    assert sorted(seen) == ["", "", "", "/feed", "/socket"], seen
+    assert sorted(seen) == ["", "", "/feed", "/socket", "?radio=1"], seen    # only RADIO sends ?radio=1
     seen.clear()
 
 
@@ -149,13 +150,14 @@ def test_status_and_stats_ask_once_per_show_and_per_reload_and_never_while_hidde
         _wait_text(page, kind, want)
         assert _text(page, kind).split("\n")[0] == f"{kind.upper()} — {RID} (live)"
     settled()
-    assert seen.count("") == 3
+    assert seen.count("") == 2 and seen.count("?radio=1") == 1, seen
     for kind in ("status", "radio", "stats"):
-        before = seen.count("")
+        p = "?radio=1" if kind == "radio" else ""
+        before = seen.count(p)
         page.click(_sel(kind) + " .daemonview-reload")
         page.clock.run_for(15000)
         settled()
-        assert seen.count("") == before + 1, kind                            # one per Reload, no timer
+        assert seen.count(p) == before + 1, kind                             # one per Reload, no timer
 
 
 def test_the_socket_view_polls_each_second_only_while_shown(flask_page):
@@ -312,16 +314,16 @@ def test_a_hide_and_show_during_a_slow_status_asks_once_more_when_it_settles(fla
     _toggle_monitor(page, False)
     _toggle_monitor(page, True)                                               # shown while it is out
     settled()
-    assert len(held) == 3, len(held)                                          # RADIO, STATS ask; STATUS waits (pending)
+    assert len(held) == 2, len(held)                                          # STATS asks (RADIO's ?radio=1 answered); STATUS waits
     assert _text(page, "status") == "loading…"
     held.pop(0).fulfill(status=200, content_type="application/json", body=json.dumps(_REPLY[""]))   # the old one
     settled()
-    assert len(held) == 3, len(held)                                          # exactly one fresh STATUS request
+    assert len(held) == 2, len(held)                                          # exactly one fresh STATUS request
     for r in held:
         r.fulfill(status=200, content_type="application/json", body=json.dumps(_REPLY[""]))
     _wait_text(page, "status", "RADIO=READY")
     settled()
-    assert seen.count("") == 4                                                # Reload, RADIO, STATS, the one fresh STATUS
+    assert seen.count("") == 3 and seen.count("?radio=1") == 1, seen          # Reload, STATS, the one fresh STATUS; RADIO
 
 
 def test_a_monitor_page_without_the_hardware_list_resumes_when_the_daemon_starts(flask_page):
@@ -405,7 +407,7 @@ def test_a_stopped_monitor_inserted_later_pauses_at_once(flask_page):
 def test_the_monitor_pages_one_view_repeats_every_3_s_status_and_stats_included(flask_page):
     # UI-REORG c5 (s4) + F7/F6: the Monitor's page works like a log page: its ONE view (each kind in turn) repeats
     # every 3 s; no Reload and no "every N s" line (STATUS / STATS: "updated hh:mm:ss" only, a25 v4 N1)
-    path = {"status": "", "radio": "", "stats": "", "socket": "/socket", "rxtx": "/feed"}
+    path = {"status": "", "radio": "?radio=1", "stats": "", "socket": "/socket", "rxtx": "/feed"}
     for kind in _KINDS:
         page, _posts = flask_page(path=MONITOR + "&view=" + kind, unix_replies=_READY)
         seen, settled, _held = _serve(page)
@@ -486,7 +488,7 @@ def test_a_hidden_tab_stops_the_views_and_visible_again_asks_each_view_once(flas
     for kind in _KINDS:
         page.wait_for_function("s => !document.querySelector(s).dvBusy", arg=_sel(kind), timeout=15000)
     settled()
-    assert sorted(seen) == ["", "", "", "/feed", "/socket"], seen
+    assert sorted(seen) == ["", "", "/feed", "/socket", "?radio=1"], seen    # only RADIO sends ?radio=1
     assert state["polls"] == polls + 1                                       # the badge poll: one at once
 
 
@@ -640,7 +642,7 @@ _ST15 = {"RADIO": "READY", "RADIOERR": "retry"}                       # a 1.5.0 
 ], ids=["1.5.0", "1.4.2", "1.5.0-unreadable", "radio-failed", "radio-unplugged"])
 def test_the_radio_view_shows_its_get_radio_reply_and_says_why_there_is_none(flask_page, monkeypatch, status, radio,
                                                                              want, absent):
-    monkeypatch.setitem(_REPLY, "", {"reachable": True, "status": status, "stats": {}, "radio": radio})
+    monkeypatch.setitem(_REPLY, "?radio=1", {"reachable": True, "status": status, "stats": {}, "radio": radio})
     page, _posts = flask_page(path=TREE, unix_replies=_READY)
     seen, settled, _held = _serve(page)
     page.click(_MON + " > summary")
@@ -651,4 +653,4 @@ def test_the_radio_view_shows_its_get_radio_reply_and_says_why_there_is_none(fla
     assert text.split("\n")[0] == f"RADIO — {RID} (live)", text
     assert absent is None or absent not in text, text
     settled()
-    assert seen == [""], seen                                                 # one read per show
+    assert seen == ["?radio=1"], seen                                         # one read per show, and only it asks RADIO

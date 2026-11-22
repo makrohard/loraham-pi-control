@@ -2,6 +2,8 @@
 `/api/daemon/<rid>` (+ `/feed`, `/scan`, `/socket`) and `/radio/<rid>/set`. Two radios of 433 each answer on their own
 CONF socket; a band is no radio (404), and a rid that is no enabled radio of the hardware list is a 404 naming why,
 never a 500, and nothing is read for it."""
+import threading
+
 import pytest
 import radios_fixture
 
@@ -130,7 +132,41 @@ def test_the_api_carries_each_radios_own_get_radio_and_asks_only_a_1_5_0_daemon(
         "/tmp/loraconf-r2.sock": {b"GET STATUS\n": _status("r2").replace(b"\n", b" RADIOERR=retry\n"),
                                   b"GET RADIO\n": r2_radio}})
     c = web(system=sys)
-    r1, r2 = c.get("/api/daemon/r1").get_json(), c.get("/api/daemon/r2").get_json()
+    r1, r2 = c.get("/api/daemon/r1?radio=1").get_json(), c.get("/api/daemon/r2?radio=1").get_json()   # the RADIO view
     assert r1["radio"] == {} and r2["radio"]["FREQ"] == "433.175" and r2["radio"]["SF"] == "10"
     assert ("/tmp/loraconf-r1.sock", b"GET RADIO\n") not in sys.unix.asked          # Guard A: 1.4.2 never asked
     assert ("/tmp/loraconf-r2.sock", b"GET RADIO\n") in sys.unix.asked
+
+
+class _StalledRadio(_PerCommand):
+    """A 1.5.0 daemon whose `GET RADIO` stalls: the request records that it was entered and is held until `release`
+    (at most 3 s), as a daemon that answers late or not at all within the read timeout."""
+
+    def __init__(self, replies):
+        super().__init__(replies)
+        self.entered, self.release = threading.Event(), threading.Event()
+
+    def request(self, path, payload, timeout, maxb):
+        if payload == b"GET RADIO\n":
+            self.entered.set()
+            self.release.wait(3)
+        return super().request(path, payload, timeout, maxb)
+
+
+def test_a_stalled_get_radio_holds_only_the_radio_views_read_never_an_ordinary_poll(web, tmp_path):
+    # G2-LHPCRADIO B1: the dashboard's column and the STATUS/STATS views poll /api/daemon/<rid> without ?radio=1; they
+    # send no GET RADIO and so never wait on it; only the Monitor's RADIO view (?radio=1) asks it
+    radios_fixture.write(tmp_path, TWO_433)
+    r2 = "/tmp/loraconf-r2.sock"
+    sys = FakeSystem().system
+    sys.unix = _StalledRadio({r2: {b"GET STATUS\n": _status("r2").replace(b"\n", b" RADIOERR=retry\n"),
+                                   b"GET RADIO\n": b"RADIO RADIO=READY MODE=LORA FREQ=433.175 SF=10 BW=125.0 CR=6 "
+                                                   b"PREAMBLE=8 SYNC=0x12 CRC=1 LDRO=1 POWER=17\n"}})
+    c = web(system=sys)
+    for url in ("/api/daemon/r2", "/api/daemon/r2?radio=0"):
+        j = c.get(url).get_json()
+        assert j["reachable"] and j["status"]["RADIOERR"] == "retry" and j["radio"] == {}, (url, j)
+    assert not sys.unix.entered.is_set() and (r2, b"GET RADIO\n") not in sys.unix.asked, sys.unix.asked
+    sys.unix.release.set()
+    assert c.get("/api/daemon/r2?radio=1").get_json()["radio"]["FREQ"] == "433.175"
+    assert sys.unix.entered.is_set()

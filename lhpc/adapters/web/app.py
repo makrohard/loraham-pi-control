@@ -2082,7 +2082,9 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         view = service.daemon_view(band, rid)
         channel = service.daemon_channel(band, rid) if view.reachable else {}
         from lhpc.core import radio_start
-        radio = radio_start.read_daemon_radio(service, band, rid, view)    # GET RADIO: a 1.5.0 daemon only (Guard A)
+        # GET RADIO (a 1.5.0 daemon only, Guard A) only when the Monitor's RADIO view asks (`?radio=1`): the dashboard's
+        # column and every other view never wait on it (G2-LHPCRADIO B1)
+        radio = radio_start.read_daemon_radio(service, band, rid, view) if request.args.get("radio") == "1" else {}
         return jsonify(rid=rid, band=band, reachable=view.reachable, ready=view.ready,
                        radio_state=view.radio_state,
                        label=_submenus.daemon_label(view.ready, view.reachable, view.radio_state),
