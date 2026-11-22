@@ -1,6 +1,7 @@
 """Dash plan c12 S5 (his "c" + refinement): on the RF log page (/api/rflog stubbed, all columns ticked) a long payload
 wraps instead of being cut, nothing scrolls sideways at 1920; a hex cell holds 16 bytes per line (lines =
-ceil(bytes / 16)), breaking only between two bytes; the ascii cell takes the rest of the row and is at least 12rem."""
+ceil(bytes / 16)), breaking only between two bytes; the ascii cell takes the rest of the row and is at least 12rem
+(also at 1024, where the row is too tight for its share)."""
 import json
 
 _MSG = "APRS>LORA:!4807.38N/01131.00E-LoRaHAM test beacon r1 433.175 MHz with a longer comment"
@@ -31,4 +32,7 @@ def test_payload_cells_wrap_and_hex_has_16_bytes_per_line(flask_page):
     n = len(_MSG.encode())
     assert m["per"] == [32] * (n // 16) + ([2 * (n % 16)] if n % 16 else []) and len(m["per"]) == -(-n // 16), m
     assert m["ascii"] >= 12 * m["rem"] and m["scroll"] <= 0, m
+    page.set_viewport_size({"width": 1024, "height": 1000})
+    m = page.evaluate(_M)
+    assert m["ascii"] >= 12 * m["rem"], m
     page.context.close()
