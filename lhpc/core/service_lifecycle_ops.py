@@ -2704,7 +2704,7 @@ class LifecycleOpsMixin:
                 except Exception:
                     scope = ""
             entry = {"label": label, "address": sp.address, "scheme": sp.scheme or "tcp",
-                     "link": link, "port": port, "is_web": is_web, "card_component": sp.card_component,
+                     "link": link, "port": port, "is_web": is_web, "card_component": getattr(sp, "card_component", ""),
                      "remote_ok": scope == "exposed", "fw_blocked": scope == "exposed" and fw_card.port_blocked(self, port),
                      "proxy_scope": "", "proxy_port": 0, "proxy_scheme": "", "proxy_remote": False,
                      "pending": False}

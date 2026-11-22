@@ -857,7 +857,7 @@ def test_dashboard_link_uses_the_host_the_browser_reached_the_console_at(tmp_pat
     # from the loopback fallback).
     r = web(service_factory=lambda: svc).get("/", headers={"Host": "localhost:8443"})
     assert r.status_code == 200
-    links = parse(r.get_data(as_text=True)).find("a", class_="iface-web")
+    links = parse(r.get_data(as_text=True)).find("a", class_="webpill")         # F22: the box header's Web UI pill
     assert [a["href"] for a in links] == ["https://localhost:8444/"]
 
 
