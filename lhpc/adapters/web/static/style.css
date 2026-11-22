@@ -848,6 +848,8 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 
 /* W257 Hardware list: the whole row opens the radio's detail (its id link stretched over the row, no JS); the
    row's Disable/Enable sits above that link, so a click or Enter on it never opens the detail (W258). */
+/* dash plan c12 S13 (his "cap hw list table"): the hardware list keeps today's 950 px on big screens; phones unchanged */
+#hw-list { width: min(100%, 59.375rem); }
 .hwlist td, .hwlist th { padding: .45rem .5rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .hwlist .hwrow { position: relative; }
 .hwlist .hwrow:hover, .hwlist .hwrow:focus-within { background: var(--pill-bg); cursor: pointer; }
