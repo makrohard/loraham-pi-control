@@ -140,8 +140,12 @@ try {
     const sparkSet = (id) => { const el = d.getElementById(id);
       const l = el && el.querySelector("polyline");
       return l && (l.getAttribute("points") || "").length > 3; };   // sparkline drawn
+    // the one total-CPU bar shows the shown CPU value: opening the box resets it to 0 % (system.js resetDynamic),
+    // so only a live poll moves it to the value (the demo's load is ~8-20 %)
+    const cpuBar = () => { const b = d.getElementById("sys-cpu-bar"), v = d.getElementById("sys-cpu-val");
+      return b && v && Math.abs(parseFloat(b.style.width) - parseFloat(v.textContent)) < 1; };
     return hasNum("sys-cpu-val") && hasNum("sys-mem-val") &&
-           barSet("sys-cpu-bar") && barSet("sys-mem-bar") && barSet("sys-temp-bar") &&   // one total-CPU bar
+           cpuBar() && barSet("sys-mem-bar") && barSet("sys-temp-bar") &&
            sparkSet("sys-cpu-spark") && sparkSet("sys-mem-spark");
   }, { timeout: 30000 });
   await sysOpen();
