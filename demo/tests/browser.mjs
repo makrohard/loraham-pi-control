@@ -324,16 +324,18 @@ try {
 
   // G2 #18: a program's log page streams: the product's logs.js polls /api/logs/<target> through the bridge (the page's
   // first lines are the server's; the poll is the stream) and the box holds the daemon's start-log lines. Only a poll
-  // that ANSWERED ok counts (logs.js rewrites the box only then), and the box then holds the start-log line.
+  // that ANSWERED ok counts (logs.js rewrites the box only then). The server-rendered page already holds the start-log
+  // line, so the box is emptied after the render: only a poll that writes its lines into the box can refill it.
   await page.evaluate(() => { const real = window.demoFetch; window.__polls = 0;
     window.demoFetch = (u, o) => { const r = real(u, o);
       return String(u).startsWith("/api/logs/loraham-daemon") ? r.then((x) => { if (x.ok) window.__polls++; return x; }) : r; };
     window.__realFetch = real; });
   await render(page, "/logs/loraham-daemon?radio=r1", "#logbox");
+  await page.evaluate(() => { doc().getElementById("logbox").textContent = ""; window.__polls = 0; });
   await page.waitForFunction((start) => {
     const t = ((doc().getElementById("logbox") || {}).textContent || "").trim();
     return window.__polls > 0 && t.includes(start);
-  }, { timeout: 3500 }, START);
+  }, { timeout: 7000 }, START);   // over one 3 s poll period
   await page.evaluate(() => { window.demoFetch = window.__realFetch; });
   ok("the daemon's log page streams its start-log lines");
   // ---- frame-only checks (the new mechanism; not red-before evidence) ----
