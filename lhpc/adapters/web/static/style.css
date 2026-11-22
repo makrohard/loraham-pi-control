@@ -110,6 +110,9 @@ h3 { font-size: 1rem; margin: .6rem 0 .35rem; }
    .wrap, so its buttons never move; the named narrow exceptions (the confirmation pages: body.narrow-page) keep it too */
 main.wrap { max-width: none; padding-left: max(1.25rem, 2vw); padding-right: max(1.25rem, 2vw); }
 body.narrow-page main.wrap { max-width: 1024px; padding-left: 1.25rem; padding-right: 1.25rem; }
+/* dash plan c12 S9 (his word): Home's Webserver card (Firewall box inside) and System card are exactly the two radio
+   cards' width (484 + 16 + 484 = 984 px), left-aligned with the radio grid; full width on phones */
+main.wrap > .card.wsbox, main.wrap > .card.sysbox { width: min(100%, 984px); box-sizing: border-box; }
 .nav { background: #08305c; box-shadow: var(--shadow); }
 .nav .wrap { display: flex; flex-wrap: wrap; gap: .25rem .9rem; padding-top: .5rem; padding-bottom: .5rem; }
 .nav a { color: #cfe0f3; font-size: .9rem; }
