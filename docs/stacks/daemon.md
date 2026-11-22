@@ -137,8 +137,9 @@ A client app re-`SET`s its own radio params and `TXMODE` on connect, so those ro
 **app-owned** (applied, then overwritten; greyed in the panel); the LBT timing params (`CADWAIT`,
 `CADIDLE`, `TXQUEUE`, `CADMONITOR`, `CADRSSI`, `CADTXAFTERTIMEOUT`) are operator-owned and stick, and so is
 `POWER` for chat and kiss (kiss's from its next start: its TNC sends the start-time value in every SET).
-Reticulum's rows are all operator-owned and Save-only: its interface sends them at every (re)connect (no LHPC
-`SET`, no *Apply*); its panel inherits nothing from the radio's row.
+Reticulum's rows are all operator-owned and Save-only: its interface sends the values it started with at every
+(re)connect (no LHPC `SET`, no *Apply*); its panel inherits nothing from the radio's row. While the node runs, *Save*
+checks the section first; a joined radio reloads it, the node's own radio is marked restart required.
 A profile is the app's default, not a legal ceiling; the licence-free stacks sit inside the SRD
 limits in [reticulum](reticulum.md#band-limits). Defaults:
 

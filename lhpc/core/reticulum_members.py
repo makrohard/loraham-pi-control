@@ -91,11 +91,12 @@ def joining(svc, inst) -> str:
     return rid if own is not None and own.get("rid") == owner != rid else ""
 
 
-def _block(svc, owner, rid: str, overrides=None) -> tuple[str, str]:
-    """(rid's member block as the node file renders it, why not): the node's file rendered in memory (B3's renderer);
-    `overrides` ({file param: value}): a save's values not committed yet."""
+def _block(svc, owner, rid: str, overrides=None, panel=None) -> tuple[str, str]:
+    """(rid's block as the node file renders it, why not): the node's file rendered in memory (B3's renderer);
+    `overrides` ({file param: value}) and `panel` ({rid: section values}): a save's values not committed yet."""
     inst = instances.copy_of(svc, STACK_ID, owner)[0]
-    writes = svc.write_config_files(NODE_ID, getattr(inst, "band", ""), inst=inst, overrides=overrides, _render_only=True)
+    writes = svc.write_config_files(NODE_ID, getattr(inst, "band", ""), inst=inst, overrides=overrides,
+                                    _render_only=True, _panel=panel)
     text = next((w.detail for w in writes if w.component == NODE_ID and w.status == "rendered"), "")
     block = reticulum_node.section_text(text, rid)
     why = next((w.detail for w in writes if w.component == NODE_ID and w.status == "member-skipped" and w.path == rid),
@@ -212,6 +213,19 @@ def save_refusal(svc, sid: str, current: dict, merged: dict, inst) -> str:
     block, why = _block(svc, owner, rid, overrides=_file_values(merged))
     why = why or check(svc, rid, block)
     return f"{sid}@{rid}: the interface would refuse these settings: {why}" if why else ""
+
+
+def panel_refusal(svc, rid: str, section: dict) -> tuple[str, bool]:
+    """A daemon panel Save of `rid` (plan v22 §8.3 B2b): (why the interface would refuse its would-be `section` — the
+    interface's own check BEFORE the save commits, "" = it accepts it; `rid` owns the running node). ("", False) when
+    `rid` is neither the running node's owner nor a radio joined to it: its next start or connect renders and checks."""
+    own = owner_record(svc)
+    owner = str(own.get("rid", "")) if own is not None else ""
+    if not owner or (rid != owner and instances.member_of(svc, STACK_ID, rid) != owner):
+        return "", False
+    block, why = _block(svc, owner, rid, panel={rid: section})
+    why = why or check(svc, rid, block)
+    return (f"the interface would refuse these settings: {why}" if why else ""), rid == owner
 
 
 def reload(svc, rid: str) -> str:

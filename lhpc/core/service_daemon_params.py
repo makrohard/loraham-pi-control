@@ -358,10 +358,15 @@ class DaemonParamsMixin:
         """Persist `target`'s daemon params on radio `rid` (DEC-W384az, radio_start.save_params): the daemon's own into
         rid's row, a client stack's into its instance set `<sid>@<rid>`. A param NOT in `values` is left unchanged; a
         BLANK clears it; a value is validated for rid's chip and grant, then canonicalised (`fsk` -> `FSK`). Never
-        applies live."""
+        applies live — but a changed section of a radio joined to the running Reticulum node reloads its interface
+        (B2b: the same reload as a Config save, reticulum_members.after_save)."""
+        from . import commands, reticulum_members
         if not self._has_daemon_params(target):
             return ActionResult(False, f"{target} has no configurable daemon parameters")
-        return radio_start.save_params(self, target, rid, values)
+        res = radio_start.save_params(self, target, rid, values)
+        lines = reticulum_members.after_save(self, target, commands.Instance(rid)) if res.data.get("changed") else []
+        return ActionResult(res.ok, "; ".join([res.summary, *(ln.strip() for ln in lines)]), details=lines,
+                            data=res.data) if lines else res
 
     @invalidates_snapshot
     def apply_daemon_params(self, target: str, *, rid: str) -> ActionResult:
@@ -387,8 +392,8 @@ class DaemonParamsMixin:
             return ActionResult(False, f"Cannot apply {target}'s daemon parameters: {why}")
         name = target if is_daemon else f"{sid}@{rid}"
         if sid in daemon_params.SAVE_ONLY:
-            return ActionResult(False, f"{name}'s daemon parameters take effect when its radio (re)connects: "
-                                       "Save them, then reconnect the radio")
+            return ActionResult(False, f"{name}'s daemon parameters apply at Save: a radio joined to the Reticulum "
+                                       "node reloads them at once, the node's own radio at the node's restart")
         if not (is_daemon or radio_start.radio_clients(self, rid, sid)[1]):
             return ActionResult(False, f"Apply live is only available while {name} is running")
         keys = [f"lifecycle.{sid}", "claim." + radio_start.claim_key(self._paths, rid)]   # vs start/stop on its radio

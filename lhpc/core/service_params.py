@@ -1837,7 +1837,8 @@ class ParamsConfigMixin:
     @invalidates_snapshot
     def write_config_files(self, target: str, band: str = "",
                            overrides: dict | None = None,
-                           position: dict | None = None, inst=None, _render_only: bool = False) -> list[ConfigWrite]:
+                           position: dict | None = None, inst=None, _render_only: bool = False,
+                           _panel: dict | None = None) -> list[ConfigWrite]:
         """(Re)generate every file-config component's config file from the stored
         (per-band) values. Returns a STRUCTURED result per component (written /
         no-base / failed) so an auto-start can block on a generation
@@ -1972,6 +1973,8 @@ class ParamsConfigMixin:
                 if getattr(p, "from_panel", "") and self._panel_owned(target, inst):
                     # reti B2: a daemon radio's value is its panel's (one source, plan §1b R7); on spi the ordinary
                     # value (a hidden one's is blank: left out)
+                    if panel is None and (getattr(inst, "rid", "") or "") in (_panel or {}):
+                        panel = _panel[inst.rid]        # B2b: a panel Save's would-be section (render only, its check)
                     if panel is None:
                         panel, secret_error = _radio_start.panel_section(self, self._owner_stack_id(target),
                                                                          getattr(inst, "rid", "") or "")

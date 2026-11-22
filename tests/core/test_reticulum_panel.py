@@ -126,7 +126,7 @@ def test_lhpc_sends_nothing_to_the_daemon_for_reticulum_and_apply_live_is_refuse
     assert svc.save_daemon_params("reticulum", {"CADIDLE": "70"}, rid="r2").ok
     assert svc._daemon_param_applies("reticulum", "r2") == {}       # the stack start's apply step sends no SET
     res = svc.apply_daemon_params("reticulum", rid="r2")
-    assert not res.ok and "take effect when its radio (re)connects" in res.summary
+    assert not res.ok and "apply at Save" in res.summary
 
 
 # ---- the Config page ----------------------------------------------------------------------------------------------------
@@ -155,3 +155,25 @@ def test_the_cli_names_the_daemon_panel_for_a_radio_value(tmp_path, monkeypatch,
     rc = cli.main(["config", "reticulum@r2", "frequency"])
     out = capsys.readouterr().out
     assert rc == 1 and "--daemon-param FREQ=VALUE" in out
+
+
+# ---- a Save while the node runs (plan v22 §8.3 B2b) -------------------------------------------------------------------
+
+def test_the_owners_panel_save_is_checked_first_and_marks_the_node_restart_required(tmp_path, monkeypatch):
+    from lhpc.core import reticulum_members
+    svc, seen = _svc(tmp_path), []
+    monkeypatch.setattr(reticulum_members, "check",
+                        lambda s, rid, block: seen.append(block) or ("txpower: above the band cap" if "13" in block else ""))
+    assert svc.save_daemon_params("reticulum", {"POWER": "13"}, rid="r2").ok       # the node is down: its start checks
+    assert seen == [] and svc.restart_required("reticulum@r2") is None
+    monkeypatch.setattr(reticulum_members, "owner_record", lambda s: {"rid": "r2", "node_owner": True})
+    res = svc.save_daemon_params("reticulum", {"POWER": "12", "CADIDLE": "60", "SF": "8"}, rid="r2")
+    # red-before (da24e83c): no check and no marker — the running interface kept 13 with nothing to say so
+    assert res.ok and "take effect at its restart" in res.summary and len(seen) == 1
+    assert {"dp_POWER", "dp_CADIDLE"} <= set(svc.restart_required("reticulum@r2")["params"])
+    assert "dp_SF" not in svc.restart_required("reticulum@r2")["params"]                    # SF 8 = as it was
+    res = svc.save_daemon_params("reticulum", {"POWER": "13"}, rid="r2")
+    assert not res.ok and "the interface would refuse these settings: txpower" in res.summary
+    assert _rows(svc, "r2")["POWER"]["value"] == "12"
+    seen.clear()
+    assert svc.save_daemon_params("reticulum", {"POWER": "12"}, rid="r2").ok and seen == []     # nothing changed

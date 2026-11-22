@@ -6,8 +6,9 @@
   <details class="advcfg dparams" id="stack-daemon-params-{{ stack_id }}"{% if request.args.get('dp') == stack_id %} open data-force-open="1"{% endif %}>
     <summary>Daemon radio parameters</summary>
     {% if daemon_params.save_only %}
-    <p class="muted">This radio's settings, all in one place: its interface sends them to the daemon each time the
-      radio (re)connects. <em>Save</em> stores; they take effect when the radio (re)connects; <em>Reset</em>
+    <p class="muted">This radio's settings, all in one place: its interface sends them to the daemon, with the values
+      it was started with. <em>Save</em> checks and stores them: a radio joined to the running Reticulum node reloads
+      them at once, the node's own radio takes them at the node's restart (marked restart required); <em>Reset</em>
       restores defaults.</p>
     {% else %}
     <p class="muted">Applied to the daemon <strong>once</strong>, right after it starts and before this
@@ -57,7 +58,7 @@
                        data-dpdefault="{{ r.default }}" data-config="{{ r.value }}">
               {% endif %}
             </td>
-            <td class="dphelp muted">{{ r.desc }}{% if daemon_params.save_only %} <em>Takes effect when the radio (re)connects.</em>{% elif r.at_start %} <em>Takes effect at the next start.</em>{% endif %}</td>
+            <td class="dphelp muted">{{ r.desc }}{% if daemon_params.save_only %} <em>Takes effect at Save (a joined radio) or at the node's restart.</em>{% elif r.at_start %} <em>Takes effect at the next start.</em>{% endif %}</td>
           </tr>
         {% endfor %}
       </table>

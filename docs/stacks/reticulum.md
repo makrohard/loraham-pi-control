@@ -67,7 +67,8 @@ The radio Reticulum is started on owns the node (`[[LoRa <rid>]]` in its config)
 the node runs asks to connect it instead — live, no restart: `lhpc stack start reticulum@<rid> --join --yes`, or
 Connect on the radio's card. Its card then says "Connected to the Reticulum node on <owner>"; its Stop
 (Disconnect) detaches it and the node keeps running. A radio that should be connected and is not says "Not
-connected — <why>" with Connect and Remove. A member's saved settings reload its interface live. The owner's Stop
+connected — <why>" with Connect and Remove. A member's saved settings (Config or panel) reload its interface live; the owner's panel values take effect at
+the node's restart. The owner's Stop
 ends the node and its memberships; a restart of the owner restarts the node once and connects its radios again.
 MeshChat lists a newly connected radio after its own restart ([Clients](#clients)).
 

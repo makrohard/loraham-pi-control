@@ -379,3 +379,22 @@ def test_a_member_restart_rejoins_the_node(box):
     # red-before (bbaf96b6): its stop cleared the intent, so its start was the Connect offer (refused)
     assert res.ok, res.summary + "\n".join(res.details)
     assert owner.poll() is None and _member(box, "r1") and _intent(box, "r1") == "r2"
+
+
+# ---- the daemon panel of a node radio (plan v22 §8.3 B2b) -------------------------------------------------------------
+
+def test_a_joined_radios_panel_save_is_checked_first_and_reloads_it_live(box):
+    from lhpc.core import radio_start, reticulum_members
+    _owner_up(box)
+    reticulum_members._save_intent(box.svc, "r4", "r2")
+    assert reticulum_members.attach(box.svc, "r2", "r4") == ""          # the join's rns step (r4's daemon: not here)
+    box.node.check_line = "txpower: above the 868 MHz band cap"
+    res = box.svc.save_daemon_params("reticulum", {"POWER": "13"}, rid="r4")
+    # red-before (da24e83c): saved unchecked, nothing reloaded (the interface keeps its start-time section)
+    assert not res.ok and "the interface would refuse these settings: txpower" in res.summary, res.summary
+    assert box.node.calls[-1][0] == "check" and re.search(r"txpower\s*=\s*13\b", box.node.calls[-1][1])
+    assert "POWER" not in radio_start.instance_dp(box.svc, "reticulum", "r4")
+    box.node.check_line, calls = "", len(box.node.calls)
+    res = box.svc.save_daemon_params("reticulum", {"POWER": "12"}, rid="r4")
+    assert res.ok and "r4: reloaded live" in res.summary and ("--reload", "LoRa r4") in box.node.calls[calls:]
+    assert box.svc.restart_required("reticulum@r4") is None and _member(box, "r4")

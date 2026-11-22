@@ -821,18 +821,36 @@ def dp_target(svc, target: str, rid: str) -> tuple:
     return (sid, is_daemon, band, "") if not why else ("", False, "", why)
 
 
-def _panel_rows(svc, sid: str, rid: str, band: str) -> list:
+def _panel_rows(svc, sid: str, rid: str, band: str, dp=None) -> list:
     from . import daemon_params
-    return daemon_params.stack_view(sid, band, panel_dp(svc, sid, rid), chip_family(svc, rid) or "",
+    return daemon_params.stack_view(sid, band, panel_dp(svc, sid, rid) if dp is None else dp, chip_family(svc, rid) or "",
                                     effective_high_power(svc, rid), *power_window(svc, rid))
 
 
-def panel_section(svc, sid: str, rid: str) -> tuple:
+def panel_section(svc, sid: str, rid: str, dp=None) -> tuple:
     """({section key: value}, "") of SAVE_ONLY instance `<sid>@<rid>` — its panel's rows (the same function the panel
-    shows) in the interface's spelling — or ({}, why) when it has no panel there."""
+    shows; `dp`: a set not saved yet instead of its own) in the interface's spelling — or ({}, why) when it has no panel
+    there."""
     from . import daemon_params
     _sid, _is_daemon, band, why = dp_target(svc, sid, rid)
-    return ({}, why) if why else (daemon_params.section_values(_panel_rows(svc, sid, rid, band)), "")
+    return ({}, why) if why else (daemon_params.section_values(_panel_rows(svc, sid, rid, band, dp)), "")
+
+
+def _save_only_gate(svc, sid: str, rid: str, edits: dict) -> tuple[str, list, bool]:
+    """A SAVE_ONLY panel Save (plan v22 §8.3 B2b): (why not, the changed params, `rid` owns the running node). While the
+    node runs on or with `rid`, its would-be section passes the interface's own check BEFORE the commit; the owner's
+    interface keeps the section it started with, so the owner gets the restart-required marker (first: a failed write
+    leaves a safe-side marker); a member reloads after the commit (the caller). Nothing changed: nothing to check."""
+    from . import daemon_params, reticulum_members
+    after = {n: v for n, v in {**instance_dp(svc, sid, rid), **edits}.items() if v}
+    now, new = panel_section(svc, sid, rid)[0], panel_section(svc, sid, rid, after)[0]
+    changed = [f"dp_{n}" for n, k in daemon_params.SECTION_KEYS.items() if now.get(k) != new.get(k)]
+    if not changed:
+        return "", [], False
+    why, owner = reticulum_members.panel_refusal(svc, rid, new)
+    if not why and owner:
+        why = mark_ceiling_restart(svc, rid, [sid], cfgmod.apply_config_transaction, changed)
+    return why, changed, owner
 
 
 def params_view(svc, target: str, rid: str) -> dict:
@@ -877,6 +895,9 @@ def save_params(svc, target: str, rid: str, values: dict):
                             inherited=inherited_dp(svc, sid, rid), pwin=power_window(svc, rid))
     if err:
         return ActionResult(False, err)
+    gate = _save_only_gate(svc, sid, rid, edits) if sid in daemon_params.SAVE_ONLY else ("", [], False)
+    if gate[0]:
+        return ActionResult(False, f"the daemon settings of {sid}@{rid} not saved: {gate[0]}")
     if "POWER" in edits and sid in running_ceiling_stacks(svc, rid):
         why = ceiling_change(svc, rid, {sid: edits["POWER"] or inherited_dp(svc, sid, rid).get("POWER", "")},
                              cfgmod.apply_config_transaction)
@@ -887,7 +908,9 @@ def save_params(svc, target: str, rid: str, values: dict):
     except (OSError, cfgmod.ConfigError, PathContainmentError) as exc:
         return ActionResult(False, f"could not save the daemon settings of {sid}@{rid}: {exc}")
     svc._invalidate_config()
-    return ActionResult(True, f"saved the daemon settings of {sid}@{rid}")
+    return ActionResult(True, f"saved the daemon settings of {sid}@{rid}" + (
+        " — the Reticulum node runs on it: they take effect at its restart" if gate[2] else ""),
+        data={"changed": gate[1]})
 
 
 def _radio_updates(svc, target: str, rid: str, values: dict) -> tuple:
@@ -1088,13 +1111,14 @@ def ceiling_change(svc, rid: str, new: dict, apply) -> str:
     return mark_ceiling_restart(svc, rid, raised, apply)
 
 
-def mark_ceiling_restart(svc, rid: str, sids, apply) -> str:
-    """Each `<sid>@<rid>`'s restart-required marker for its POWER (one config transaction through `apply`, merged with
-    the marker as it stands; an unreadable marker already demands attention); "" when written or nothing to mark."""
+def mark_ceiling_restart(svc, rid: str, sids, apply, params=("dp_POWER",)) -> str:
+    """Each `<sid>@<rid>`'s restart-required marker for `params` (its POWER; one config transaction through `apply`,
+    merged with the marker as it stands; an unreadable marker already demands attention); "" when written or nothing
+    to mark."""
     from . import config, restart_required
     band = daemon_radio(svc, rid)[1]
     targets = [("state", restart_required.marker_path(svc._paths, key),
-                svc.restart_marker_payload(key, ["dp_POWER"], band), 0o600)
+                svc.restart_marker_payload(key, list(params), band), 0o600)
                for sid in sids if not (svc.restart_required(key := f"{sid}@{rid}") or {}).get("unsafe")]
     try:
         if targets:
