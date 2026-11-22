@@ -474,7 +474,8 @@ input.wide { width: 100%; min-width: 16rem; }
 .settings th { width: 12rem; }
 /* Live daemon settings (daemon page): one param per cell, two columns when wide enough. */
 .settingsgrid { display: grid; grid-template-columns: 1fr; gap: .35rem 1.6rem; margin: .3rem 0 .6rem; }
-@media (min-width: 880px) { .settingsgrid { grid-template-columns: 1fr 1fr; } }
+/* dash plan c12 S6 (his "settings fill"): from 880 px as many 26rem columns as fit the wide page (4 at 1920) */
+@media (min-width: 880px) { .settingsgrid { grid-template-columns: repeat(auto-fill, minmax(26rem, 1fr)); } }
 .setcell { display: flex; align-items: center; gap: .6rem; }
 .setkey { min-width: 6rem; font-family: ui-monospace, monospace; font-size: .85rem; }
 /* Fill the cell and push the Apply button to the right edge so buttons line up per column. */
