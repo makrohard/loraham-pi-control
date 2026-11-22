@@ -249,6 +249,9 @@ try {
   await monitorLive();
   ok("the Monitor's STATUS (ID=r1) and STATS views are live within 3 s");
   // (a) #13, the logs: the RF log page's decoded view (rflog.js) and the daemon's log tail (logpanel.js) have lines.
+  // A log check holds a line the demo writes into the daemon's start log (service.py _write_logs), not just any text:
+  // "(no output yet)" is what logpanel.js/logs.js show for an empty or missing log.
+  const START = "[demo] loraham-daemon started for daemon@r1";
   const rfLines = async () => {
     await render(page, "/logs/loraham-daemon?job=r1/rf-daemon.log&radio=r1", "#rfview");
     await page.waitForFunction(() => doc().querySelectorAll("#rfview tbody tr").length > 0, { timeout: 3000 });
@@ -260,13 +263,13 @@ try {
     await render(page, "/stacks?open=daemon", "#stackrow-daemon");
     await page.waitForFunction((sel) => !!doc().querySelector(sel), { timeout: 30000 }, DLOG);
     await page.evaluate((sel) => { const d = doc().querySelector(sel); if (!d.open) d.querySelector(":scope > summary").click(); }, DLOG);
-    await page.waitForFunction((sel) => {
+    await page.waitForFunction(({ sel, start }) => {
       const t = ((doc().querySelector(sel + " .logpanel-text") || {}).textContent || "").trim();
-      return t.split("\n").filter((x) => x.trim()).length > 0 && !/could not load/.test(t);
-    }, { timeout: 3000 }, DLOG);
+      return t.includes(start) && !/could not load/.test(t);
+    }, { timeout: 3000 }, { sel: DLOG, start: START });
   };
   await daemonTail();
-  ok("the daemon's log tail has lines");
+  ok("the daemon's log tail holds its start-log line");
 
   await render(page, "/", "#sysbox");
   // (g) CAD "Scan now": dash.js's POST (form-urlencoded, with its CSRF token) answers through the bridge.
@@ -317,15 +320,17 @@ try {
 
 
   // G2 #18: a program's log page streams: the product's logs.js polls /api/logs/<target> through the bridge (the page's
-  // first lines are the server's; the poll is the stream) and the box holds the daemon's start-log lines.
+  // first lines are the server's; the poll is the stream) and the box holds the daemon's start-log lines. Only a poll
+  // that ANSWERED ok counts (logs.js rewrites the box only then), and the box then holds the start-log line.
   await page.evaluate(() => { const real = window.demoFetch; window.__polls = 0;
-    window.demoFetch = (u, o) => { if (String(u).startsWith("/api/logs/loraham-daemon")) window.__polls++; return real(u, o); };
+    window.demoFetch = (u, o) => { const r = real(u, o);
+      return String(u).startsWith("/api/logs/loraham-daemon") ? r.then((x) => { if (x.ok) window.__polls++; return x; }) : r; };
     window.__realFetch = real; });
   await render(page, "/logs/loraham-daemon?radio=r1", "#logbox");
-  await page.waitForFunction(() => {
+  await page.waitForFunction((start) => {
     const t = ((doc().getElementById("logbox") || {}).textContent || "").trim();
-    return window.__polls > 0 && t !== "" && t !== "(no output yet)";
-  }, { timeout: 3500 });
+    return window.__polls > 0 && t.includes(start);
+  }, { timeout: 3500 }, START);
   await page.evaluate(() => { window.demoFetch = window.__realFetch; });
   ok("the daemon's log page streams its start-log lines");
   // ---- frame-only checks (the new mechanism; not red-before evidence) ----
