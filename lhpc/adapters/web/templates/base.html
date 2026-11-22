@@ -25,6 +25,9 @@
     {# The page body renders FIRST: its panels take the action results addressed to them (K4), and the top
        shows every result none took. The body is placed below the notices, as before. #}
     {% set _content = self.content() %}
+    {# dash plan c13 NAV FIRST (his word): the page's navigation lines (crumbline + optional second line) come first in
+       <main>, before every notice; rendered after the body (results routing above is unchanged) #}
+    {% block nav %}{% endblock %}
     {% for sev, msg in page_results() %}
       <p class="depnote {{ depnote_classes(sev) }} flash">{{ msg }}</p>
     {% endfor %}

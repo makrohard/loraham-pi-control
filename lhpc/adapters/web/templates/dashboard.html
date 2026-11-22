@@ -51,6 +51,10 @@
                         {% endif %}
                         <div class="muted">Interactive — run local:</div>
                         {{ cmdbox(box, cmd) }}{% endmacro %}
+{# dash plan c13a (his word): Home's one nav line "All menus · Home", the first thing after the header #}
+{% block nav %}
+  <div class="crumbline">{% include "_crumbs_all.html" %}<nav class="crumbs" aria-label="You are here"><h2 class="here">Home</h2></nav></div>
+{% endblock %}
 {% block content %}
   {% include "_task_banner.html" %}
   {% if attention %}

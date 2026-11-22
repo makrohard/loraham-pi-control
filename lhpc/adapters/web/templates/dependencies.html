@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% from "_macros.html" import action_btn, cmdbox %}
 {% block title %}dependencies — LoRaHAM Pi Control{% endblock %}
-{% block content %}
+{% block nav %}
   {% with here = "Dependency Overview" %}{% include "_apps_crumbs.html" %}{% endwith %}
+{% endblock %}
+{% block content %}
 
   <div class="card">
     <header><h2>Dependency Overview</h2></header>

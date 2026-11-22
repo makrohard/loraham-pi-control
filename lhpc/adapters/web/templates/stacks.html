@@ -1,12 +1,13 @@
 {% extends "base.html" %}
 {% from "_macros.html" import stack_actions, stack_row_actions, cmdbox %}{% from "_menu.html" import page_link %}
 {% block title %}stacks — LoRaHAM Pi Control{% endblock %}
-{% block content %}
-  {% include "_task_banner.html" %}
-
-  {# The page heading is the breadcrumb's current item (h1 is the site title in the header): h1 → h2 → h3. #}
+{# The page heading is the breadcrumb's current item (h1 is the site title in the header): h1 → h2 → h3. #}
+{% block nav %}
   <div class="crumbline">{% include "_crumbs_all.html" %}<nav class="crumbs" aria-label="You are here"><a href="{{ url_for('dashboard') }}">Home</a> ›
     <h2 class="here">Apps</h2></nav></div>
+{% endblock %}
+{% block content %}
+  {% include "_task_banner.html" %}
   {% if page_radio_why %}{# G1-W2-RE: a ?radio= the list does not have picks no radio; the page says so #}
     <div class="depnote depnote-warn" id="radio-refused"><strong>?radio={{ request.args.get('radio') }}: {{ page_radio_why }}.</strong>
       No radio is picked on this page: choose one in each selector.</div>

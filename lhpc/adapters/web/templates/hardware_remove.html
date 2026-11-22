@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% block body_class %}narrow-page{% endblock %}{# dash plan c12 S1: a named narrow exception (1024 px) #}
 {% block title %}Remove {{ plan.rid }} — LoRaHAM Pi Control{% endblock %}
-{% block content %}
+{% block nav %}
 {% with here = "Remove " ~ plan.rid %}{% include "_hw_crumbs.html" %}{% endwith %}
+{% endblock %}
+{% block content %}
 <section class="card" id="hardware-remove">
   <div class="body">
     {% if plan.row is none %}

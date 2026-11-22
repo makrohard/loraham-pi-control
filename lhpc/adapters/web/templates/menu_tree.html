@@ -13,9 +13,11 @@
     {% endfor %}
   </ul>
 {% endmacro %}
+{% block nav %}
+  <div class="crumbline"><nav class="crumbs" aria-label="You are here"><a href="{{ url_for('dashboard') }}">Home</a> ›
+    <a href="{{ url_for('stacks_overview') }}">Apps</a> › <h2 class="here">All menus</h2></nav></div>
+{% endblock %}
 {% block content %}
-  <nav class="crumbs" aria-label="You are here"><a href="{{ url_for('dashboard') }}">Home</a> ›
-    <a href="{{ url_for('stacks_overview') }}">Apps</a> › <h2 class="here">All menus</h2></nav>
   <div class="card">
     <div class="body">
       {% for owner, kids in owners %}{{ branch(owner, kids, None) }}{% endfor %}

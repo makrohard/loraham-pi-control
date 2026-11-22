@@ -2,9 +2,11 @@
 {#- UI-REORG s5: the ONE shell of the static full log pages (controller, webserver, firewall; logs.html has the same
     one): breadcrumb · header (the page's pill + tabs) · the path on its own line (+ an optional muted note) · the log,
     refreshed every 3 s by logs.js from /api/logpreview/<source>?lines=300 (`log_source`, the page's history depth). -#}
-{% block content %}
+{% block nav %}
   {% include "_log_crumbs.html" %}
   {% include "_show_in_stacks.html" %}
+{% endblock %}
+{% block content %}
   <div class="card" id="log-card" data-preview="{{ log_source }}">
     <header>{% block header %}{% endblock %}</header>
     <div class="body">

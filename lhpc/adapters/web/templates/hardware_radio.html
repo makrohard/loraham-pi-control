@@ -1,9 +1,11 @@
 {% extends "base.html" %}
 {% from "_hw_macros.html" import detect_result, hidden with context %}
 {% block title %}{{ r.rid }} — Hardware — LoRaHAM Pi Control{% endblock %}
-{% block content %}
+{% block nav %}
 {% with here = r.rid ~ " — " ~ r.name %}{% include "_hw_crumbs.html" %}{% endwith %}
 <p class="pagebar"><a href="{{ url_for('hardware_view') }}">‹ The radios</a></p>
+{% endblock %}
+{% block content %}
 <section class="card" id="hardware-radio" data-rid="{{ r.rid }}">
   <div class="body">
     <dl class="facts">

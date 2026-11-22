@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% block title %}logs {{ target }} — LoRaHAM Pi Control{% endblock %}
-{% block content %}
+{% block nav %}
   {% include "_log_crumbs.html" %}
   {% include "_show_in_stacks.html" %}
+{% endblock %}
+{% block content %}
   <div class="card" id="log-card" data-target="{{ target }}" data-job="{{ job or '' }}" data-radio="{{ radio or '' }}" data-decoder="{{ '1' if rflog and rflog.decoder else '0' }}">
     <header>
       <span class="pill">{{ rflog.label if rflog else target }}</span>
