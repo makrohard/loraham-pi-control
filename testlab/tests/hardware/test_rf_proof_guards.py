@@ -2,6 +2,7 @@
 live run, and the source-only mode (RFPROOF_SOURCE_ONLY=1: the functions, no stdin, lab file, box or peer). No box, no peer,
 no radio: a box or PC command runs as a fake on PATH or as a plain shell command in a temporary evidence directory."""
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -327,7 +328,7 @@ def _mt(ts, d="TX"):
     return f'{{"timestamp":{ts},"from":0,"to":1,"size":2,"bytes":"AABB"{rx}}}\n'
 
 
-DMN, MCOM, MT, RNS = "logs/r1/rf-daemon.log", "logs/r1/rf-meshcom.log", "logs/r1/rf-meshtastic.log", "logs/rf-reticulum.log"
+DMN, MCOM, MT, RNS = "logs/r1/rf-daemon.log", "logs/r1/rf-meshcom.log", "logs/r1/rf-meshtastic.log", "logs/r1/rf-reticulum.log"
 RLOG, PREV = "logs/start-loraham-daemon-433-r1.log", "logs/start-loraham-daemon-433-r1.prev.log"
 BANNER = "loraham_daemon 1.4.1 r1 433: started\n" * 3
 ERR = "[433] transmit ERROR: -5\n"
@@ -345,9 +346,13 @@ BASE = {DMN: _l(PRE), MCOM: _l(PRE), RNS: _l(PRE), RLOG: BANNER + ERR}   # one E
     ({DMN: _l(PRE) + _l(RUN) * 10, RLOG: BANNER + ERR}, "", "r1 10|"),                     # the ERROR from before the run: not this run's
     ({MT: _mt(PRE) + _mt(RUN, "RX") + _mt(RUN) * 11}, "", "FAIL r1 11|"),                    # meshtastic's JSON trace (row 3)
     ({MT: _mt(PRE) + _mt(RUN) * 3}, "", "r1 3|"),
-    ({DMN: _l(PRE) + _l(RUN) * 2, RNS: _l(PRE) + _l(RUN) * 4 + _l(RUN, "RX")}, "r1", "r1 6|"),         # Reticulum's one log (row 5)
-    ({RNS: _l(PRE) + _l(RUN)}, "", "FAIL r1 0|reticulum UNREADABLE|"),                                  # no radio named: never its own entry
-    ({RNS + ".1": _l(RUN) * 2, RNS: _l(RUN)}, "r1", "FAIL r1 UNREADABLE|"),                    # Reticulum's lines lost: its radio
+    ({DMN: _l(PRE) + _l(RUN) * 2, RNS: _l(PRE) + _l(RUN) * 4 + _l(RUN, "RX")}, "r1=spi", "r1 6|"),     # the radio's own Reticulum log, spi (row 5)
+    # the daemon backend (rows 12, 13): Reticulum's frames are the daemon's again, a mirror
+    # red-before (82dc98ad): r1 8 (the Reticulum log added on top of the daemon's frames)
+    ({DMN: _l(PRE) + _l(RUN) * 4, RNS: _l(PRE) + _l(RUN) * 4}, "r1=daemon", "r1 4|"),
+    ({DMN: _l(PRE) + _l(RUN) * 4, RNS: _l(PRE) + _l(RUN) * 4}, "", "r1 8|"),                  # no backend read by the kit: on top (safe side)
+    ({RNS: _l(PRE) + _l(RUN)}, "", "r1 1|"),                                                  # a radio's own Reticulum log counts on it
+    ({RNS + ".1": _l(RUN) * 2, RNS: _l(RUN)}, "r1=spi", "FAIL r1 UNREADABLE|"),                # Reticulum's lines lost: its radio
     ({DMN + ".1": _l(PRE) + _l(RUN) * 2, DMN: _l(RUN) * 3}, "", "r1 5|"),                    # a roll in the run: both parts
     ({DMN + ".1": _l(PRE) + _l(RUN) * 6, DMN: _l(RUN) * 5}, "", "FAIL r1 11|"),
     ({DMN + ".1": _l(RUN) * 2, DMN: _l(RUN)}, "", "FAIL r1 UNREADABLE|"),                    # two rolls: lines lost
@@ -381,7 +386,7 @@ def _rs(tmp_path, before, after, rns, want, box_env="", extra=""):
         if c is not None:
             (ovl / f).parent.mkdir(parents=True, exist_ok=True)
             (ovl / f).write_text(c)
-    rnsk = f"keep RNS_H {rns}; " if rns else ""
+    rnsk = "keep RNS_H_{} {}; ".format(*rns.split("=")) if rns else ""   # the backend a Reticulum row read on that radio
     r, _ = source_only(tmp_path, setup + f'EVD="$EVD/run"; OUT=$EVD; row_R0 > /dev/null || exit 7; cp -r "{ovl}"/. "{rt}"/; rm -f {" ".join(gone) or "/dev/null/x"}; '
                                          f'{rnsk}{extra}: > "$EVD/undo.list"; : > "$EVD/undo.done"; usbguard() {{ :; }}; row_RS && echo RS-DONE',
                        **env)
@@ -414,11 +419,13 @@ def test_a_frame_in_the_second_of_t0_counts(tmp_path):
         box_env=_clock(t0))
 
 
-def test_row_5_records_its_radio_for_the_reticulum_count(tmp_path):
-    # row 5 keeps RNS_<box> before Reticulum can send (rnsrids reads it at RS); the row stops at its power read here
+@pytest.mark.parametrize("row, be", [("5", "spi"), ("12", "daemon")])
+def test_a_reticulum_row_records_its_radio_and_backend_for_the_count(tmp_path, row, be):
+    # a Reticulum row keeps RNS_<box>_<rid>=<backend> before Reticulum can send (rnsrids reads it at RS); the row stops at its
+    # power read here. red-before (82dc98ad): row 5 kept RNS_H=r2 (one radio per box, no backend); row_12 was not found
     r, evd = source_only(tmp_path, 'MODE=dry; SCRATCH=$EVD; needs() { return 0; }; must() { :; }; undo_push() { :; }; spower() { exit 0; }; '
-                                     'keep KZ r2; row_5 H:KZ')
-    assert "RNS_H=r2" in (evd / "state.env").read_text().splitlines(), r.stdout + r.stderr
+                                     f'keep KZ r2; row_{row} H:KZ')
+    assert f"RNS_H_r2={be}" in (evd / "state.env").read_text().splitlines(), r.stdout + r.stderr
 
 
 @pytest.mark.parametrize("before, after, extra, want", [
@@ -436,20 +443,23 @@ def test_rs_never_reads_missing_tx_evidence_as_zero(tmp_path, before, after, ext
     _rs(tmp_path, before, after, "", want, extra=extra)
 
 
-@pytest.mark.parametrize("lines, ok", [("r1 3\nr2 0\n", True), ("r1 3\nr2 0\nreticulum UNREADABLE\n", True), ("", False),
+@pytest.mark.parametrize("lines, ok", [("r1 3\nr2 0\n", True), ("r1 3\nr2 0\nreticulum UNREADABLE\n", False), ("", False),
                                        ("r1 3\n", False), ("r1 3\nr1 3\nr2 0\n", False), ("r1 3\nr2 0\nr9 0\n", False),
                                        ("r1 3\nr2 -1\n", False), ("r1 3\nr2 x\n", False)])
 def test_the_tx_count_has_exactly_one_valid_line_per_radio(tmp_path, lines, ok):
-    # red-before (badc0a7b, G2-HWKIT-D B2): an empty or short count passed the TXMAX check
+    # red-before (badc0a7b, G2-HWKIT-D B2): an empty or short count passed the TXMAX check; "reticulum UNREADABLE" is no
+    # longer a judge line (each radio counts its own Reticulum log). red-before (82dc98ad): that line passed (OK)
     r, _ = source_only(tmp_path, f'printf "{lines}" > "$EVD/c"; txlines "$EVD/c" "r1 r2" && echo OK')
     assert ("OK" in r.stdout) == ok, r.stdout + r.stderr
 
 
-def test_reticulum_on_several_radios_is_unattributable_and_no_radio_is_charged(tmp_path):
-    # G2-HWKIT-D N2: the aggregate was charged to every named radio (a false FAIL on each)
-    r, _ = source_only(tmp_path, f'printf "F - rns rf-reticulum.log 1 {PRE} 0\\n" > "$EVD/a"; printf "F - rns rf-reticulum.log 4 {PRE} 3\\n" > "$EVD/b"; '
-                                   f'txjudge "$EVD/a" "$EVD/b" {NOW} "r2 r10"')
-    assert r.stdout.splitlines() == ["reticulum UNREADABLE"], r.stdout + r.stderr
+def test_each_radio_of_the_node_counts_its_own_reticulum_log_by_its_backend(tmp_path):
+    # Reticulum's RF log per radio (product 85fa9df5): r2 (daemon backend) and r10 (spi) count their own files, no sum; r2's
+    # Reticulum frames are its daemon's again. red-before (82dc98ad): ["r10 0", "r2 3"]: a radio's own Reticulum log never counted
+    a = (f"F r2 daemon rf-daemon.log 1 {PRE} 0\\nF r2 rns rf-reticulum.log 1 {PRE} 0\\nF r10 rns rf-reticulum.log 1 {PRE} 0\\n")
+    b = (f"F r2 daemon rf-daemon.log 4 {PRE} 3\\nF r2 rns rf-reticulum.log 4 {PRE} 3\\nF r10 rns rf-reticulum.log 3 {PRE} 2\\n")
+    r, _ = source_only(tmp_path, f'printf "{a}" > "$EVD/a"; printf "{b}" > "$EVD/b"; txjudge "$EVD/a" "$EVD/b" {NOW} "r2=daemon r10=spi"')
+    assert r.stdout.splitlines() == ["r10 2", "r2 3"], r.stdout + r.stderr
 
 
 def test_a_radio_that_could_not_send_and_has_no_log_counts_zero(tmp_path):
@@ -473,11 +483,11 @@ def test_a_radio_of_r0_without_its_facts_at_rs_is_unreadable(tmp_path):
     assert r.stdout.splitlines() == ["r1 0", "r2 UNREADABLE"], r.stdout + r.stderr
 
 
-def test_reticulum_counts_on_the_radios_it_ran_on(tmp_path):
-    # the radios from R0's running set (reticulum@rN) and row 5's radio, once each
-    r, _ = source_only(tmp_path, 'printf "kiss@r1\\nreticulum@r2\\nreticulum@r10\\n" > "$EVD/R0-H-runset.txt"; keep RNS_H r2; rnsrids H; echo; '
-                                   'keep RNS_H r3; rnsrids H')
-    assert r.stdout.splitlines() == ["r10 r2 ", "r10 r2 r3 "], r.stdout + r.stderr
+def test_reticulum_backends_are_kept_per_radio_of_the_box(tmp_path):
+    # every radio a Reticulum row ran the node on, once each, with the backend it read; another box's radios are not this box's
+    # red-before (82dc98ad): one empty line, nothing for either box (only RNS_<box>, one radio per box, and R0's running set)
+    r, _ = source_only(tmp_path, 'keep RNS_H_r2 daemon; keep RNS_H_r10 spi; keep RNS_Z_r2 spi; keep RNS_H_r2 daemon; rnsrids H; echo; rnsrids Z')
+    assert r.stdout.splitlines() == ["r10=spi r2=daemon ", "r2=spi "], r.stdout + r.stderr
 
 
 # ---- row 6 never runs a command line from the box's output: it builds the chat call from plain paths ----------------------
@@ -1185,6 +1195,62 @@ def test_row_5s_worst_case_is_three_frames_each_end(tmp_path):
     assert r.returncode == 0, r.stderr
     r0 = r.stdout.split("== ROW R0", 1)[1].split("== ROW R1", 1)[0]
     assert [line for line in r0.splitlines() if line.split(" | ")[0] == "BUDGET"] == ["BUDGET | PC:rnode | 3 | 10", "BUDGET | Z:r2 | 3 | 10"]
+
+
+def r0_budget(r):
+    r0 = r.stdout.split("== ROW R0", 1)[1].split("== ROW R1", 1)[0]
+    return [line for line in r0.splitlines() if line.split(" | ")[0] == "BUDGET"]
+
+
+@pytest.mark.parametrize("row, want", [
+    ("12", ["BUDGET | H:r5 | 3 | 10", "BUDGET | PC:rnode | 3 | 10"]),                       # row 5's three each end
+    ("13", ["BUDGET | H:r2 | 9 | 10", "BUDGET | H:r5 | 3 | 10", "BUDGET | PC:rnode | 9 | 10"]),   # A, B and the member
+])
+def test_a_reticulum_rows_worst_case_is_reserved_per_endpoint(tmp_path, row, want):
+    # red-before (82dc98ad): "STOP: ROWS_ONLY: '12' is not a row id" (and '13'), rc 2
+    r = dry(tmp_path, LANE="full", ROWS_ONLY=row, FAKE_PEER=_null_peer(tmp_path))
+    assert r.returncode == 0, r.stderr
+    assert r0_budget(r) == want
+
+
+def test_row_13s_member_is_resolved_granted_and_budgeted_in_r0(tmp_path):
+    # the member (flags member=H:HMS) is a third endpoint: R0 resolves it like A and B (r0grants then reads its grant)
+    # red-before (82dc98ad): "STOP: LANE=fast|full", rc 2
+    r = dry(tmp_path, LANE="rns")
+    assert r.returncode == 0, r.stderr
+    assert {"data: R0: row 13: H868 = H:r2 (loraham)", "data: R0: row 13: HMS = H:r5 (meshstick-1262)"} <= set(r.stdout.splitlines())
+    r = dry(tmp_path, LANE="rns", DRY_RADIOS_H=RADIOS_H.replace("r5 meshstick-1262 868 True", "r5 meshstick-1262 868 False"))
+    assert r.returncode == 0, r.stderr
+    assert "BUDGET" not in r.stdout and "13-" not in r.stdout               # nothing of the row runs, nothing is reserved
+    legs = ["owner both ways", "member joins", "member both ways", "member stops", "member joins again", "owner stops"]
+    assert [line for line in r.stdout.splitlines() if line.startswith("NOT RUN: ")] == [
+        f"NOT RUN: row 13 reticulum: two radios, one node {leg}: absent: radio HMS" for leg in legs]
+
+
+def test_a_member_with_a_high_power_grant_stops_r0(tmp_path):
+    # red-before (82dc98ad): "STOP: LANE=fast|full", rc 2 (no R0 of row 13 at all)
+    r = dry(tmp_path, LANE="rns", DRY_RADIOS_H=RADIOS_H.replace("serial=MSTICK01 port=1-3 hp=False", "serial=MSTICK01 port=1-3 hp=True"))
+    assert r.returncode == 2 and stop_lines(r) == ["STOP: R0: row 13, HMS = r5: the high-power grant of r5 is 'True' (want None or "
+                                                   "False): nothing starts"], r.stderr
+
+
+def test_row_13_renders_the_join_form_and_the_rehearsal_checks_it(tmp_path):
+    # red-before (82dc98ad): "STOP: ROWS_ONLY: '13' is not a row id", rc 2
+    r = dry(tmp_path, LANE="full", ROWS_ONLY="13")
+    assert r.returncode == 0, r.stderr
+    assert "dry self-check OK all-forms-printed" in r.stdout
+    joins = [line for line in r.stdout.splitlines() if "stack start reticulum@r5 --join --yes" in line]
+    assert [line.split(": ", 1)[0] for line in joins] == ["  [dry] H > 13-join.txt", "  [dry] H > 13-rejoin.txt"]
+    # a row 13 that no longer renders its join is named by the rehearsal (the form is needed, never printed)
+    hw = tmp_path / "r" / "testlab" / "hardware"                      # a copy beside this checkout's package: its REPO is a repo
+    shutil.copytree(HW, hw, ignore=shutil.ignore_patterns("*.local.env", "__pycache__"))
+    (tmp_path / "r" / "lhpc").symlink_to(HW.parents[1] / "lhpc")
+    s = (hw / "rf-proof.sh").read_text()
+    planted = s.replace('"$(form rt_join rid="$rm")"', '"$(form start inst="reticulum@$rm")"')
+    assert planted.count("form rt_join") == 0 and planted != s
+    (hw / "rf-proof.sh").write_text(planted)
+    r = dry(tmp_path, hw=hw, LANE="rns")
+    assert r.returncode == 2 and "STOP: dry self-check all-forms-printed: needed but never printed: rt_join" in r.stderr, r.stderr[-1500:]
 
 
 def test_the_fake_box_frames_the_trackers_ack(tmp_path):

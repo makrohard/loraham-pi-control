@@ -26,25 +26,40 @@ def block(out, row):
 
 # ---- row 5: the shipped defaults -----------------------------------------------------------------------------------------
 
-ROW5 = ('MODE=live; SCRATCH=$EVD; needs() { return 0; }; undo_push() { :; }; undo_mark() { echo 0; }; nonce() { echo rfkit 0a1b2c3d; }; '
-        'must() { case $2 in 5-framing0.txt) printf "%s\\n" "$FR" > "$OUT/$2";; *) echo "MUST $2" >> "$EVD/ran.txt";; esac; XRC=0; }; '
-        'spower() { echo REACHED; exit 0; }; keep KZ r2; row_5 Z:KZ')
+# a Reticulum row (ROW: 5 or 12) on a stand-in box: the framing and backend reads answer FR and BE, any other command is
+# only recorded; the row's power read (spower) is where it would go on
+RNSROW = ('MODE=live; SCRATCH=$EVD; needs() { return 0; }; undo_push() { :; }; undo_mark() { echo 0; }; nonce() { echo rfkit 0a1b2c3d; }; '
+          'must() { case $2 in *-framing0.txt) printf "%s\\n" "$FR" > "$OUT/$2";; *-backend0.txt) printf "%s\\n" "$BE" > "$OUT/$2";; '
+          '*) echo "MUST $2" >> "$EVD/ran.txt";; esac; XRC=0; }; spower() { echo REACHED; exit 0; }; keep KZ r2; "row_$ROW" Z:KZ')
 
 
 @pytest.mark.parametrize("fr", ["no", "", "yes no", "maybe"])
 def test_row_5_stops_unless_rnode_framing_reads_yes_and_sets_nothing(tmp_path, fr):
     # red-before (fe33ead8): a 'no' was set to yes by the kit (undo + rt_set), so the product default was never proven
-    r, evd = source_only(tmp_path, ROW5, FR=fr)
+    r, evd = source_only(tmp_path, RNSROW, FR=fr, BE="spi", ROW="5")
     assert r.returncode == 2, r.stdout + r.stderr
     assert stop_lines(r) == [f"STOP: row 5: rnode_framing reads '{fr}', not yes (the product default): "
                              "the kit sets nothing, no TX"]
     assert not (evd / "ran.txt").exists()                  # nothing after the read: no set, no start
 
 
-def test_row_5_goes_on_when_rnode_framing_reads_yes(tmp_path):
-    r, evd = source_only(tmp_path, ROW5, FR="yes")
+@pytest.mark.parametrize("row, be", [("5", "spi"), ("12", "daemon")])
+def test_a_reticulum_row_goes_on_when_framing_and_its_backend_read_the_rows(tmp_path, row, be):
+    # red-before (82dc98ad), 12: "row_12: command not found", rc 127 (5 went on: it read no backend)
+    r, evd = source_only(tmp_path, RNSROW, FR="yes", BE=be, ROW=row)
     assert r.returncode == 0 and "REACHED" in r.stdout, r.stdout + r.stderr
     assert not (evd / "ran.txt").exists()
+
+
+@pytest.mark.parametrize("row, be, got", [("5", "spi", "daemon"), ("5", "spi", ""), ("5", "spi", "spi daemon"),
+                                          ("12", "daemon", "spi"), ("12", "daemon", "")])
+def test_a_reticulum_row_stops_unless_the_radio_saves_its_backend_and_sets_nothing(tmp_path, row, be, got):
+    # red-before (82dc98ad): row 5 never read the backend (it reached its power read with any backend: rc 0, REACHED), and
+    # row 12 did not exist ("row_12: command not found", rc 127)
+    r, evd = source_only(tmp_path, RNSROW, FR="yes", BE=got, ROW=row)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert stop_lines(r) == [f"STOP: row {row}: backend reads '{got}', not {be} (the row's backend): the kit sets nothing, no TX"]
+    assert not (evd / "ran.txt").exists()                  # nothing after the reads: no set, no start
 
 
 def test_row_5_listens_before_the_meshchat_start_and_counts_its_announce(tmp_path):
@@ -323,7 +338,7 @@ def test_row_5_reads_the_boxs_lxmf_address_before_the_exchange_and_passes_it(tmp
 
 
 ROW5H = ('MODE=live; SCRATCH=$EVD; needs() { return 0; }; undo_push() { :; }; undo_mark() { echo 0; }; nonce() { echo rfkit 0a1b2c3d; }; '
-         'must() { case $2 in 5-framing0.txt) echo yes > "$OUT/$2";; 5-lxmf.txt) printf "%s\\n" "$H" > "${XRAW:-$OUT/$2}"; echo masked > "$OUT/$2";; esac; XRC=0; }; '
+         'must() { case $2 in 5-framing0.txt) echo yes > "$OUT/$2";; 5-backend0.txt) echo spi > "$OUT/$2";; 5-lxmf.txt) printf "%s\\n" "$H" > "${XRAW:-$OUT/$2}"; echo masked > "$OUT/$2";; esac; XRC=0; }; '
          'spower() { :; }; hpower() { :; }; tx() { echo "TX-REACHED $*"; exit 0; }; keep KZ r2; row_5 Z:KZ')
 
 

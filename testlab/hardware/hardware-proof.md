@@ -7,14 +7,16 @@ local file, run dry, then run live.
 Every live run, either lane, needs the maintainer's transmit and lab permission and the release coordinator's go for that
 run, with the hardware connected, reachable and set up. `live` prints that line first.
 
-## The two lanes
+## The lanes
 
 | lane | proves | rows | needs |
 |---|---|---|---|
 | **RF fast** | every present radio sends and receives one nonce frame through the daemon | the frame rows 7–11 | the boxes only: no PC peer, no Bluetooth, no PIN |
-| **RF full** | RF fast, plus every stack on air with a real peer | rows 1–11 | the PC peers below |
+| **RF full** | RF fast, plus every stack on air with a real peer | rows 1–12 | the PC peers below |
+| **rns** | Reticulum's two radios on one node | row 13 | box H's board 868 and Meshstick, the RNode |
 
-`LANE=fast|full` picks the rows (default `fast`); `ROWS_ONLY="<id> ..."` runs single rows. RF fast is not the release
+`LANE=fast|full|rns` picks the rows (default `fast`); row 13 has a lane of its own, so the RNode's frames of a lane stay
+within the 10 per run; `ROWS_ONLY="<id> ..."` runs single rows. RF fast is not the release
 matrix's fast lane ([test matrix](../../docs/test-matrix.md)).
 
 The rows, in run order (the `ROWS` table in `rf-proof.sh` is the only place that defines them):
@@ -30,8 +32,10 @@ The rows, in run order (the `ROWS` table in `rf-proof.sh` is the only place that
 | 2 | KISS + Graywolf | box H, board 433 | the CA2RXU tracker | as-is / as-is, not read |
 | 3 | Meshtastic | the Zero, board 868 | the Station G2 | as-is / low, restored |
 | 4 | MeshCore | the Zero, board 868 | the T-Deck Pro (Bluetooth) | as-is / read only |
-| 5 | Reticulum + MeshChat | the Zero, board 868 | the Heltec RNode through the PC's shared rnsd | as-is / read only |
+| 5 | Reticulum + MeshChat | the Zero, board 868 (direct SPI) | the Heltec RNode through the PC's shared rnsd | as-is / read only |
+| 12 | Reticulum (daemon backend) + MeshChat | box H, Meshstick 868 | the Heltec RNode through the PC's shared rnsd | as-is / read only |
 | 6 | chat | box H, board 433 | the Zero, board 433 | as-is / as-is |
+| 13 | Reticulum: two radios, one node (lane rns) | box H, board 868 (the owner) + Meshstick 868 (the member) | the Heltec RNode through the PC's shared rnsd | as-is, the owner at minimum for the member's exchange (restored) / read only |
 
 A row-6 direction passes only when its word is in the receiving radio's log and on the other box's chat screen (the
 chat client's pane, written as `SEEN <nonce> <time> screen`; a miss writes only the screen's line count, never a screen
@@ -39,10 +43,20 @@ line); a failed direction does not skip the other.
 
 A frame row first reads FREQ and SF of both ends from the daemon's STATUS line; a difference is a FAIL (the radio is
 present but incompatible). BW, coding rate and sync word are not in STATUS: a mismatch there shows as a frame not heard.
-Row 5 has no on-air PASS yet.
-Row 5 tells the box's announce by its LXMF address, read only from MeshChat's identity before the row (its display name
-is only logged; the address is masked in the evidence like the passwords, and the end scan checks it). Row 5 proves the shipped defaults: it reads `rnode_framing` (it must be `yes`, else STOP; the kit sets nothing), and the PC
-listens before the MeshChat start, whose own announce it must hear (the kit asks for none; the start is counted as that send).
+Rows 5, 12 and 13 have no on-air PASS yet.
+The Reticulum rows (5, 12, 13) tell the box's announce by its LXMF address, read only from MeshChat's identity before each
+exchange (its display name is only logged; the address is masked in the evidence like the passwords, and the end scan checks
+it). They prove the shipped defaults: each reads `rnode_framing` (it must be `yes`) and the radio's `backend` (row 5 `spi`,
+rows 12 and 13 `daemon`), else STOP; the kit sets neither. The PC listens before the MeshChat start, whose own announce it
+must hear (the kit asks for none; the start is counted as that send, on every radio of the node).
+Row 5's prerequisite (an operator step before the run): save `backend = spi` on the Zero's board radio
+(`lhpc config reticulum@<rid> backend spi`); the product's default is `daemon`, and row 5 stops on it.
+Row 13 opens the node on the owner as row 12 does (one exchange), then joins the member (`lhpc stack start
+reticulum@<rid> --join`): the node keeps its pid and start time, the member's interface is up and MeshChat answers. One
+exchange over the member follows with the owner at its minimum (restored after; the member's own RF log must gain RX and TX
+lines), then the member's stop (the node keeps its pid, the member's interface is gone) and one exchange over the owner, the
+member's join again, and the owner's stop (no node process, no Reticulum instance left). The member is the row's third
+endpoint (`member=H:HMS` in the `ROWS` flags): absent, the row is NOT RUN.
 Rows 3 and 4, peer -> box: the word must also show up inside the app on the box, not only in its radio log: a Meshtastic
 listener on the box, connected before the G2 sends (Meshtastic keeps no history to read later), and MeshCore's own message
 queue, read with meshcore-cli. That read takes the messages out of the queue, so a MeshCore client already running there
@@ -70,7 +84,7 @@ The report ends with a COVERAGE table: per supported model, stack and check, and
 release's decision.
 Last comes the result table for people, printed and kept as `RESULT.md`: the verdict on top (PASS, FAIL, NOT COMPLETE,
 a dry run's rehearsal, or STOPPED), then one line per row with each direction's PASS, FAIL or NOT RUN and its reason.
-Rows 1–5 stop at a FAIL: their later direction is NOT RUN, naming that FAIL, and sends nothing.
+Rows 1–5, 12 and 13 stop at a FAIL: their later directions are NOT RUN, naming that FAIL, and send nothing.
 Row 2 needs the tracker's call-SSID (`TRACKER_CALL`) and either its power from its portal (`TRACKER_DBM`) or
 `TRACKER_ASIS=1`: the tracker runs as it is, with no power check (the maintainer's word of 2026-11-18). Meshtastic (row 3):
 a packet the node addresses to itself (a local API exchange) is never aired and not counted; the node's own API-sent text is not
@@ -110,7 +124,8 @@ is the next line, read only when row 4 runs. Stdin is then closed.
   against accidents only: never run `peer.py`'s power setters or senders by hand; they belong to the runner.
 - A radio sends at most 10 frames per run (`TXMAX`); the start prints each radio's worst case (`BUDGET` lines) and a sum
   above 10 is a STOP before any transmission. After the run, each radio's frames sent since the start (its RF logs,
-  each frame counted once, the stack's own included, plus a send the daemon reported as failed) must also be at most 10.
+  each frame counted once, the stack's own included, plus a send the daemon reported as failed; a radio's Reticulum log
+  counts as the daemon's frames again where the row read its backend as `daemon`) must also be at most 10.
   A count that cannot be proven complete (a log cut or cleared in the run) is a FAIL as well.
 - Every change is undone after its row, the undo recorded before the change. An unplanned reboot stops the run.
 - Every captured output is redacted before it is written: the passwords, the PIN and the operator's call with any SSID.
@@ -132,7 +147,7 @@ LANE=fast bash testlab/hardware/rf-proof.sh live    # on the go: passwords (and 
 Dry prints every command it would run (`[dry] <H|Z|PC> > <file>: <command>`), the `REPORT`, `COVERAGE`, `BUDGET` and
 `TX` lines and one `FRAME` line per frame a real run would send; it ends with its self-checks
 (`dry self-check: all <n> OK`). Exit status: 0 = every row PASS or NOT RUN, 1 = a FAIL, 2 = a STOP (dry: 0 or 2). CI runs
-both lanes dry on every push (`testlab/tests/hardware`): the dry inventory, the NOT RUN cases, the frame coverage of every
+every lane dry on every push (`testlab/tests/hardware`): the dry inventory, the NOT RUN cases, the frame coverage of every
 `tx`, the lhpc calls parsed at the head (`cliforms.py`) and the redaction.
 
 `testlab/hardware/fw-boxproof.sh dry|live` is the firewall box proof on box H, built the same way (the same local file,

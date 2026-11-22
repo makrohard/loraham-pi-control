@@ -1,5 +1,5 @@
 """testlab/hardware/rf-proof.sh in dry mode against the example file's simulated bench, read through its output lines only
-(testlab/hardware/hardware-proof.md): both lanes pass
+(testlab/hardware/hardware-proof.md): every lane passes
 their self-checks with the expected coverage; absent or ambiguous hardware turns exactly its rows NOT RUN and changes nothing
 else; an incompatible radio is a FAIL; every frame on air is covered by its own `tx` call; the lhpc calls parse at this head;
 and no secret reaches the evidence."""
@@ -107,8 +107,11 @@ CASE_PATTERNS = re.compile(r"^\s*case \S+ in ")
 QUOTED_ASSIGNMENT = re.compile(r"""^\s*[A-Za-z_]\w*=(?:'[^']*'|"[^"$`\\]*")\s*$""")
 
 
+LANES = {"fast": {"fast"}, "full": {"fast", "full"}, "rns": {"rns"}}   # the table lanes each LANE runs
+
+
 def lane_rows(lane):
-    return [r for r in table_rows() if lane == "full" or r[1] == "fast"]
+    return [r for r in table_rows() if r[1] in LANES[lane]]
 
 
 def rows_using(lane, endpoint):
@@ -161,10 +164,11 @@ def base(tmp_path_factory):
     return run_dry(tmp_path_factory.mktemp("base"), "full", RUNNER, {})
 
 
-# ---- the dry run, both lanes ---------------------------------------------------------------------------------------------
+# ---- the dry run, every lane ---------------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("lane", ["fast", "full"])
+@pytest.mark.parametrize("lane", ["fast", "full", "rns"])
 def test_a_dry_lane_passes_every_self_check(dry, lane):
+    # red-before (82dc98ad), rns: "STOP: LANE=fast|full", rc 2
     d = dry(lane)
     assert d.rc == 0, d.err
     ok = [line.split()[-1] for line in d.lines if line.startswith("dry self-check OK ")]
@@ -188,6 +192,20 @@ def test_a_dry_lane_runs_its_rows_and_covers_every_model(dry, lane):
         report = d.report()
         assert stacks and stacks == {k: "rehearsed" if report[k] == "DRY-PASS" else "NOT RUN" for k in stacks}
         assert ("stop-isolation", "rehearsed") in {(r[0], r[4]) for r in d.rows("COVERAGE") if r[1] == "check"}
+
+
+RNS_LEGS = ["owner both ways", "member joins", "member both ways", "member stops", "member joins again", "owner stops"]
+
+
+def test_the_full_lane_reports_row_12_both_ways_and_the_rns_lane_row_13_per_leg(dry, base):
+    # red-before (82dc98ad): the full lane had no row 12 (no REPORT line of it), and LANE=rns was a STOP ("LANE=fast|full")
+    assert {k: r for k, r in base.report().items() if k[0] == "12"} == {("12", "peer -> box"): "DRY-PASS",
+                                                                          ("12", "box -> peer"): "DRY-PASS"}
+    assert "13" not in {k[0] for k in base.report()}             # row 13 is its own lane: the RNode's frames stay <= 10 per lane
+    d = dry("rns")
+    assert d.rc == 0, d.err[-2000:]
+    assert [(r[0], r[5], r[8]) for r in d.rows("REPORT")] == [("13", leg, "DRY-PASS") for leg in RNS_LEGS]
+    assert [(r[2], r[3], r[4]) for r in d.rows("COVERAGE") if r[1] == "stack"] == [("13", leg, "rehearsed") for leg in RNS_LEGS]
 
 
 def test_the_whole_bench_has_no_absent_or_ambiguous_row(base):
@@ -244,20 +262,39 @@ def test_every_frame_of_the_dry_run_is_covered_by_its_own_tx(base):
     frames = [line for line in base.lines if line.startswith("FRAME |")]
     assert uncovered(base.lines) == [] and unsent_tx(base.lines) == []
     kinds = Counter((f.split("|")[1].strip(), f.split("|")[2].strip() == "control") for f in frames)
-    assert kinds[("PC:rnode", True)] == 2 and kinds[("PC:rnode", False)] == 1       # the announce, the path request; the message
+    # rows 5 and 12, each the RNode's announce and path request (control) and its message
+    # red-before (82dc98ad): 2 and 1 (row 5 alone: the full lane had no row 12)
+    assert kinds[("PC:rnode", True)] == 4 and kinds[("PC:rnode", False)] == 2
     assert kinds[("PC:tracker", True)] == 1                                          # the tracker's ACK
     assert any(r.partition(":")[0] == "Z" and c for r, c in kinds)                  # the box's LXMF delivery proof
 
 
-def test_every_radio_stays_within_its_budget(base):
+def within_budget(d):
+    """{radio: (frames dispatched, R0's worst case)}, asserting each radio's dispatched frames <= its worst case <= TXMAX."""
     budget = {}
-    for r in base.rows("BUDGET"):
+    for r in d.rows("BUDGET"):
         budget.setdefault(r[0], (int(r[1]), int(r[2])))
     used = Counter()
-    for r in base.rows("TX"):
+    for r in d.rows("TX"):
         used[r[0]] += int(r[1])
     assert used and all(r in budget for r in used)
     assert all(used[r] <= budget[r][0] <= budget[r][1] == TXMAX for r in used)
+    return {r: (used[r], budget[r][0]) for r in used}
+
+
+def test_every_radio_stays_within_its_budget(base):
+    # rows 5 and 12 share the RNode: 3 frames each. red-before (82dc98ad): (3, 3), row 5 alone
+    assert within_budget(base)["PC:rnode"] == (6, 6)
+
+
+def test_the_rns_lane_keeps_the_rnode_within_its_budget(dry):
+    # row 13: three exchanges (owner, member, owner after the member's stop), 3 RNode frames each; the owner is in all three,
+    # the member in one; every frame dispatched is reserved at R0
+    # red-before (82dc98ad): "STOP: LANE=fast|full", rc 2 (no TX or BUDGET line)
+    d = dry("rns")
+    assert d.rc == 0, d.err[-2000:]
+    assert within_budget(d) == {"PC:rnode": (9, 9), "H:r2": (9, 9), "H:r5": (3, 3)}
+    assert uncovered(d.lines) == [] and unsent_tx(d.lines) == []
 
 
 @pytest.mark.parametrize("lines,bad", [
@@ -324,6 +361,20 @@ def test_every_lhpc_call_of_the_dry_run_parses_at_this_head(base, tmp_path):
     assert rows and [r for r in rows if r[4] != "OK" and r not in known] == []
     # a known-absent form must still be absent: once the CLI has the verb, drop the entry and confirm the form
     assert known and {r[4] for r in known} == {"UNKNOWN"}
+
+
+def test_every_lhpc_call_of_the_rns_lane_parses_at_this_head_the_join_included(dry, tmp_path):
+    # red-before (82dc98ad): LANE=rns was a STOP before any row, so no join call was printed
+    d = dry("rns")
+    assert d.rc == 0, d.err[-2000:]
+    out = tmp_path / "rns.dry.txt"
+    out.write_text(d.out)
+    p = subprocess.run([sys.executable, "-I", str(KIT / "cliforms.py"), str(out)], capture_output=True, text=True,
+                       cwd=KIT.parents[1], check=True, timeout=120)
+    rows = [line.split("\t") for line in p.stdout.splitlines()[1:]]
+    assert [r for r in rows if r[4] != "OK" and not KNOWN_ABSENT["rt_send"].match(r[5])] == []
+    assert [r[5] for r in rows if "--join" in r[5]] == ["lhpc stack start reticulum@r5 --join --yes"] * 2 and \
+        {r[4] for r in rows if "--join" in r[5]} == {"OK"}
 
 
 # ---- no secret in the evidence -------------------------------------------------------------------------------------------

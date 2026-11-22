@@ -3,12 +3,12 @@
 # daemon (RF fast), and every stack goes on air with its real peer (RF full). It reads the lab from lab.local.env (the dry
 # run: lab.example.env with its simulated bench) and the box passwords (and the MeshCore PIN) from stdin.
 #
-# RUN:    LANE=fast|full bash rf-proof.sh dry                       (first; no box, no peer, no TX)
+# RUN:    LANE=fast|full|rns bash rf-proof.sh dry                      (first; no box, no peer, no TX)
 #         printf '%s\n' "$PW_H" "$PW_Z" ["$PIN"] | LANE=... INTHEAD=... INTCI=... FORMS_OK=... FORMS_HEAD=... \
 #           bash rf-proof.sh live 2>&1 | tee <log under /home>
 # A live run needs the transmit and lab permission and the GO for that run, with the hardware connected and set up.
 #
-# INPUTS (env): LANE (fast|full, default fast); ROWS_ONLY (row ids, overrides the lane); LAB_ENV (the lab file); INTHEAD (the
+# INPUTS (env): LANE (fast|full|rns, default fast); ROWS_ONLY (row ids, overrides the lane); LAB_ENV (the lab file); INTHEAD (the
 #  Zero's head, 40 hex), INTHEAD_H (box H's head, default INTHEAD), INTCI (a green CI run of INTHEAD); FORMS_OK (the confirmed
 #  form names at FORMS_HEAD = INTHEAD); TRACKER_CALL (row 2: the tracker's call-SSID, on stdin to the box only); TRACKER_DBM
 #  (row 2: the tracker's power from its portal); TRACKER_ASIS (1: row 2 runs the tracker as-is, no TRACKER_DBM, no power check;
@@ -55,20 +55,29 @@ ROWS=(
   "3  full stack Z:Z868        peer:g2       as-is,low    -"
   "4  full stack Z:Z868        peer:tdpro    as-is,read   -"
   "5  full stack Z:Z868        peer:rnode    as-is,read   -"
+  "12 full stack H:HMS         peer:rnode    as-is,read   -"
   "6  full stack H:H433        Z:Z433        as-is,as-is  -"
+  "13 rns  stack H:H868        peer:rnode    as-is,read   member=H:HMS"
 )
 # The worst-case frames of a row per endpoint ("A B"): frame rows one each way; row 1 the box's three console attempts, and
 # the T-Deck's one send plus its mesh's relays of those three attempts (3 frames the kit never dispatches; its sends stay one,
 # `tx R1-tdeck 1`; the box's node runs with mesh off: it repeats nothing); row 5 the box's announce (inside its MeshChat start)
-# + delivery proof + own send, the RNode's announce + message + path request.
-declare -A WORST=([1]="3 4" [2]="1 1" [3]="1 1" [4]="1 1" [5]="3 3" [6]="1 1")
+# + delivery proof + own send, the RNode's announce + message + path request (row 12 the same); row 13 ("A B member") three
+# exchanges of row 5's kind (owner, member, owner after the member's stop): the RNode 3 each; every radio of the node 3 in
+# each exchange it is in (its announce, and the proof and the send reserved on every radio: the node picks the radio).
+declare -A WORST=([1]="3 4" [2]="1 1" [3]="1 1" [4]="1 1" [5]="3 3" [6]="1 1" [12]="3 3" [13]="9 9 3")
 declare -A RROW=(); RIDS=
 for l in "${ROWS[@]}"; do read -r id lane kind a b pw fl <<< "$l"; RROW[$id]="$l"; RIDS="$RIDS $id"; done
 rowf() { local id lane kind a b pw fl; read -r id lane kind a b pw fl <<< "${RROW[$1]}"; case $2 in lane) echo "$lane";; kind) echo "$kind";;
   a) echo "$a";; b) echo "$b";; power) echo "$pw";; flags) echo "$fl";; esac; }
-rowname() { case $1 in 1) echo meshcom;; 2) echo "kiss + graywolf";; 3) echo meshtastic;; 4) echo meshcore;; 5) echo "reticulum + meshchat";; 6) echo chat;; *) echo daemon;; esac; }
-dirs() { if [ "$(rowf "$1" kind)" = frame ]; then echo "A->B B->A"; [ "$(rowf "$1" flags)" = same-box ] && echo stop-isolation; else echo "box->peer peer->box"; fi; }
-dirtext() { case $1 in box-\>peer) echo "box -> peer";; peer-\>box) echo "peer -> box";; *) echo "$1";; esac; }
+rowname() { case $1 in 1) echo meshcom;; 2) echo "kiss + graywolf";; 3) echo meshtastic;; 4) echo meshcore;; 5) echo "reticulum + meshchat";; 6) echo chat;;
+  12) echo "reticulum (daemon backend) + meshchat";; 13) echo "reticulum: two radios, one node";; *) echo daemon;; esac; }
+rmember() { local f; f=$(rowf "$1" flags); case "$f" in member=*) echo "${f#member=}";; esac; }   # a row's third endpoint (flags member=<box:KEY>)
+reps() { rowf "$1" a; rowf "$1" b; rmember "$1"; }   # every endpoint of a row: A, B, then the member
+declare -A LEGS=([13]="owner join member leave rejoin off")   # a stack row's own legs (default: box->peer peer->box)
+dirs() { if [ "$(rowf "$1" kind)" = frame ]; then echo "A->B B->A"; [ "$(rowf "$1" flags)" = same-box ] && echo stop-isolation; else echo "${LEGS[$1]:-box->peer peer->box}"; fi; }
+dirtext() { case $1 in box-\>peer) echo "box -> peer";; peer-\>box) echo "peer -> box";; owner) echo "owner both ways";; join) echo "member joins";;
+  member) echo "member both ways";; leave) echo "member stops";; rejoin) echo "member joins again";; off) echo "owner stops";; *) echo "$1";; esac; }
 
 # ---- 3. FORMS: the box-side commands ({RT} = the box's runtime path, {LH} = its lhpc) ---------------------------------------
 declare -A F=(
@@ -84,6 +93,7 @@ declare -A F=(
   [rt_get]="{LH} config reticulum@{rid} {k} | sed -n 's/^ *value *= *//p'"
   [rt_pget]="{LH} config reticulum@{rid} txpower | sed -n 's/^ *value *= *//p'"
   [rt_send]='{LH} meshchat@{rid} send {dest} "{n}"'
+  [rt_join]='{LH} stack start reticulum@{rid} --join --yes'
   [chat_client]='{LH} stack start chat@{rid} --yes'
   [tx_text]="python3 -c \"import os,socket,struct,sys; p='/run/loraham/loraf-{rid}.sock'; p=p if os.path.exists(p) else '/tmp/loraf-{rid}.sock'; s=socket.socket(socket.AF_UNIX); s.connect(p); b=sys.argv[1].encode(); s.sendall(bytes([2])+struct.pack('<H',len(b))+b); s.close()\" '{n}'"
   [rx_rf]="grep -hF -- '{n}' {RT}/logs/{rid}/rf-*.log 2>/dev/null | grep -F ' RX '"
@@ -105,9 +115,10 @@ declare -A F=(
   [rx_mcom_app]="grep -hE -- '(^| )RX-LoRa2 [0-9]{3} : x[0-9A-Fa-f]{8} ([^ ]+ ){4}[^ >]+>[*]:{n} HW:' {RT}/src/meshcom-qemu-raspi/.run/{idx}uart-latest.log 2>/dev/null"
 )
 CHAT_READY='Ctrl-K: Konf'   # the chat client's footer
-# The forms each row needs (rt_send is optional: row 5 box -> peer is NOT RUN without it).
+# The forms each row needs (rt_send is optional: a Reticulum row's box -> peer is NOT RUN without it).
 declare -A RFORMS=([1]="start stop tx_mcom rx_mcom rx_mcom_app" [2]="start stop" [3]="start stop mt_cap mt_send mt_pget rx_mt rx_mt_app" [4]="start stop mc_send mc_pget rx_mc rx_mc_app"
-  [5]="start stop rt_get rt_pget rx_mchat" [6]="start stop chat_client rx_rf")
+  [5]="start stop rt_get rt_pget rx_mchat" [6]="start stop chat_client rx_rf" [12]="start stop rt_get rt_pget rx_mchat"
+  [13]="start stop rt_get rt_pget rx_mchat rt_join dset")
 # The pre-step M (mcset.py, from the RF sheet's MCSET-PRESTEP-v4): per stack row, the instance settings it copies from the stack's
 # source file into <sid>@<rid> of endpoint A's radio ({band} = that radio's band). J1's value is the input MCSET_J1.
 declare -A MJOB=([1]="J1 meshcom meshcom.toml mc_callsign" [2]="J2 graywolf graywolf@{band}.toml call"
@@ -130,8 +141,8 @@ RUNSET="cd {RT} && ./venv/lhpc/bin/python -c '$RUNSET_PY'"
 # log is read with the product's one parser (rflog.parse_line: the common line and the meshtastic JSON), <log>.1 + <log>
 # (the copy-truncate roll): F <rid> <kind> <file> <records> <oldest record|-> <TX records with ts >= T0, plus every line
 # that does not parse after the last record before T0 (safe side)>. kind: daemon (rf-daemon.log: the frames the radio
-# aired), mirror (rf-kiss/-meshcom/-meshcore.log: the same frames again, logged on the daemon result), direct (any other
-# rf-*.log of the radio: meshtastic over SPI), rns (logs/rf-reticulum.log: the one-node stack, rid -). L <rid> <size>
+# aired), mirror (rf-kiss/-meshcom/-meshcore.log: the same frames again, logged on the daemon result), rns (rf-reticulum.log:
+# each radio of the node its own, product 85fa9df5), direct (any other rf-*.log of the radio: meshtastic over SPI). L <rid> <size>
 # <sha of the first <head bytes>> <transmit ERRORs> <prev state>: the daemon run log (no time stamps; daemon pin
 # f9b16468 daemon_tx.cpp:212 is the one airing path, its RF line is written only on success (:223), an error that may
 # have aired prints "transmit ERROR" (:219) to this log only); prev state = its cut file (inode:size:mtime_ns) or absent.
@@ -139,7 +150,7 @@ TXC_PY='import calendar, hashlib, json, os, sys, time
 from lhpc.core import rflog, radio_start, runtime_fs
 from lhpc.core.services import ControllerService
 t0 = int(sys.argv[1])
-KIND = {"rf-daemon.log": "daemon", "rf-kiss.log": "mirror", "rf-meshcom.log": "mirror", "rf-meshcore.log": "mirror"}
+KIND = {"rf-daemon.log": "daemon", "rf-kiss.log": "mirror", "rf-meshcom.log": "mirror", "rf-meshcore.log": "mirror", "rf-reticulum.log": "rns"}
 def epoch(ts):
     try:
         return calendar.timegm(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S"))
@@ -192,8 +203,7 @@ for a in sys.argv[2:]:
     q = "logs/" + runtime_fs.prev_log_name(os.path.basename(p))
     s = os.stat(q) if os.path.exists(q) else None
     print("L", rid, len(b), hashlib.sha256(b[:int(hb)]).hexdigest()[:16], b.count(b" transmit ERROR:"),
-          "absent" if s is None else "%d:%d:%d" % (s.st_ino, s.st_size, s.st_mtime_ns))
-count("-", "rns", "logs/rf-reticulum.log")'
+          "absent" if s is None else "%d:%d:%d" % (s.st_ino, s.st_size, s.st_mtime_ns))'
 RUNTX="cd {RT} && ./venv/lhpc/bin/python -c '$TXC_PY'"
 USBLIST='for d in /sys/bus/usb/devices/[0-9]*-*; do case $d in *:*) continue;; esac; echo "${d##*/} $(cat $d/idVendor 2>/dev/null):$(cat $d/idProduct 2>/dev/null) dev=$(cat $d/devnum 2>/dev/null) ser=$(cat $d/serial 2>/dev/null)"; done'
 USBEV='USB disconnect|new (full|high|low|super)-speed USB|reset (full|high|low|super)-speed USB|over-current'
@@ -286,7 +296,7 @@ MCS
 # gpsd answer = rc 3.
 PORTS_PY=$(cat <<'PPY'
 import json, os, socket, sys
-# --rns=<config dir>: an rnsd of this user running that config is named rnsd-shared (row 5's shared RNode), any other rnsd
+# --rns=<config dir>: an rnsd of this user running that config is named rnsd-shared (the Reticulum rows' shared RNode), any other rnsd
 rns = os.path.realpath(sys.argv.pop(1)[6:]) if sys.argv[1:2] and sys.argv[1].startswith("--rns=") else None
 devs = {os.path.realpath(d): d for d in sys.argv[1:]}; held = {}
 def shared(p):
@@ -377,9 +387,9 @@ pover() { local t n nl='(power|txp|settx)[^0-9a-z]{0,3}[$`]'; t=$(pnorm "$1"); [
   for n in $(printf '%s' "$t" | grep -oE '(power|txp|settx)[^0-9a-z]{0,3}-?[0-9]+' | grep -oE '[0-9]+$'); do n=${n#"${n%%[!0]*}"}
     [ "${#n}" -le 2 ] && [ "${n:-0}" -le "$PCAP" ] || return 0; done; return 1; }
 # issend: rc 0 when a command (or its stdin) is a send form: the frame, Meshtastic, MeshCore and MeshChat sends, the chat
-# line, the MeshChat announce, the row-5 release, the MeshCom console and Graywolf helpers, a peer's send or exchange
+# line, the MeshChat announce, a Reticulum row's release, the MeshCom console and Graywolf helpers, a peer's send or exchange
 issend() { local t i; t=$(pnorm "$1"); i=$(pnorm "${2:-}")
-  case "$t" in *loraf-*struct.pack*|*--sendtext*|*meshcore-cli*public*|*meshchat@r*send*|*tmuxsend-keys*|*/api/v1/announce*|*5-tx2.go*|*"::+sys.argv"*|*mt-send*|*mc-send*|*meshcom-send*|*rns-exchange*) return 0;; esac
+  case "$t" in *loraf-*struct.pack*|*--sendtext*|*meshcore-cli*public*|*meshchat@r*send*|*tmuxsend-keys*|*/api/v1/announce*|*[0-9]-tx2.go*|*"::+sys.argv"*|*mt-send*|*mc-send*|*meshcom-send*|*rns-exchange*) return 0;; esac
   case "$i" in *type--helpforcommands*|*/api/messages*) return 0;; esac; return 1; }
 # ---- 5. state, forms, output ------------------------------------------------------------------------------------------------
 say() { echo "$*"; }; data() { echo "data: $*"; }; ok() { echo "ok: $*"; }
@@ -412,7 +422,7 @@ ordkeys() {   # stdin: a status text; args: instance keys -> the keys in status 
 # answers from the dry inventory and prints the FRAME lines of a send, the fake peer is fake_peer.py.
 redact() {   # the passwords, the PIN, the tracker call, the operator's call (any SSID or none, any case) and an LXMF address -> masked
   local t s c=${OPERATOR_CALL:-} m=(); t=$(cat; echo x); t=${t%x}
-  if [ -s "${SCRATCH:-/nonexistent}/lxmf.list" ]; then while IFS= read -r s; do [ -z "$s" ] || m+=("$s"); done < "$SCRATCH/lxmf.list"; fi   # read by row 5
+  if [ -s "${SCRATCH:-/nonexistent}/lxmf.list" ]; then while IFS= read -r s; do [ -z "$s" ] || m+=("$s"); done < "$SCRATCH/lxmf.list"; fi   # read by the Reticulum rows
   t=$(printf '%s' "$t" | sed -E 's/^LXMF [0-9a-f]{32}$/LXMF <LXMF>/'; echo x); t=${t%x}
   pweq H || m+=("${PW_H:-}"); pweq Z || m+=("${PW_Z:-}")   # a password equal to its login name stays (masking it = the login)
   local j1=${MCSET_J1:-}; j1=${j1#global}
@@ -684,7 +694,7 @@ ppower() {   # ppower <key> <peer> <action> <low>: a PC peer set LOW for its row
   pset PC "PP-$k-1.txt" "$a" "$lo"; [ "$XRC" = 0 ] || stop "$k: the peer power set failed (rc $XRC)"; r=$(body "PP-$k-1.txt" | sed -n 's/^POWER //p' | tail -n 1)
   [ "$MODE" = dry ] || [ "$r" = "$lo" ] || stop "$k: the peer reads back '$r', not the low power $lo: no TX"; keep "P_$k" "$lo"; pwok "PC:$pr"; data "$k: peer power ${o:-?} -> $lo for the row"; }
 hpower() {   # hpower <key> [<capture>]: the shared RNode through the PC's rnsd: <= 7 dBm, the running rnsd's config, Up; else STOP
-  local k=$1 f=${2:-5-rnode-power.txt}; radk "$k" PC:rnode
+  local k=$1 f=${2:-${CURROW:-0}-rnode-power.txt}; radk "$k" PC:rnode
   [ "$MODE" = dry ] && { echo "  [dry] PC > $f: hpower (rns-host config txpower, one rnsd started after its mtime, rnstatus Up)"; pwok PC:rnode; return 0; }
   printf '%s\n' "$HPOWER_PY" > "$SCRATCH/hpower.py"; pread PC "$f" hpower
   [ "$XRC" = 0 ] || stop "rnode: the shared RNode's power cannot be read now ($(tr '\n' ' ' < "$OUT/$f")): no TX"
@@ -829,31 +839,31 @@ row_R0() {
     ord=$(body "R0-$b-status.txt" | ordkeys $keys) || stop "R0 $b: an instance key's stack has no status header ($keys)"
     keep "RUN_$b" "$ord"; data "R0 $b: running instances: '${ord}'"
   done
-  local r e ep k o why devs= rdevs= pr pk bud held; declare -A SUM=()
-  for r in $RUN; do why=; for e in a b; do ep=$(rowf "$r" "$e"); case "$ep" in -) continue;; esac
+  local r e ep k o why devs= rdevs= pr pk bud held wv i w; declare -A SUM=()
+  for r in $RUN; do why=; for ep in $(reps "$r"); do case "$ep" in -) continue;; esac
       if [ "${ep%%:*}" = peer ]; then peerok "${ep#*:}"; o=$PK; [ -z "$o" ] || why="$why$o; "
         k="PEER_${ep#*:}"; read -r pk pr _ <<< "${!k:-}"; [ -n "$o" ] || [[ "$pr" == *:*:* ]] || devs="$devs $(shq "/dev/serial/by-id/$pr")"
-        [ -n "$o" ] || [ "$pk" != rnode ] || rdevs="$rdevs /dev/serial/by-id/$pr "   # row 5's RNode: the PC's rnsd holds it (hpower)
+        [ -n "$o" ] || [ "$pk" != rnode ] || rdevs="$rdevs /dev/serial/by-id/$pr "   # the Reticulum rows' RNode: the PC's rnsd holds it (hpower)
       else k=${ep#*:}; radiokey "$k"; o=$RK; case "$o" in "why "*) why="$why${o#why }; ";;
           rid*) read -r _ v bb m <<< "$o"; [ "$bb" = "${ep%%:*}" ] || stop "row $r: $k is on box $bb, the table says ${ep%%:*}"
             [[ "$v" =~ ^r([1-9]|[1-9][0-9])$ ]] || stop "R0: $k = '$v' is not a radio id"; keep "$k" "$v"; keep "MODEL_${bb}_$v" "$m"; data "R0: row $r: $k = $bb:$v ($m)";; esac; fi; done
     [ -z "$why" ] || { keep "SKIP_$r" "$(printf '%s' "${why%; }" | awk -v RS='; ' '!s[$0]++' | paste -sd ';' | sed 's/;/; /g')"; continue; }
-    [ "$(rowf "$r" kind)" = stack ] && read -r wa wb <<< "${WORST[$r]}" || { wa=1; wb=1; }   # the worst case per endpoint
-    for e in "a $wa" "b $wb"; do set -- $e; [ "$2" -gt 0 ] || continue; ep=$(rowf "$r" "$1")
-      if [ "${ep%%:*}" = peer ]; then pr="PC:${ep#*:}"; else pr="${ep%%:*}:$(getk "${ep#*:}")"; fi; SUM[$pr]=$(( ${SUM[$pr]:-0} + $2 )); done; done
+    w=(1 1); [ "$(rowf "$r" kind)" != stack ] || read -ra w <<< "${WORST[$r]}"   # the worst case per endpoint (A B member)
+    i=0; for ep in $(reps "$r"); do wv=${w[$i]:-0}; i=$((i + 1)); [ "$wv" -gt 0 ] || continue
+      if [ "${ep%%:*}" = peer ]; then pr="PC:${ep#*:}"; else pr="${ep%%:*}:$(getk "${ep#*:}")"; fi; SUM[$pr]=$(( ${SUM[$pr]:-0} + wv )); done; done
   r0grants
   [ -z "$devs" ] || { X PC R0-peer-ports.txt "python3 -I -c $(printf %q "$PORTS_PY")${rdevs:+ $(shq "--rns=$RNSCFG")} $devs"; [ "$MODE" = dry ] || { [ "$XRC" = 0 ] || stop "R0: the peer ports cannot be checked (gpsd answer unreadable?)"
-    held=$(heldports R0-peer-ports.txt "$rdevs"); [ -z "$held" ] || stop "R0: a peer port is held: $held (free it first: gpsd, a console; row 5's rnsd only as your user with --config RNS_CONFIG)"
-    ! grep '^HELD ' "$OUT/R0-peer-ports.txt" | grep -q ' rnsd-shared$' || data "R0: the RNode's port is held by rnsd alone (the shared RNode, row 5)"; }; }
+    held=$(heldports R0-peer-ports.txt "$rdevs"); [ -z "$held" ] || stop "R0: a peer port is held: $held (free it first: gpsd, a console; the RNode's rnsd only as your user with --config RNS_CONFIG)"
+    ! grep '^HELD ' "$OUT/R0-peer-ports.txt" | grep -q ' rnsd-shared$' || data "R0: the RNode's port is held by rnsd alone (the shared RNode of the Reticulum rows)"; }; }
   for pr in $(printf '%s\n' "${!SUM[@]}" | sort); do say "BUDGET | $pr | ${SUM[$pr]} | $TXMAX"; done
   for pr in "${!SUM[@]}"; do [ "${SUM[$pr]}" -le $TXMAX ] || stop "budget $pr: ${SUM[$pr]} of $TXMAX"; done; }
 heldports() {   # heldports <PORTS_PY capture> "<the RNode ports, each with a space either side>": the HELD lines that STOP, joined
-  # by '|'. The RNode's port held only by this user's rnsd running RNS_CONFIG (rnsd-shared) is the shared setup row 5 needs
+  # by '|'. The RNode's port held only by this user's rnsd running RNS_CONFIG (rnsd-shared) is the shared setup the Reticulum rows need
   # (hpower then checks that rnsd); any other or extra holder, and any holder of another peer's port, STOPs.
   local d w; grep '^HELD ' "$OUT/$1" | while read -r _ d w; do case "$2" in *" $d "*) [ "$w" = rnsd-shared ] && continue;; esac
     echo "HELD $d $w"; done | paste -sd '|'; }
 r0grants() {   # before anything starts, every resolved radio of the chosen rows has no high-power grant (hp= None/False), else STOP
-  local r e ep k v o; for r in $RUN; do [ -z "$(getk "SKIP_$r")" ] || continue; for e in a b; do ep=$(rowf "$r" "$e"); case "$ep" in peer:*|-) continue;; esac
+  local r ep k v o; for r in $RUN; do [ -z "$(getk "SKIP_$r")" ] || continue; for ep in $(reps "$r"); do case "$ep" in peer:*|-) continue;; esac
     k=${ep#*:}; v=$(getk "$k"); o=$(jgrant "$(body "R0-${ep%%:*}-radios.txt")" "$v") || stop "R0: row $r, $k = $v: $o: nothing starts"; done; done
   ok "R0: no high-power grant on any radio of rows $RUN"; }
 row_R1() { local b i keys rev; for b in $BOXES; do   # instance keys; starts journalled first, dependents stopped first
@@ -1048,45 +1058,118 @@ row_4() {   # MeshCore box radio 869.618 (eu_uk_narrow) <-> the T-Deck Pro (BLE;
   REPORT 4 meshcore "$b ($r)" "869.618 MHz, eu_uk_narrow" "T-Deck Pro (BLE companion)" "box -> peer" yes "$(getk "P_R4-$b-$r" as-is) dBm (as-is)" PASS
   undo_to "$m"; }
 
-row_5() {   # Reticulum + MeshChat box radio 868.5 SF8 <-> the RNode through the PC's shared rnsd (<= 7 dBm)
-  local b=${1%%:*} k=${1#*:}
-  needs $(rforms 5) || { notrun_row 5 "form not confirmed: $NEEDS_MISSING"; return 0; }
-  local m r n1 n2 o pr dest prc; m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; r=$(getk "$k"); n1=$(nonce); n2=$(nonce)
-  local q="R5-$b-$r" go=$SCRATCH/5-tx2.go pcd=$SCRATCH/5-pcdest.txt   # the peer's control files: private scratch, never the evidence
-  must "$b" 5-framing0.txt "$(form rt_get rid="$r" k=rnode_framing)"; o=$(body 5-framing0.txt | tail -n 1)
-  [ "$MODE" = dry ] || [ "$o" = yes ] || stop "row 5: rnode_framing reads '$o', not yes (the product default): the kit sets nothing, no TX"
-  keep "RNS_$b" "$r"   # RS counts logs/rf-reticulum.log on this radio (rnsrids)
-  spower "$b" rt_pget "$r" "$q"; undo_push "$b" "$(gstop "reticulum@$r")"
-  hpower R5-rnode 5-rnode-power.txt
-  leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
+# ---- the Reticulum rows (5, 12, 13): Reticulum + MeshChat on box radios <-> the RNode through the PC's shared rnsd (<= 7 dBm) --
+rnsread() {   # rnsread <id> <box> <rid> <backend> <tag>: the shipped defaults, read only (the kit sets nothing): rnode_framing yes
+  # and the row's backend (5: spi, 12 and 13: daemon), else STOP; RS counts the radio's Reticulum log by that backend (rnsrids)
+  local id=$1 b=$2 r=$3 be=$4 t=$5 o
+  must "$b" "$id-framing$t.txt" "$(form rt_get rid="$r" k=rnode_framing)"; o=$(body "$id-framing$t.txt" | tail -n 1)
+  [ "$MODE" = dry ] || [ "$o" = yes ] || stop "row $id: rnode_framing reads '$o', not yes (the product default): the kit sets nothing, no TX"
+  must "$b" "$id-backend$t.txt" "$(form rt_get rid="$r" k=backend)"; o=$(body "$id-backend$t.txt" | tail -n 1)
+  [ "$MODE" = dry ] || [ "$o" = "$be" ] || stop "row $id: backend reads '$o', not $be (the row's backend): the kit sets nothing, no TX"
+  keep "RNS_${b}_$r" "$be"; }
+rnsx() {   # rnsx <id> <tag> <box> <rid> <rnode key> <key>...: one exchange with the RNode through the node of meshchat@<rid>, whose
+  # radios are the keys (the first one MeshChat's own): files <tag>-*; the peer -> box judge here, the box -> peer one the
+  # caller's (rnsback). Every radio of the node is reserved for MeshChat's announce, the delivery proof and the box's send.
+  local id=$1 tg=$2 b=$3 r=$4 pk=$5; shift 5; local q=$1 x n1 n2 pr bh dest
+  local go=$SCRATCH/$tg-tx2.go pcd=$SCRATCH/$tg-pcdest.txt raw=$SCRATCH/$tg-lxmf.raw   # the peer's control files: private scratch, never the evidence
+  n1=$(nonce); n2=$(nonce)
   # 1. launch: the exchange announces now, waits for the box's announce, and holds its message until the release file exists;
   # it listens BEFORE the MeshChat start, whose own announce (the product's start step) it must hear
-  local bh raw=$SCRATCH/5-lxmf.raw   # the address goes to the evidence masked (redact), raw only to the private scratch
-  XRAW=$raw must "$b" 5-lxmf.txt "cd {RT} && src/meshchat/.venv/bin/python -c '$MCHASH_PY' state/meshchat/identity"   # read only
-  [ "$MODE" = live ] || cp "$OUT/5-lxmf.txt" "$raw" || stop "row 5: the dry raw copy"
-  bh=$(sed -n 's/^LXMF //p' "$raw" 2>/dev/null | tail -n 1)
-  [[ "$bh" =~ ^[0-9a-f]{32}$ ]] || stop "row 5: no LXMF address of the box's MeshChat (5-lxmf.txt): the PC cannot tell its announce"
-  printf '%s\n' "$bh" >> "$SCRATCH/lxmf.list" || stop "row 5: lxmf.list not written"; data "row 5: the box's MeshChat LXMF address read (masked in the evidence)"
-  BG=1 tx R5-rnode 1 control -- peer 5-peer.txt "$VRNS" rns-exchange "$n2" "$bh" 420 "$pcd" "$n1" "$go"; pr=$SPAWN
+  XRAW=$raw must "$b" "$tg-lxmf.txt" "cd {RT} && src/meshchat/.venv/bin/python -c '$MCHASH_PY' state/meshchat/identity"   # read only
+  [ "$MODE" = live ] || cp "$OUT/$tg-lxmf.txt" "$raw" || stop "row $id: the dry raw copy"
+  bh=$(sed -n 's/^LXMF //p' "$raw" 2>/dev/null | tail -n 1)   # the address goes to the evidence masked (redact), raw only to the private scratch
+  [[ "$bh" =~ ^[0-9a-f]{32}$ ]] || stop "row $id: no LXMF address of the box's MeshChat ($tg-lxmf.txt): the PC cannot tell its announce"
+  printf '%s\n' "$bh" >> "$SCRATCH/lxmf.list" || stop "row $id: lxmf.list not written"; data "row $id: the box's MeshChat LXMF address read (masked in the evidence)"
+  BG=1 tx "$pk" 1 control -- peer "$tg-peer.txt" "$VRNS" rns-exchange "$n2" "$bh" 420 "$pcd" "$n1" "$go"; pr=$SPAWN
   [ "$MODE" = dry ] || sleep 10
-  # 3. the box's announce: MeshChat announces once inside its own start (no request from the kit): the start is that send
+  # 3. the box's announce: MeshChat announces once inside its own start (no request from the kit): the start is that send, on
+  # every radio of the node
   keep "STARTED_${b}_$r" 1; undo_push "$b" "$(gstop "meshchat@$r")"
-  tx "$q" 1 control -- must "$b" 5-start.txt "$(form start inst="meshchat@$r")"
+  for x in "${@:2}"; do tx "$x" 1 control --reserve; done
+  tx "$q" 1 control -- must "$b" "$tg-start.txt" "$(form start inst="meshchat@$r")"
   # 2. release, every check right before the second phase: the RNode's power again, its path request, the box's delivery proof
-  hpower R5-rnode 5-rnode-power-2.txt; tx R5-rnode 1 control --reserve; tx "$q" 1 control --reserve
-  tx R5-rnode 1 "$n1" -- X PC 5-tx2-go.txt "LHPC_PROOF=$b:meshchat@$r printf '%s\n' '$n1' > $(shq "$go")"
-  [ "$MODE" = live ] || printf '%s\n' "$n1" > "$go" || stop "row 5: the dry release file"   # dry: right after its tx
+  hpower "$pk" "$tg-rnode-power-2.txt"; tx "$pk" 1 control --reserve; for x in "$@"; do tx "$x" 1 control --reserve; done
+  tx "$pk" 1 "$n1" -- X PC "$tg-tx2-go.txt" "LHPC_PROOF=$b:meshchat@$r printf '%s\n' '$n1' > $(shq "$go")"
+  [ "$MODE" = live ] || printf '%s\n' "$n1" > "$go" || stop "row $id: the dry release file"   # dry: right after its tx
   if needs rt_send; then [ "$MODE" = dry ] || sleep 60; dest=$(cat "$pcd" 2>/dev/null || echo dry)
-    [ "$MODE" = dry ] || [[ "$dest" =~ ^[0-9a-f]{32}$ ]] || stop "row 5: no PC destination hash"
-    tx "$q" 1 "$n2" -- must "$b" 5-box-send.txt "$(form rt_send rid="$r" dest="$dest" n="$n2")"; fi
-  reap "$pr"; prc=$XRC
-  [ "$MODE" = dry ] || grep -qxE "DELIVERED $n1 .*" "$OUT/5-peer.txt" || fail "row 5 peer -> box: no delivery proof of '$n1' from the box (5-peer.txt)"
-  boxrx "$b" 5-box-rx.txt rx_mchat "$r" "$n1" 30 || fail "not heard: $n1"
-  REPORT 5 "reticulum + meshchat" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "peer -> box" "yes: LXMF delivered (the box's proof) and stored" "the RNode at $(getk P_R5-rnode unrecorded) dBm" PASS
+    [ "$MODE" = dry ] || [[ "$dest" =~ ^[0-9a-f]{32}$ ]] || stop "row $id: no PC destination hash"
+    for x in "${@:2}"; do tx "$x" 1 control --reserve; done   # the node picks the radio
+    tx "$q" 1 "$n2" -- must "$b" "$tg-box-send.txt" "$(form rt_send rid="$r" dest="$dest" n="$n2")"; fi
+  reap "$pr"; RNSRC=$XRC; RNSN2=$n2
+  [ "$MODE" = dry ] || grep -qxE "DELIVERED $n1 .*" "$OUT/$tg-peer.txt" || fail "row $id peer -> box: no delivery proof of '$n1' from the box ($tg-peer.txt)"
+  boxrx "$b" "$tg-box-rx.txt" rx_mchat "$r" "$n1" 30 || fail "not heard: $n1"; }
+rnsback() {   # rnsback <tag>: the exchange's box -> peer word at the PC (rt_send only), else FAIL; RNSB = the REPORT's note
+  XRC=$RNSRC; if needs rt_send; then result "$1-peer.txt" "$RNSN2" || fail "not heard: $RNSN2"; RNSB=; else RNSB=" (box -> peer NOT RUN: rt_send not confirmed)"; fi; }
+row_rns() {   # row_rns <id> <box:KEY> <backend>: Reticulum + MeshChat on one box radio (868.5 SF8, the row's backend) <-> the RNode
+  local id=$1 b=${2%%:*} k=${2#*:} be=$3
+  needs $(rforms "$id") || { notrun_row "$id" "form not confirmed: $NEEDS_MISSING"; return 0; }
+  local m r q; m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; r=$(getk "$k"); q="R$id-$b-$r"
+  rnsread "$id" "$b" "$r" "$be" 0
+  spower "$b" rt_pget "$r" "$q"; undo_push "$b" "$(gstop "reticulum@$r")"
+  hpower "R$id-rnode" "$id-rnode-power.txt"
+  leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
+  rnsx "$id" "$id" "$b" "$r" "R$id-rnode" "$q"
+  REPORT "$id" "$(rowname "$id")" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "peer -> box" "yes: LXMF delivered (the box's proof) and stored" "the RNode at $(getk "P_R$id-rnode" unrecorded) dBm" PASS
   leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
-  XRC=$prc; if needs rt_send; then result 5-peer.txt "$n2" || fail "not heard: $n2"
-    REPORT 5 "reticulum + meshchat" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "box -> peer" yes "$(getk "P_$q" as-is) dBm (as-is)" PASS
-  else notrun 5 box-\>peer "form not confirmed: rt_send"; fi
+  if needs rt_send; then rnsback "$id"
+    REPORT "$id" "$(rowname "$id")" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "box -> peer" yes "$(getk "P_$q" as-is) dBm (as-is)" PASS
+  else notrun "$id" box-\>peer "form not confirmed: rt_send"; fi
+  undo_to "$m"; }
+row_5() { row_rns 5 "$1" spi; }       # the Zero's board radio, direct SPI (backend = spi saved there: hardware-proof.md)
+row_12() { row_rns 12 "$1" daemon; }  # box H's Meshstick through the daemon (the product default)
+
+rnspid() { echo "p=\$(pgrep -f '[l]oraham-rns-node --config' | head -n 1); [ -n \"\$p\" ] || { echo NO-PID; exit 3; }; echo \$p \$(awk '{print \$22}' /proc/\$p/stat)"; }   # the node's pid + start time
+# the node's interfaces (rnstatus -j of its config): IF <up|down> <name>, the name holding "LoRa <rid>"
+RNSIF="cd {RT} && src/reticulum/.venv/bin/rnstatus --config state/reticulum -j | python3 -c 'import json, sys; [print(\"IF\", \"up\" if i.get(\"status\") is True else \"down\", i.get(\"name\", \"\")) for i in json.load(sys.stdin).get(\"interfaces\", [])]'"
+MCREADY='for i in $(seq 1 15); do (exec 3<>/dev/tcp/127.0.0.1/8790) 2>/dev/null && { echo READY 8790; exit 0; }; sleep 1; done; echo NOT-READY 8790; exit 3'   # MeshChat's port
+rnslog() { echo "for d in RX TX; do echo \"\$d \$(grep -cF -- \" \$d \" {RT}/logs/$1/rf-reticulum.log 2>/dev/null)\"; done"; }   # rnslog <rid>: its RF log's RX and TX lines
+ifis() { local n u; n=$(body "$1" | grep -cE "^IF .*LoRa $2(]|\$)"); u=$(body "$1" | grep -cE "^IF up .*LoRa $2(]|\$)")   # ifis <file> <rid> <up|gone>
+  case $3 in up) [ "$n" = 1 ] && [ "$u" = 1 ];; *) [ "$n" = 0 ];; esac; }
+rfgrew() { local d a c; for d in RX TX; do a=$(body "$1" | sed -n "s/^$d //p"); c=$(body "$2" | sed -n "s/^$d //p")   # rfgrew <before> <after>
+  [[ $a =~ ^[0-9]+$ && $c =~ ^[0-9]+$ ]] && [ "$c" -gt "$a" ] || return 1; done; }
+rnsnode() {   # rnsnode <tag> <box> <member rid> <up|gone> [meshchat]: the node kept its pid and start time (13-pid0.txt), the
+  # member's interface is up in it (or gone from it: the radio is free), and (meshchat) MeshChat still answers
+  must "$2" "$1-pid.txt" "$(rnspid)"; must "$2" "$1-if.txt" "$RNSIF"; [ -z "${5:-}" ] || X "$2" "$1-meshchat.txt" "$MCREADY"; [ "$MODE" = dry ] && return 0
+  [ -z "${5:-}" ] || [ "$XRC" = 0 ] || fail "row 13 $1: MeshChat does not answer on 127.0.0.1:8790 ($1-meshchat.txt)"
+  [ "$(body "$1-pid.txt")" = "$(body 13-pid0.txt)" ] || fail "row 13 $1: the node's pid or start time changed ($1-pid.txt): not restart-free"
+  ifis "$1-if.txt" "$3" "$4" || fail "row 13 $1: LoRa $3 is not $4 in the node ($1-if.txt)"; }
+row_13() {   # Reticulum: two radios, one node: the owner (A) opens as row 12 does, the member (flags member=) joins it restart-free
+  local b=${1%%:*} k=${1#*:} mk; mk=$(rmember 13); mk=${mk#*:}
+  needs $(rforms 13) || { notrun_row 13 "form not confirmed: $NEEDS_MISSING"; return 0; }
+  local m mp ro rm q qm p0 pk=R13-rnode rn="the RNode (the PC's shared rnsd)" bd="868.5 MHz, SF8"
+  m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; ro=$(getk "$k"); rm=$(getk "$mk"); q="R13-$b-$ro"; qm="R13-$b-$rm"
+  rnsread 13 "$b" "$ro" daemon 0; rnsread 13 "$b" "$rm" daemon -m
+  spower "$b" rt_pget "$ro" "$q"; spower "$b" rt_pget "$rm" "$qm"; undo_push "$b" "$(gstop "reticulum@$ro")"
+  hpower "$pk" 13-rnode-power.txt
+  leg owner   # the leg that runs now: a FAIL from here is its FAIL (runrow)
+  rnsx 13 13-owner "$b" "$ro" "$pk" "$q"; rnsback 13-owner
+  REPORT 13 "$(rowname 13)" "$b ($ro)" "$bd" "$rn" "$(dirtext owner)" "yes: LXMF delivered (the box's proof) and stored$RNSB" "the RNode at $(getk "P_$pk" unrecorded) dBm; $ro $(getk "P_$q" as-is) dBm (as-is)" PASS
+  leg join; must "$b" 13-pid0.txt "$(rnspid)"
+  keep "STARTED_${b}_$rm" 1; undo_push "$b" "$(gstop "reticulum@$rm")"; must "$b" 13-join.txt "$(form rt_join rid="$rm")"
+  rnsnode 13-join "$b" "$rm" up meshchat
+  REPORT 13 "$(rowname 13)" "$b ($ro, $rm)" "$bd" — "$(dirtext join)" "the node's pid unchanged, LoRa $rm up, MeshChat answers" — PASS
+  # the member's exchange: the owner at the minimum (its undo first), so the RNode hears the member best; MeshChat started again
+  # for its announce
+  leg member; mp=$(undo_mark) || stop "undo journal: unreadable (no mark)"
+  dpower "$b" "$ro" "${q}d"; p0=$(getk "P_${q}d"); [ "$MODE" = live ] || p0=${p0:-10}   # the undo restores only the recorded value
+  [ -n "$p0" ] || stop "row 13: no recorded power of $b:$ro: no undo, no set, no TX"
+  jpower "$b" "$ro" "$p0"; pset "$b" 13-set-owner.txt "$ro" "$STICK_MIN"; [ "$XRC" = 0 ] || stop "13-set-owner.txt: exit status $XRC"; dpower "$b" "$ro" "${q}m"
+  [ "$MODE" = dry ] || [ "$(getk "P_${q}m")" = "$STICK_MIN" ] || stop "row 13: $b:$ro reads back '$(getk "P_${q}m")' dBm after POWER=$STICK_MIN: no TX"
+  must "$b" 13-member-rf0.txt "$(rnslog "$rm")"; must "$b" 13-member-mstop.txt "$(gstop "meshchat@$ro")"
+  rnsx 13 13-member "$b" "$ro" "$pk" "$q" "$qm"; rnsback 13-member
+  must "$b" 13-member-rf1.txt "$(rnslog "$rm")"
+  [ "$MODE" = dry ] || rfgrew 13-member-rf0.txt 13-member-rf1.txt || fail "row 13 member: no new RX and TX line on $rm's own RF log in the exchange (13-member-rf0/1.txt)"
+  undo_to "$mp" || stop "row 13: the owner's power restore failed (UNRESOLVED.txt)"   # with the exchange's MeshChat stop
+  REPORT 13 "$(rowname 13)" "$b ($rm)" "$bd" "$rn" "$(dirtext member)" "yes: LXMF delivered and stored, RX and TX on $rm's RF log$RNSB" "$ro at $STICK_MIN dBm (minimum, restored); $rm $(getk "P_$qm" as-is) dBm (as-is)" PASS
+  leg leave; must "$b" 13-leave.txt "$(form stop inst="reticulum@$rm")"; rnsnode 13-leave "$b" "$rm" gone
+  must "$b" 13-leave-mstop.txt "$(gstop "meshchat@$ro")"; rnsx 13 13-leave "$b" "$ro" "$pk" "$q"; rnsback 13-leave
+  REPORT 13 "$(rowname 13)" "$b ($ro)" "$bd" "$rn" "$(dirtext leave)" "yes: the node's pid unchanged, LoRa $rm gone, LXMF delivered over $ro$RNSB" "$ro $(getk "P_$q" as-is) dBm (as-is)" PASS
+  leg rejoin; must "$b" 13-rejoin.txt "$(form rt_join rid="$rm")"; rnsnode 13-rejoin "$b" "$rm" up meshchat
+  REPORT 13 "$(rowname 13)" "$b ($ro, $rm)" "$bd" — "$(dirtext rejoin)" "the node's pid unchanged, LoRa $rm up, MeshChat answers" — PASS
+  leg off; must "$b" 13-off-mstop.txt "$(gstop "meshchat@$ro")"; must "$b" 13-off.txt "$(form stop inst="reticulum@$ro")"
+  X "$b" 13-off-pid.txt "$(rnspid)"; [ "$MODE" = dry ] || { [ "$XRC" = 3 ] && [ "$(body 13-off-pid.txt)" = NO-PID ]; } || fail "row 13 off: the node still runs after the owner's stop (13-off-pid.txt)"
+  must "$b" 13-off-runset.txt "$RUNSET"; [ "$MODE" = dry ] || ! body 13-off-runset.txt | grep -q '^reticulum@' || fail "row 13 off: a Reticulum instance still runs after the owner's stop (13-off-runset.txt)"
+  REPORT 13 "$(rowname 13)" "$b ($ro, $rm)" "$bd" — "$(dirtext off)" "no node process, no Reticulum instance running" — PASS
   undo_to "$m"; }
 
 # the chat client's command from the start's own output (the line after "run it yourself in a terminal:"), in the measured form
@@ -1156,41 +1239,40 @@ runrow() {   # one row in a subshell; a FAIL (the marker) = recorded, its undos 
 txcount() { local a= rid band h; while read -r _ rid _ band _; do h=4096
     [ -n "${2:-}" ] && { h=$(awk -v r="$rid" '$1 == "L" && $2 == r {print ($3 < 4096 ? $3 : 4096)}' "$OUT/$2" | tail -n 1); [[ $h =~ ^[0-9]+$ ]] || h=0; }
     a="$a $rid:$band:$h"; done < <(grep -E '^ROW ' "$OUT/R0-$1-radios.txt" 2>/dev/null); printf '%s %s%s' "$RUNTX" "$(getk "T0_$1" 0)" "$a"; }
-# rnsrids <box>: the radios Reticulum ran on in this run: reticulum@rN in R0's running set, and row 5's radio
-rnsrids() { { body "R0-$1-runset.txt" | sed -n 's/^reticulum@\(r[1-9][0-9]*\)$/\1/p'; getk "RNS_$1"; } | grep -E '^r[1-9][0-9]*$' | sort -u | tr '\n' ' '; }
-# txjudge <R0 facts> <RS facts> <T0> <reticulum radios> <kit radios> <running radios>: "<rid> <frames>" per radio, else "<rid>
-# UNREADABLE". frames = max(the daemon's TX + its transmit ERRORs of the run, the mirrors' TX) + the direct TX + Reticulum's TX
-# on its one radio. UNREADABLE (fail closed: no evidence is never 0): a count not a number; an RF log present at R0 (even
+# rnsrids <box>: <rid>=<backend> of each radio a Reticulum row ran the node on (RNS_<box>_<rid>, read live by the row)
+rnsrids() { sed -n "s/^RNS_$1_\(r[1-9][0-9]*\)=\(daemon\|spi\)$/\1=\2/p" "$OUT/state.env" | sort -u | tr '\n' ' '; }
+# txjudge <R0 facts> <RS facts> <T0> <reticulum backends> <kit radios> <running radios>: "<rid> <frames>" per radio, else "<rid>
+# UNREADABLE". frames = max(the daemon's TX + its transmit ERRORs of the run, the mirrors' TX) + the direct TX. A radio's own
+# Reticulum log is a mirror where the kit read its backend as daemon (the frames went through the daemon), else direct (spi,
+# or a backend not read: the safe side). UNREADABLE (fail closed: no evidence is never 0): a count not a number; an RF log present at R0 (even
 # empty) gone at RS; a file with records at R0 that keeps none from before T0 (lost lines: two rolls, a Clear); a run log
 # smaller, with another head, ERRORs gone, or its cut file changed (any cut loses lines: runtime_fs.cap_start_log); a radio of
 # R0 without its facts at RS; a radio that could send (the kit sent on it: TXR > 0, an instance ran on it at R0, or the kit
 # started one there) with no RF
 # log at all (the daemon creates its log at start: daemon_rflog.cpp:67, so a running radio without one logs nothing); a radio
-# the kit sent on that counts 0. Reticulum's TX with no radio or several named: "reticulum UNREADABLE" (unattributable)
+# the kit sent on that counts 0.
 txjudge() {
   awk -v t0="$3" -v rr="$4" -v kr="${5:-}" -v ar="${6:-}" -v ml="${7:-}" '
     function n(v) {return v ~ /^[0-9]+$/}
     FNR == NR {if ($1 == "F") {f0[$2 " " $4] = 1; cov[$2] = 1; if (n($5) && $5 > 0) had[$2 " " $4] = 1}
       if ($1 == "L") l0[$2] = $3 " " $4 " " $5 " " $6; next}
-    $1 == "F" {k = $2 " " $4; seen[k] = 1; cov[$2] = 1; if ($2 != "-") id[$2] = 1; if ($4 == "rf-meshtastic.log") mf[$2] = 1
+    $1 == "F" {k = $2 " " $4; seen[k] = 1; cov[$2] = 1; id[$2] = 1; if ($4 == "rf-meshtastic.log") mf[$2] = 1
       if (!n($5) || !n($7) || (k in had && ($6 == "-" || $6 > t0))) u[$2] = 1; else c[$2, $3] += $7; next}
     $1 == "L" {id[$2] = 1; ls[$2] = 1; split(l0[$2], a, " ")
       if (($2 in l0) && n($3) && n($5) && n(a[1]) && n(a[3]) && $3 >= a[1] && $4 "" == a[2] "" && $5 >= a[3] && $6 "" == a[4] "") e[$2] = $5 - a[3]; else u[$2] = 1}
     END {for (k in f0) if (!(k in seen)) {split(k, p, " "); u[p[1]] = 1}
       for (r in l0) if (!(r in ls)) {id[r] = 1; u[r] = 1}
-      m = split(rr, R, " "); x = c["-", "rns"] + 0; split(kr, K, " "); for (i in K) {kit[K[i]] = 1; id[K[i]] = 1}
+      split(rr, R, " "); for (i in R) {split(R[i], q, "="); if (q[2] == "daemon") vd[q[1]] = 1}; split(kr, K, " "); for (i in K) {kit[K[i]] = 1; id[K[i]] = 1}
       split(ar, A, " "); for (i in A) {act[A[i]] = 1; id[A[i]] = 1}
       split(ml, M, " "); for (i in M) {split(M[i], q, "="); if (n(q[2])) mled[q[1]] = q[2]}
-      for (i = 1; i <= m; i++) if ("-" in cov) cov[R[i]] = 1
-      if (x > 0 || ("-" in u)) {if (m != 1) print "reticulum UNREADABLE"; else {id[R[1]] = 1; if ("-" in u) u[R[1]] = 1; add[R[1]] = x}}
       for (r in id) {if ((r in kit || r in act) && !(r in cov)) u[r] = 1
         if (r in u) {print r, "UNREADABLE"; continue}
-        d = c[r, "daemon"] + e[r]; g = c[r, "mirror"]; t = (d > g ? d : g) + c[r, "direct"] + add[r] + (r in mf ? mled[r] : 0)
+        d = c[r, "daemon"] + e[r]; g = c[r, "mirror"] + (r in vd ? c[r, "rns"] : 0); t = (d > g ? d : g) + c[r, "direct"] + (r in vd ? 0 : c[r, "rns"]) + (r in mf ? mled[r] : 0)
         print r, (r in kit && t == 0 ? "UNREADABLE" : t)}}' \
     "$1" "$2" | sort; }
-# txlines <file> <radios>: exactly one "<rid> <frames|UNREADABLE>" per radio named, no other radio ("reticulum UNREADABLE" aside)
+# txlines <file> <radios>: exactly one "<rid> <frames|UNREADABLE>" per radio named, no other radio
 txlines() { awk -v want="$2" 'BEGIN {split(want, W, " "); for (i in W) w[W[i]] = 1}
-    $0 == "reticulum UNREADABLE" {next} $0 !~ /^r[1-9][0-9]? ([0-9]+|UNREADABLE)$/ || !($1 in w) || ($1 in s) {bad = 1} {s[$1] = 1}
+    $0 !~ /^r[1-9][0-9]? ([0-9]+|UNREADABLE)$/ || !($1 in w) || ($1 in s) {bad = 1} {s[$1] = 1}
     END {for (k in w) if (!(k in s)) bad = 1; exit bad}' "$1"; }
 # kitrids / runrids <box>: the box radios the kit reserved frames on (TXR > 0), and the radios with an instance at R0 or one
 # the kit started (STARTED_<box>_<rid>: a stack can send at its start, e.g. meshtastic's nodeinfo)
@@ -1354,7 +1436,7 @@ ROW r4 pinedio-usb-1262 868 True serial= port=1-1 hp=True'
   before() { case "$(declare -f "$1")" in *"$2"*"$3"*) return 0;; *) return 1;; esac; }
   before row_1 'R1-$b-$r-d' 1-start.txt && before row_2 'R2-$b-$r-d' 2-start.txt && before row_3 'pmust "$b" 3-cap.txt mt_cap' 3-start.txt && before row_4 'R4-$b-$r-d' 4-start.txt \
     || sc power-guards "a stack starts before its power read"
-  before row_5 'tx R5-rnode 1 control --reserve' '5-tx2-go.txt' && before row_5 'tx "$q" 1 control --reserve' '5-tx2-go.txt' && before row_2 'tx R2-tracker 1 control --reserve' '2-box-send.txt' \
+  before rnsx 'tx "$pk" 1 control --reserve' '-tx2-go.txt' && before rnsx 'tx "$x" 1 control --reserve' '-tx2-go.txt' && before row_2 'tx R2-tracker 1 control --reserve' '2-box-send.txt' \
     || sc power-guards "an automatic send is not reserved before the send that triggers it"
   [ "$(bash -c 'printf %s "${MC_PIN-unset}${PW_H-unset}${PW_Z-unset}${OPERATOR_CALL-unset}"')" = unsetunsetunsetunset ] || sc power-guards "a secret is in a child's environment"
   scok power-guards
@@ -1433,11 +1515,11 @@ EVDROOT=$(pcpath "$EVD_ROOT"); case "$EVDROOT" in /tmp|/tmp/*) stop "EVD_ROOT is
 for v in $(compgen -v PEER_); do [[ $v =~ ^PEER_[a-z0-9]+$ ]] && export "$v"; done   # peer.py reads its devices from these
 [[ "$NPREFIX" =~ ^[a-z]{2,6}$ ]] || stop "NONCE_PREFIX: 2..6 of a-z"
 # the rows of this run (the table order)
-LANE=${LANE:-fast}; case "$LANE" in fast|full) ;; *) stop "LANE=fast|full";; esac
+LANE=${LANE:-fast}; case "$LANE" in fast|full|rns) ;; *) stop "LANE=fast|full|rns";; esac
 if [ -n "${ROWS_ONLY:-}" ]; then for r in $ROWS_ONLY; do [ -n "${RROW[$r]:-}" ] || stop "ROWS_ONLY: '$r' is not a row id"; done
   [ -z "$(printf '%s\n' $ROWS_ONLY | sort | uniq -d)" ] || stop "ROWS_ONLY names a row twice"
   RUN=$(for r in $RIDS; do case " $ROWS_ONLY " in *" $r "*) echo "$r";; esac; done | tr '\n' ' ')
-else RUN=$(for r in $RIDS; do [ "$LANE" = full ] || [ "$(rowf "$r" lane)" = fast ] && echo "$r"; done | tr '\n' ' '); fi
+else RUN=$(for r in $RIDS; do case "$LANE $(rowf "$r" lane)" in "fast fast"|"full fast"|"full full"|"rns rns") echo "$r";; esac; done | tr '\n' ' '); fi   # rns: its own
 RUN=${RUN% }
 # stdin: the box passwords, then the PIN (live only), read once, then closed
 unset MC_PIN PW_H PW_Z
