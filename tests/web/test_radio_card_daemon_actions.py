@@ -209,7 +209,7 @@ def test_a_running_daemon_keeps_its_card_while_its_stick_is_unplugged(tmp_path, 
     doc = parse(web(system=fs.system).get("/").get_data(as_text=True))
     card = doc.find("div", class_="radio-col", **{"data-radio-rid": "r2"})[0]
     assert doc.within(card).by_id("rd-badge-r2").text.strip() == "daemon READY"
-    assert _daemon_forms(doc, card) == {("stop", "daemon@r2", None), ("restart", "daemon@r2", None)}   # its instance
+    assert _daemon_forms(doc, card) == set()      # dash plan c1: the daemon's Stop / Restart live in its "Running on" block
 
 
 def test_add_hardware_sets_up_a_fresh_box_with_a_dual_board_in_one_step(tmp_path, web, csrf):

@@ -1482,25 +1482,25 @@ _DAEMON_UP = {100: ["loraham_daemon", "--radio", "433", "--id", "r1"]}
 ], ids=["ready", "occupied", "offline-installed"])
 def test_the_radio_card_log_links_sit_directly_under_the_daemon_control(tmp_path, web, state, cmdlines, socks):
     """One link block per band card, defined once, in every state the daemon is installed in.
-    While the daemon serves the band each entry is on its own line in the maintainer's order:
-    the Stop form, then "Radio config", then the log links ("Daemon log", the RF logs); otherwise
-    the links sit right after the daemon's Start form."""
+    While the daemon serves the band: "Radio config", then the log links ("Daemon log", the RF logs); the card has no
+    daemon Stop / Restart / Start of its own any more (dash plan c1: the daemon starts from "Start a stack on rX" and
+    stops in its block under "Running on"). Daemon stopped: the links block, then the start list led by "daemon 433"."""
     c = web(system=FakeSystem(cmdlines_data=cmdlines, unix_replies=socks).system)
     doc = parse(c.get("/").get_data(as_text=True))
     col = doc.within(doc.find("div", **{"data-radio-band": "433"})[0])
-    forms = [f for f in col.find("form") if col.within(f).field_default("target") == "daemon@r1"]   # W2: its instance
-    # S2: the baseline list's r1 card; a radio's running daemon has Stop and Restart (W286), else one Start
-    assert [col.within(f).field_default("op") for f in forms] == (["stop", "restart"] if state != "offline-installed"
-                                                                  else ["start"]), "the card's daemon controls"
+    acts = [f for f in col.find("form", class_="act") if col.within(f).field_default("target") == "daemon@r1"]
+    assert not acts, "dash plan c1: no card-level daemon Stop / Restart / Start form"
     r1_log = "/logs/loraham-daemon?job=start-loraham-daemon-433-r1.log"     # r1's card: its radio's own log (G1-C28)
     links = [p for p in col.find("p") if col.within(p).find("a", href=r1_log)]
     assert len(links) == 1                                                 # the block with the log links
     if state in ("ready", "occupied"):
         heads = [h for h in col.find("h3") if h.text.strip() == "Radio config"]
-        assert len(heads) == 1 and heads[0].index == forms[-1].end + 1    # Stop, Restart, then Radio config
-        assert links[0].index == heads[0].end + 1                          # then the log links
+        assert len(heads) == 1 and links[0].index == heads[0].end + 1     # Radio config, then the log links
     else:
-        assert links[0].index == forms[0].end + 1
+        start = col.find("form", class_="startform")
+        assert start and start[0].index > links[0].end                     # the links, then the start list
+        first = col.within(start[0]).find("option")[0]
+        assert (first["value"], first.text.strip()) == ("daemon@r1", "daemon 433")
     log = col.within(links[0]).find("a", href=r1_log)
     assert log and log[0].text == "Daemon log"
 

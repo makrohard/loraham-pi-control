@@ -200,18 +200,9 @@
               radio tuning. Run only one at a time on this radio.</p>
           {% endif %}
 
-          {# --- radio config (only when the daemon serves this band): one entry per line, in this
-                 order — Stop daemon, Radio config, Daemon log (then the RF logs). --- #}
+          {# --- radio config (only when the daemon serves this band): Radio config, Daemon log (then the RF logs). The
+                 daemon's own Stop / Restart sit in its block under "Running on" (dash plan c1: the card's pair is gone). --- #}
           {% if up %}
-            {% for op in ("stop", "restart") %}
-            <form method="post" action="{{ url_for('action') }}" class="act">
-              <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-              <input type="hidden" name="op" value="{{ op }}">
-              <input type="hidden" name="target" value="daemon{{ at }}">
-              <input type="hidden" name="from" value="dash">
-              <button type="submit">{{ op | capitalize }} daemon ({{ key }})</button>
-            </form>
-            {% endfor %}
             <h3><a href="{{ url_for('stacks_overview', open='daemon', cfg='daemon', radio=r.rid) ~ '#stack-settings-daemon' }}">Radio config</a></h3>
             {{ links }}
             <details class="monitor" id="monitor-{{ key }}" open>
@@ -253,16 +244,7 @@
               <p class="muted">Daemon not installed. Install &amp; build the
                 <a href="{{ url_for('stacks_overview', open='daemon') ~ '#stackrow-daemon' }}">daemon stack</a> first.</p>
             {% else %}
-              <p class="muted">Daemon not running on {{ r.rid }}. Start a stack below (it auto-starts the daemon for this
-                radio), or start the daemon alone:</p>
-              <form method="post" action="{{ url_for('action') }}" class="act">
-                <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
-                <input type="hidden" name="op" value="start">
-                <input type="hidden" name="target" value="daemon{{ at }}">
-                <input type="hidden" name="from" value="dash">
-                <button type="submit">Start daemon ({{ r.rid }})</button>
-              </form>
-              {{ links }}
+              {{ links }}{# dash plan c1: the daemon starts from "Start a stack on rX" ("daemon <band>", first entry) #}
             {% endif %}
           {% endif %}
 
@@ -359,14 +341,17 @@
             {% endfor %}
           {% endif %}
 
-          {# --- start another stack on this radio --- #}
-          {% if r.startable %}
+          {# --- start another stack on this radio; dash plan c1: while THIS radio's daemon is installed and stopped, its
+                 "daemon <band>" (daemon@rX) is the first entry, added here outside the stacks' radio filter --- #}
+          {% set daemon_offer = r.rid and not up and r.daemon.installed %}
+          {% if r.startable or daemon_offer %}
             <h3>Start a stack on {{ r.rid }}</h3>
             <form method="post" action="{{ url_for('action') }}" class="startform">
               <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
               <input type="hidden" name="op" value="start">
               <input type="hidden" name="from" value="dash">
               <select name="target" aria-label="Stack to start on {{ key }}">
+                {% if daemon_offer %}<option value="daemon{{ at }}">daemon {{ r.band }}</option>{% endif %}
                 {% for s in r.startable %}<option value="{{ s.id }}{{ at }}">{{ s.name }}{% if s.multi_band %} ({{ r.band }}){% endif %}</option>{% endfor %}
               </select>
               <button type="submit">Start</button>

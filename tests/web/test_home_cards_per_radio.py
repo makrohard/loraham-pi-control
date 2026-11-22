@@ -37,7 +37,8 @@ def test_each_radio_of_one_band_has_its_own_labelled_card_and_daemon_view(web, t
         card = doc.within(doc.by_id(f"radio-{rid}"))
         cfg = [a["href"] for a in card.find("a") if a.text == "Radio config"]
         assert [parse_qs(urlsplit(h).query).get("radio") for h in cfg] == [[rid]]
-        assert {card.within(f).field_default("target") for f in card.find("form", action="/action")} >= {f"daemon@{rid}"}
+        targets = {card.within(f).field_default("target") for f in card.find("form", action="/action")}
+        assert targets and all(t.endswith(f"@{rid}") for t in targets)       # every control names its own instance
         log = [a["href"] for a in card.find("a") if a.text == "Daemon log"]
         assert [parse_qs(urlsplit(h).query) for h in log] == [{"job": [f"start-loraham-daemon-433-{rid}.log"]}]
 
