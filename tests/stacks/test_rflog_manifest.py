@@ -110,7 +110,7 @@ def test_meshcore_and_reticulum_get_the_switch_and_the_path_in_their_config(tmp_
     assert f'rf_log_path = "{tmp_path}/logs/r2/rf-meshcore.log"' in toml       # K4b: meshcore@r2's own (rf_rows)
     assert all(w.status == "written" for w in svc.write_config_files("reticulum"))
     conf = (tmp_path / "state" / "reticulum" / "config").read_text()
-    lora = conf[conf.index("[[LoRa]]"):]
+    lora = conf[conf.index("[[LoRa r2]]"):]          # the instance's interface (B3)
     assert "rf_log = on" in lora and f"rf_log_path = {tmp_path}/logs/rf-reticulum.log" in lora
     assert svc.save_config_bundle("meshcore", values={"file_rf_log": "off"}).ok
     assert svc.save_config_bundle("reticulum", values={"file_rf_log": "off"}).ok

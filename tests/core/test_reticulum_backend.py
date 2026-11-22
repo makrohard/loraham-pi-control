@@ -179,7 +179,7 @@ def test_a_daemon_stop_reaches_reticulum_only_on_the_daemon_backend(tmp_path):
 def _rendered_type(tmp_path, svc, rid):
     svc.write_config_files("rns", "868", inst=instances.copy_of(svc, "reticulum", rid)[0])
     lines = [ln.strip() for ln in (tmp_path / "state" / "reticulum" / "config").read_text().splitlines()]
-    lora = lines[lines.index("[[LoRa]]") + 1:]
+    lora = lines[lines.index(f"[[LoRa {rid}]]") + 1:]
     return next(ln for ln in lora if ln.partition("=")[0].strip() == "type")
 
 

@@ -58,8 +58,12 @@ class _IfacContext:
         self.violations += 1
 
 
+_LORA_TYPES = ("LoRaSPIInterface", "LoRaDaemonInterface")      # loraham-rns-interface's two backends (one air format)
+
+
 def _lora_section(configdir: str):
-    """The [[LoRa]] interface section of the generated RNS config (0400, ours to read)."""
+    """The LoRa interface section of the generated RNS config (0400, ours to read): one `[[LoRa <rid>]]` per radio of the
+    node, either backend; the first with an IFAC (one RF log for the node), else the first."""
     path = os.path.join(configdir, "config")
     if not os.path.isfile(path):
         # ConfigObj answers an absent file with an EMPTY config — which read as "no IFAC" on a
@@ -70,10 +74,8 @@ def _lora_section(configdir: str):
     except Exception as exc:
         _proto.fail(f"reticulum config unreadable: {path}: {exc}")
     ifaces = cfg.get("interfaces", {}) or {}
-    for sec in ifaces.values():
-        if isinstance(sec, dict) and str(sec.get("type", "")).endswith("LoRaSPIInterface"):
-            return sec
-    return None
+    lora = [sec for sec in ifaces.values() if isinstance(sec, dict) and str(sec.get("type", "")).endswith(_LORA_TYPES)]
+    return next((sec for sec in lora if sec.get("networkname") or sec.get("passphrase")), lora[0] if lora else None)
 
 
 def _lora_ifac(lora):

@@ -1535,7 +1535,7 @@ def test_the_changelog_upgrade_steps_work_in_their_printed_form(box, tmp_path, c
     assert rc == 0, out
     assert ("rns", "868", "r2") in launches, launches
     conf = (tmp_path / "state" / "reticulum" / "config").read_text()
-    assert "rnode_framing = yes" in conf.split("[[LoRa]]", 1)[1]
+    assert "rnode_framing = yes" in conf.split("[[LoRa r2]]", 1)[1]
 
 
 def test_the_changelog_upgrade_sequence_runs_in_its_printed_order(box, tmp_path, capsys, monkeypatch):
@@ -1574,4 +1574,4 @@ def test_the_changelog_upgrade_sequence_runs_in_its_printed_order(box, tmp_path,
     rc, out, launches = run("start", "reticulum@r2")
     assert rc == 0, out
     assert ("rns", "868", "r2") in launches, launches
-    assert "rnode_framing = yes" in (tmp_path / "state" / "reticulum" / "config").read_text().split("[[LoRa]]", 1)[1]
+    assert "rnode_framing = yes" in (tmp_path / "state" / "reticulum" / "config").read_text().split("[[LoRa r2]]", 1)[1]

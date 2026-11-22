@@ -1049,7 +1049,7 @@ def test_the_start_path_writes_the_framing_default_unless_the_operator_saved_one
         assert svc.save_config("reticulum", {"file_rnode_framing": saved}).ok
     assert all(w.status == "written" for w in svc.write_config_files("reticulum"))
     conf = (tmp_path / "state" / "reticulum" / "config").read_text()
-    lora = conf.split("[[LoRa]]", 1)[1].split("[[", 1)[0]
+    lora = re.split(r"\[\[LoRa r[0-9]+\]\]", conf, maxsplit=1)[1].split("[[", 1)[0]   # the instance's interface (B3)
     assert re.search(r"^\s*rnode_framing = (yes|no)\s*$", lora, re.M).group(0).strip() == expect
     assert "preamble" not in lora
 

@@ -266,8 +266,9 @@ def _check_token(cid: str, tok: str, names: set) -> None:
         return
     # `{asset}/...` — a packaged-data path (build steps and run commands both resolve it via
     # commands._asset_token, which validates each path segment). Allow it in literal tokens.
+    # `{rid}` in a literal token is the instance's radio (commands._paths_subst; unresolved without one: refused).
     stripped = (instance_free.replace("{runtime}", "").replace("{source}", "").replace("{band}", "")
-                   .replace("{controller_python}", "").replace("{asset}", ""))
+                   .replace("{controller_python}", "").replace("{asset}", "").replace("{rid}", ""))
     if "{" in stripped or "}" in stripped:
         raise ManifestError(f"{cid}: malformed command token {tok!r} (stray brace)")
 

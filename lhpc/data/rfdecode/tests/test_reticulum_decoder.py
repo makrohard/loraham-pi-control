@@ -131,6 +131,24 @@ def test_an_ifac_frame_is_unmasked_with_rns_own_code(tmp_path):
     assert r["status"] == "no-key"
 
 
+def test_the_ifac_of_a_daemon_interface_among_the_nodes_sections_unmasks(tmp_path):
+    # B3: one `[[LoRa <rid>]]` per radio of the node, either backend; the IFAC is the first section's that has one.
+    # red-before (ec61b832): only a LoRaSPIInterface section was read, so the frame was `no-key`
+    me = RNS.Identity()
+    dest = RNS.Destination.hash_from_name_and_identity("lxmf.delivery", me)
+    masked = RNS.Transport.handle_outgoing_ifac(_RnsIfac("labnet", "generated-passphrase-42", 8),
+                                                _data_packet(dest, me.encrypt(b"through the daemon")))
+    d = tmp_path / "reticulum"
+    d.mkdir()
+    (d / "config").write_text("\n".join([
+        "[reticulum]", "[interfaces]",
+        "  [[LoRa r1]]", "    type = LoRaSPIInterface", "    enabled = yes",
+        "  [[LoRa r2]]", "    type = LoRaDaemonInterface", "    enabled = no",
+        "    networkname = labnet", "    passphrase = generated-passphrase-42"]) + "\n")
+    r = dec.make_decoder(str(d), _meshchat(tmp_path, me))("k", _line(masked.hex()))
+    assert r["status"] == "ok" and "through the daemon" in r["decoded"]
+
+
 def test_odd_input_is_malformed_and_a_bad_config_is_a_decoder_failure(tmp_path):
     decode = dec.make_decoder(_config(tmp_path), _meshchat(tmp_path))
     assert decode("k", "no hex here")["status"] == "malformed"

@@ -17,6 +17,7 @@ from . import openhop_store as _openhop_store
 from . import radio_start as _radio_start
 from . import restart_required as _rr
 from . import reticulum_interfaces as _reticulum_interfaces
+from . import reticulum_node as _reticulum_node
 from . import rflog as _rflog
 from . import web_client as _web_client
 from .config import (
@@ -1889,19 +1890,11 @@ class ParamsConfigMixin:
         stored = self.file_config_values(target, band, inst)
         over = overrides or {}
         written: list[ConfigWrite] = []
-        for c in self._file_config_components(target):
-            fc = c.config_file
-            # Every stored value is validated against its FileParam; an invalid one reverts to the (instance's) default, never
-            # written raw. The inherited-identity overlay (`overrides`) takes precedence for THIS launch only.
+
+        def _values(c, fc, inst, stored, rendered_mode):
+            """(values, why) of component `c`'s file params for one instance (`stored`: its saved values)."""
             values = {}
             secret_error = ""
-            # The MeshCore mode this render describes — the SAVED mode (there is no per-launch
-            # value of it), decided ONCE before the rows because
-            # the identity row precedes the mode row in manifest order.
-            rendered_mode = ""
-            if c.id == MESHCORE_COMPONENT:
-                rendered_mode = _meshcore_mode.normalize(
-                    stored.get("mode", _meshcore_mode.DEFAULT_MODE))
             for p in fc.params:
                 if getattr(p, "secret_ref", ""):
                     # Separate trust layer: never `over`, never `stored`, never a default.
@@ -1996,6 +1989,28 @@ class ParamsConfigMixin:
                 # passes nothing). `lhpc config` refuses the endpoint half at save time too;
                 # this is the authoritative check, and the only one that can see the secret.
                 secret_error = _reticulum_interfaces.problem(values)
+            return values, secret_error
+
+        for c in self._file_config_components(target):
+            fc = c.config_file
+            # Every stored value is validated against its FileParam; an invalid one reverts to the (instance's) default, never
+            # written raw. The inherited-identity overlay (`overrides`) takes precedence for THIS launch only.
+            # The MeshCore mode this render describes — the SAVED mode (there is no per-launch
+            # value of it), decided ONCE before the rows because
+            # the identity row precedes the mode row in manifest order.
+            rendered_mode = ""
+            if c.id == MESHCORE_COMPONENT:
+                rendered_mode = _meshcore_mode.normalize(
+                    stored.get("mode", _meshcore_mode.DEFAULT_MODE))
+            values, secret_error = _values(c, fc, inst, stored, rendered_mode)
+            members = []                    # B3: the node's other interfaces, each from its own store and band
+            if not secret_error and c.id == _reticulum_interfaces.NODE_ID and inst is not None and inst.rid:
+                for m in _instances.node_members(self, self._owner_stack_id(target), inst.rid):
+                    m_values, secret_error = _values(c, fc, m, self.file_config_values(target, m.band, m), rendered_mode)
+                    if secret_error:
+                        break
+                    members.append((m.rid, {k: v.replace("{band}", m.band) if isinstance(v, str) else v
+                                            for k, v in m_values.items()}))
             if secret_error:
                 # The message names the LOCATION of the secret, never its value.
                 written.append(ConfigWrite(c.id, str(fc.path), "failed", secret_error))
@@ -2019,7 +2034,14 @@ class ParamsConfigMixin:
                 updater = {"toml-update": update_toml, "yaml-update": update_yaml,
                            "ini-update": update_ini}[fc.fmt]
                 try:
-                    text = spi_mode.render(fc.fmt, updater(base_text, fc.params, values, subst))
+                    if c.id == _reticulum_interfaces.NODE_ID and inst is not None and inst.rid and fc.fmt == "ini-update":
+                        rendered = update_ini(_reticulum_node.expand(base_text, [inst.rid, *(r for r, _v in members)]),
+                                              _reticulum_node.for_owner(fc.params, inst.rid), values, subst)
+                        for rid, m_values in members:           # members: their own values, disabled (attached later)
+                            rendered = update_ini(rendered, _reticulum_node.for_member(fc.params, rid), m_values, subst)
+                    else:
+                        rendered = updater(base_text, fc.params, values, subst)
+                    text = spi_mode.render(fc.fmt, rendered)
                 except ValueError as exc:
                     written.append(ConfigWrite(c.id, str(out_path), "failed", str(exc)))
                     continue

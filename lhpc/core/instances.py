@@ -171,6 +171,31 @@ def recorded_radio(paths, sid: str, rids) -> str:
                 "")
 
 
+def member_of(svc, sid: str, rid: str) -> str:
+    """The owner rid `<sid>@<rid>`'s saved intent names (`member_of` in its own settings, the one durable fact of a
+    member, plan reti §1d), "" for none, another stack or an unreadable file."""
+    from .config import ConfigError
+    stack = svc.stack(sid)
+    if stack is None or not fixed_ports_only(stack) or not rid:
+        return ""
+    try:
+        return str(svc._stack_config_cached(sid, "", commands.Instance(rid)).get(MEMBER_OF, "") or "")
+    except (ConfigError, OSError):
+        return ""
+
+
+def node_members(svc, sid: str, owner: str) -> tuple:
+    """The instances intended as members of the node owned by `owner` (B3 note v2 R1): the radios `sid` may start on
+    now (eligible: enabled, its bands, its backend allowed on the radio) whose saved member_of is `owner`, in rid
+    order, never `owner` itself."""
+    stack = svc.stack(sid)
+    if stack is None or not fixed_ports_only(stack):
+        return ()
+    bands = {r.id: r.band for r in radios.load(svc._paths).radios}
+    return tuple(commands.Instance(r, band=bands[r]) for r in eligible(stack, svc)
+                 if r != owner and member_of(svc, sid, r) == owner)
+
+
 def radios_of(stack, paths, disabled: str = "") -> tuple:
     """The radios a stack has an instance on (K4b): every enabled radio of its bands (any radio for a stack without
     bands), in rid order; the hardware list
@@ -663,6 +688,9 @@ def copy_of(svc, sid: str, rid: str = "", band: str = "", run=None):
         return None, why
     if band and band != radio.band:
         return None, f"{sid}@{rid}: {rid} is on {radio.band} MHz, not {band} MHz"
+    if (owner := member_of(svc, sid, rid)) and rid not in launched:      # a member is never an owner (B3 note C1 a)
+        return commands.Instance(rid, band=radio.band), (f"{sid}@{rid} is a member of the node on {owner}: start "
+                                                         f"{sid}@{owner}, or remove {rid} from it")
     return commands.Instance(rid, band=radio.band), ("" if radio.enabled else f"{sid}@{rid}: {rid} is disabled")
 
 

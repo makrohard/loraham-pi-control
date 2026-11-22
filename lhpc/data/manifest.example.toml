@@ -3123,7 +3123,9 @@ readiness = "endpoint"
 readiness_timeout = 60.0
 build_marker = ".venv/.lhpc-build-complete"
 bin = ".venv/bin/loraham-rns-node"
-run = ".venv/bin/loraham-rns-node --config {runtime}/state/reticulum --interface LoRa --ready-file {runtime}/state/reticulum/ready {rns_allow}"
+# the owner radio's interface, `[[LoRa <rid>]]` (the node's other radios are attached to it, plan reti v21 §1c)
+run_argv = [".venv/bin/loraham-rns-node", "--config", "{runtime}/state/reticulum", "--interface", "LoRa {rid}", "--ready-file", "{runtime}/state/reticulum/ready", "{param:rns_allow}"]
+run_cwd = "{source}"
 note = "Pins, chip, TCXO and PA settings come from the hardware setup chosen with `lhpc hardware` — they are deliberately not editable per stack, because a wrong PA or TCXO value can damage the module."
 [stack.component.source]
 path = "src/reticulum"
