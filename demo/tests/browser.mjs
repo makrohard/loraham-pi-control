@@ -422,8 +422,9 @@ try {
   { timeout: 30000 });
   if (await boots(page) !== "1") throw new Error("an in-page anchor booted Pyodide again");
   ok("an in-page #anchor (Settings → Repeater) jumps inside the page, no new boot");
-  // (l) a link to another site (the footer's GitHub link, base.html) opens a new tab; the frame stays the page: a frame
-  // navigated to another origin would show that site in the demo, and its pages are unreadable to the demo.
+  // (l) a link to another site (the first https:// link on Home without a target; the OK line names it) opens a
+  // new tab; the frame stays the page: a frame navigated to another origin would show that site in the demo, and its
+  // pages are unreadable to the demo.
   await render(page, "/", "#sysbox");
   const ext = await page.evaluate(() => {
     const seen = [], real = window.open;
