@@ -2360,7 +2360,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         if op not in service.WEB_ACTIONS:
             abort(400)
         confirmed, rid, inst, band = request.form.get("confirmed") == "yes", "", None, ""   # band: the §6 stray Stop's
-        if op in ("start", "stop", "restart"):
+        if op in ("start", "stop", "restart", "join"):
             # W2 (CLEANUP-DESIGN-v13 13.2): an instance, `<stack>@<rid>`, through the one parser; a `band` or `rid`
             # field is a second selector (obsolete, a bad request). A refusal says why and runs nothing; a disabled
             # radio's running instance still stops (G1-C7 B3). One exception, the §6 stray card: a band daemon no
@@ -2371,7 +2371,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             if (("band" in request.form or "rid" in request.form) and not stray) or target.endswith("@"):
                 abort(400)                                              # `kiss@` names no radio (G1-C54)
             sid, inst, band, why = (target, None, request.form["band"], "") if stray else \
-                _instances.parse_target(service, target, op)
+                _instances.parse_target(service, target, "start" if op == "join" else op)
             # G4-web: the instance names its band (instances.radio_band, the daemon's too, K8f); kept only for the §6
             # stray Stop
             band = band if stray else ""
@@ -2382,6 +2382,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 flash(f"Cannot {op} {target}: {why}.", "warn")
                 return _redirect_for(sid or target)
             target, rid = sid, (inst.rid if inst is not None else "")
+            if op == "join":                        # B6: Connect = the intent, then the ordinary start joins the node
+                from lhpc.core import reticulum_members as _rm
+                ok, why = _rm.save_join(service, sid, inst)
+                res = service.start(sid, apply=True, inst=inst) if ok else None
+                if res is not None and not res.ok:
+                    _rm.drop_join(service, inst)    # a failed Connect leaves nothing behind
+                flash(res.summary + (" " + " ".join(res.details[:6]) if not res.ok else "") if res is not None
+                      else f"Cannot connect {target}@{rid}: {why}", "ok" if res is not None and res.ok else "warn")
+                return redirect(url_for("dashboard"))
         elif "rid" in request.form:                 # install, update, build, clean are stack-wide: no radio
             abort(400)
         elif "band" in request.form:                # G4-web: a stack-wide op names no band either (by name)
@@ -2426,6 +2435,10 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # choice — another stack's owner to stop, dependents a restart takes down — asks for
             # confirmation. Everything else runs now.
             plan = service.run_action(op, target, apply=False, band=band, inst=inst)   # band: daemon/stray only
+            if not plan.ok and plan.data.get("connect"):          # B6: another radio of the running node: Connect?
+                from dataclasses import replace as _replace
+                return _render_confirm("join", target, source, frm, inst=inst, rid=rid, plan=_replace(
+                    plan, ok=True, details=["  this radio is attached to the running node; nothing restarts"]))
             if not plan.ok:
                 if plan.data.get("enforce_fields"):
                     return _settings_back(target, plan, rid)

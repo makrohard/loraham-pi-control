@@ -6,6 +6,7 @@ settings are checked first and reloaded live. The node's RPC is a fake (`Node`);
 from __future__ import annotations
 
 import json
+import re
 import os
 import subprocess
 
@@ -259,3 +260,100 @@ def test_a_failed_join_releases_the_daemon_band_it_brought_up(tmp_path):
     life = Life()
     svc._roll_back_start(life, order, results, "", {"868"}, "r4")
     assert life.stopped == [("loraham-daemon", "868")]
+
+
+# ---- the cards (B6 design note v1 C1-C4) ----------------------------------------------------------------------------
+
+def _home(box, web):
+    client = web(service_factory=lambda: box.svc)
+    return client, client.get("/", headers={"Host": "localhost:8443"}).get_data(as_text=True)
+
+
+def _forms(html, target):
+    """[(op, button)] of the rendered forms posting `target`."""
+    return re.findall(rf'name="op" value="([a-z]+)">\s*<input type="hidden" name="target" value="{re.escape(target)}">'
+                      r'.*?<button type="submit">([^<]+)</button>', html, re.S)
+
+
+def test_a_connected_radios_card_shows_its_node_and_disconnect(box, web):
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    _c, html = _home(box, web)
+    # red-before (f4ff210c): r1 has no card (the one-node stack gives Home its owner only)
+    assert "Connected to the Reticulum node on r2" in html
+    assert ("stop", "Disconnect") in _forms(html, "reticulum@r1")
+    box.node.attached.discard("LoRa r1")                                     # the record stays, the node lost it
+    _c, html = _home(box, web)
+    assert "Not connected — not attached — see the Reticulum log" in html   # live = the record AND the node's list
+
+
+def test_a_not_connected_radios_card_names_why_and_offers_connect_and_remove(box, web):
+    _owner_up(box)
+    (box.root / "config" / "stacks" / "reticulum@r1.toml").write_text('backend = "spi"\nmember_of = "r2"\n')
+    _c, html = _home(box, web)
+    # red-before (f4ff210c): no card, no reason
+    assert "Not connected — not attached — see the Reticulum log" in html
+    assert _forms(html, "reticulum@r1") == [("join", "Connect"), ("stop", "Remove")]
+    res = box.svc.stop("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r1")[0])
+    assert res.ok and "r1 removed from the Reticulum node (it was not connected)" in " ".join(res.details)   # C3
+    assert _intent(box, "r1") == "" and not [c for c in box.node.calls if c[:1] == ("--detach",)]
+
+
+def test_a_member_less_box_never_asks_the_node(box, web):
+    _owner_up(box)
+    before = box.node.calls.count(("-j",))
+    _home(box, web)
+    assert box.node.calls.count(("-j",)) == before                           # a25 B6 C1
+
+
+def test_with_the_node_down_the_card_says_so(box, web):
+    (box.root / "config" / "stacks" / "reticulum@r1.toml").write_text('backend = "spi"\nmember_of = "r2"\n')
+    _c, html = _home(box, web)
+    assert "Not connected — the node on r2 is not running" in html
+
+
+def test_one_node_answer_serves_every_card_of_a_page(box, web):
+    _owner_up(box)
+    stores = {"r1": 'backend = "spi"\nmember_of = "r2"\n', "r4": 'member_of = "r2"\n'}
+    for rid, text in stores.items():
+        (box.root / "config" / "stacks" / f"reticulum@{rid}.toml").write_text(text)
+    before = box.node.calls.count(("-j",))
+    _c, html = _home(box, web)
+    assert box.node.calls.count(("-j",)) - before == 1                       # a25 B5 N1: once per request
+    assert "Not connected — daemon@r4 is not ready" in html                  # r4 on the daemon backend, no daemon
+
+
+def test_connect_from_the_web_joins_and_a_failed_one_leaves_nothing(box, web, csrf):
+    _owner_up(box)
+    client = web(service_factory=lambda: box.svc)
+    box.node.unlisted = {"LoRa r1"}
+    client.post("/action", data={"_csrf": csrf(client), "op": "join", "target": "reticulum@r1", "confirmed": "yes"})
+    # red-before (f4ff210c): op join is a bad request (400)
+    assert (_member(box, "r1"), _intent(box, "r1")) == ([], "")
+    box.node.unlisted = set()
+    client.post("/action", data={"_csrf": csrf(client), "op": "join", "target": "reticulum@r1", "confirmed": "yes"})
+    assert _member(box, "r1") and _intent(box, "r1") == "r2"
+
+
+def test_a_web_start_of_another_radio_asks_connect_and_the_owners_stop_names_its_members(box, web, csrf):
+    _owner_up(box)
+    client = web(service_factory=lambda: box.svc)
+    page = client.post("/action", data={"_csrf": csrf(client), "op": "start", "target": "reticulum@r1"}).get_data(as_text=True)
+    # red-before (f4ff210c): a flash of the refusal, no Connect
+    assert 'name="op" value="join"' in page and "Connect r1 to that node?" in page
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    page = client.post("/action", data={"_csrf": csrf(client), "op": "stop", "target": "reticulum@r2"}).get_data(as_text=True)
+    assert "[also disconnects] reticulum@r1: a radio of this node" in page
+    res = box.svc.stop("reticulum", inst=instances.copy_of(box.svc, "reticulum", "r1")[0])
+    assert "[removes]" not in " ".join(res.details) and "[disconnects] r1 from the Reticulum node" in " ".join(res.details)
+
+
+def test_the_dashboard_signature_follows_the_members_without_asking_the_node(box):
+    _owner_up(box)
+    (box.root / "config" / "stacks" / "reticulum@r1.toml").write_text('backend = "spi"\nmember_of = "r2"\n')
+    box.svc.invalidate_snapshot()
+    sig, calls = box.svc.dash_signature(), len(box.node.calls)
+    assert box.svc.stop("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r1")[0]).ok   # Remove
+    box.svc.invalidate_snapshot()
+    # red-before (f4ff210c): the signature does not change when an intent goes (the page would not reload)
+    assert box.svc.dash_signature() != sig and not [c for c in box.node.calls[calls:] if c == ("-j",)]

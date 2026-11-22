@@ -271,3 +271,61 @@ def drop_join(svc, inst) -> None:
     intent instead: `reconcile` never calls this)."""
     if member_record(svc, inst.rid) is None:
         detach(svc, inst.rid)
+
+
+def listed_cached(svc):
+    """`listed` once per request (a page's cards share it), with the view's short timeout (a25 B5 N1)."""
+    return svc._request_memo(("reticulum-listed",), lambda: listed(svc, timeout=VIEW_TIMEOUT_S))
+
+
+def member_entries(svc, band: str) -> list[dict]:
+    """Home's entries for the member radios of `band` (B6 note C1): a radio with a member record or a saved intent, keyed
+    by its rid (one card per radio); `member` = {node, live, why}. `rnstatus -j` only when such a radio exists."""
+    from . import daemon_control
+    stack = svc.stack(STACK_ID)
+    if stack is None:
+        return []
+    cand = []
+    for r in (r for r in instances.radios.load(svc._paths).radios if r.band == band):
+        rec, intent = member_record(svc, r.id), instances.member_of(svc, STACK_ID, r.id)
+        if rec is not None or intent:
+            cand.append((r.id, rec, rec[instances.MEMBER_OF] if rec is not None else intent))
+    if not cand:
+        return []                                       # a member-less box never asks the node (a25 B6 C1)
+    own = owner_record(svc)
+    lst = listed_cached(svc) if own is not None else None
+    out = []
+    for rid, rec, node in cand:
+        live = rec is not None and lst is not None and rid in lst
+        if live:
+            why = ""
+        elif own is None or own.get("rid") != node:
+            why = f"the node on {node} is not running"
+        elif lst is None:
+            why = "the node does not answer"
+        elif (instances.backend_of(svc, STACK_ID, _comp(svc), rid) == "daemon"
+              and not daemon_control.read_view(svc._system, rid).ready):
+            why = f"daemon@{rid} is not ready"
+        else:
+            why = "not attached — see the Reticulum log"
+        out.append({"id": f"{STACK_ID}@{rid}", "sid": STACK_ID, "rid": rid, "name": stack.name, "main": stack.main,
+                    "components": [], "multi_band": False, "ident": "", "license": stack.license,
+                    "member": {"node": node, "live": live, "why": why}})
+    return out
+
+
+def members_signature(svc) -> str:
+    """The dashboard signature's part for the members (a25 B6 C2): each radio's saved intent and member record, from the
+    config and the records alone — never the node's RPC."""
+    rids = [r.id for r in instances.radios.load(svc._paths).radios]
+    return ",".join(f"{rid}>{instances.member_of(svc, STACK_ID, rid)}{'+' if member_record(svc, rid) else ''}"
+                    for rid in rids if instances.member_of(svc, STACK_ID, rid) or member_record(svc, rid))
+
+
+def owner_members(svc, rid: str) -> list[str]:
+    """The live members an owner's Stop disconnects (its confirm names them, B6 note C4)."""
+    own = owner_record(svc)
+    if own is None or own.get("rid") != rid:
+        return []
+    life = svc._lifecycle()
+    return sorted(r["rid"] for r in life.owned_records(NODE_ID, role=None) if r.get(instances.MEMBER_OF) == rid)

@@ -1410,7 +1410,8 @@ def running_instances(svc, band: str, live: dict, procs=None) -> list:
                     # F29: the MeshCore instance's RUNNING mode (the saved one when the running role is unknown)
                     "mode": svc.meshcore_running_mode(inst) if stk.id == meshcore_mode.STACK_ID else "",
                     "ident": card_ident(svc, stk, inst), "license": stk.license})          # F30, F32
-    return out
+    from . import reticulum_members
+    return out + reticulum_members.member_entries(svc, band)        # B6: the node's member radios, one card each
 
 
 def band_radios(svc, band: str) -> list:

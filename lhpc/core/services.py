@@ -2085,7 +2085,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
 
     # Web-exposed actions -> the same gated service methods the CLI calls.
     WEB_ACTIONS = ("install", "update", "uninstall", "start", "stop", "restart",
-                   "build", "test", "test-tx", "clean")
+                   "build", "test", "test-tx", "clean", "join")
 
     RADIO_BANDS = ALLOWED_BANDS   # the FULL band universe — detection/read/manage (never narrowed)
 

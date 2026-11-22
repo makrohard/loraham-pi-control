@@ -290,7 +290,21 @@
                 <summary class="stitle" data-stack="{{ s.id }}">{{ licence_mark(s.license) }}<strong>{{ s.name }}</strong> <span class="pill">{{ s.id }}</span>
                   {%- if s.ident %} <b class="sident">{{ s.ident }}</b>{% endif %}</summary>{# F32: licence mark first; F30: its name / call #}
                 {% if s.mode %}<p class="smode muted">Mode: <b>{{ s.mode }}</b></p>{% endif %}{# F29: display only, the running mode #}
-                {% if s.rid %}
+                {% if s.member %}
+                {# B6: a radio of the running Reticulum node: its connection, never its own process rows #}
+                <p class="smember">{% if s.member.live %}<span class="pill">Connected to the Reticulum node on {{ s.member.node }}</span>
+                  {% else %}<span class="pill">Not connected — {{ s.member.why }}</span>{% endif %}</p>
+                <p class="actrow">{% for op, label in ([("stop", "Disconnect")] if s.member.live else [("join", "Connect"), ("stop", "Remove")]) %}
+                  <form method="post" action="{{ url_for('action') }}" class="act">
+                    <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
+                    <input type="hidden" name="op" value="{{ op }}">
+                    <input type="hidden" name="target" value="{{ s.id }}">
+                    <input type="hidden" name="from" value="dash">
+                    {% if op == "join" %}<input type="hidden" name="confirmed" value="yes">{% endif %}
+                    <button type="submit">{{ label }}</button>
+                  </form>{% endfor %}
+                </p>
+                {% elif s.rid %}
                 {# K1: a row per component of the instance, stopped ones too; a part's own Run/Stop names `<comp>@<rid>`;
                    W325: the instance's own Stop and Restart (target `<stack>@<rid>`) #}
                 <ul class="complist cgrid">{% for c in s.components %}

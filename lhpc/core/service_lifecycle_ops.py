@@ -2632,7 +2632,8 @@ class LifecycleOpsMixin:
         insts = [k for ss in snap.stacks if set(ss.components) & set(running) for k in instances.running_keys(self, ss.stack.id)]
         return ("R:" + ",".join(running) + ";D:" + ",".join(usable) + ";I:" + ",".join(marks) + ";RR:" + ",".join(rr)
                 + ";B:" + ",".join(booting) + ";N:" + ",".join(insts)
-                + ";M:" + "+".join(self.radio_bands()))   # a band added or removed reflows the columns -> force a reload
+                + ";M:" + "+".join(self.radio_bands())   # a band added or removed reflows the columns -> force a reload
+                + ";RM:" + _rm.members_signature(self))  # B6: a member connected, disconnected or removed
 
     def manual_start_command(self, comp, inst=None) -> str:
         """The command the operator runs in a terminal to start an interactive

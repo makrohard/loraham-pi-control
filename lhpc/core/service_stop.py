@@ -225,6 +225,13 @@ class StopOpsMixin:
         # systemd services lhpc doesn't own (e.g. meshtasticd) — stop them as root.
         sysd = [f"sudo systemctl stop {c.units[0].name}"
                 for _, c in items if c.units and not c.run_argv]
+        _rid = getattr(inst, "rid", "") or ""
+        # B5: a node member's stop detaches it (never a signal: its process is the owner's); the owner's ends the node's
+        # memberships after its verified cessation (below)
+        _member = bool(_rid) and self.stack_of(target) == _ri.STACK_ID and bool(
+            instances.member_of(self, _ri.STACK_ID, _rid) or _rm.member_record(self, _rid))
+        _owner = not _member and self.stack_of(target) == _ri.STACK_ID and (_o := _rm.owner_record(self)) is not None \
+            and _o.get("rid") == _rid
         if not apply:
             details = [f"  [stop] {comp.id}" for _, comp in items]
             for cmd in sysd:
@@ -244,9 +251,14 @@ class StopOpsMixin:
                                                             inst, exclude=_deps_rel)   # N1: the apply's own calculation
                 for _b in _rel:
                     details.append(f"  [also stops] {_dsid} {_b} MHz: no other stack needs it")
+            _mem = _rm.owner_members(self, getattr(inst, "rid", "") or "") if self.stack_of(target) == _ri.STACK_ID else []
+            details += [f"  [also disconnects] {_ri.STACK_ID}@{m}: a radio of this node" for m in _mem]      # B6 C4
+            if _member:                                     # B6 C3: what a member's Stop does
+                details.append(f"  [{'disconnects' if _rm.member_record(self, _rid) else 'removes'}] {_rid} from the "
+                               f"Reticulum node (it keeps running)")
             return ActionResult(True, f"Stop plan for '{target}': {len(items)} component(s).", details=details,
                                 next_commands=[f"lhpc stack stop {instances.named(self, target, inst)} --yes"],   # this plan's
-                                data={"changes": len(items), "dependents": dependents,
+                                data={"changes": len(items), "dependents": dependents, "members": _mem,
                                       "commands": sysd, "other_bands": other_bands})
         details = []
         results: list[CompResult] = []          # every result (dependents + own + daemon release)
@@ -297,13 +309,6 @@ class StopOpsMixin:
                         dep_block = True
                         blocked_deps.append(dep)
 
-        _rid = getattr(inst, "rid", "") or ""
-        # B5: a node member's stop detaches it (never a signal: its process is the owner's); the owner's ends the node's
-        # memberships after its verified cessation (below)
-        _member = bool(_rid) and self.stack_of(target) == _ri.STACK_ID and bool(
-            instances.member_of(self, _ri.STACK_ID, _rid) or _rm.member_record(self, _rid))
-        _owner = not _member and self.stack_of(target) == _ri.STACK_ID and (_o := _rm.owner_record(self)) is not None \
-            and _o.get("rid") == _rid
         for _, comp in items:
             # Never stop the daemon while a dependent is still running / not verified stopped.
             if target_is_daemon and comp.id == self.DAEMON_ID and dep_block:
@@ -335,10 +340,12 @@ class StopOpsMixin:
             if comp.id == self.DAEMON_ID and band in ALLOWED_BANDS:
                 cr = life.stop(comp, band=band, rid=getattr(inst, "rid", "") or None)       # item 16: `--radio rN` alone
             elif _member and comp.id == _ri.NODE_ID:
+                _was = _rm.member_record(self, _rid) is not None
                 _why = _rm.detach(self, _rid)
                 cr = CompResult(component=comp.id, stack=target, action="stop",
                                 outcome=Outcome.BLOCKED if _why else Outcome.STOPPED,
-                                summary=_why or f"{_rid} disconnected from the Reticulum node (it keeps running)")
+                                summary=_why or (f"{_rid} disconnected from the Reticulum node (it keeps running)" if _was
+                                                 else f"{_rid} removed from the Reticulum node (it was not connected)"))
             else:
                 cr = life.stop(comp, **instances.stop_scope(self, self.stack_of(target) or target, comp, inst, band))   # 7c2b
                 if (cr.outcome in (Outcome.ALREADY_STOPPED, Outcome.STOPPED) and getattr(inst, "rid", "")
