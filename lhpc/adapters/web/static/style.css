@@ -106,6 +106,10 @@ h3 { font-size: 1rem; margin: .6rem 0 .35rem; }
   .brand-short { display: inline; }
 }
 .wrap { max-width: 1024px; margin: 0 auto; padding: 1.25rem; }
+/* dash plan c12 S1: every page is wide (main uncapped, side padding max(1.25rem, 2vw)); the header keeps the 1024 px
+   .wrap, so its buttons never move; the named narrow exceptions (the confirmation pages: body.narrow-page) keep it too */
+main.wrap { max-width: none; padding-left: max(1.25rem, 2vw); padding-right: max(1.25rem, 2vw); }
+body.narrow-page main.wrap { max-width: 1024px; padding-left: 1.25rem; padding-right: 1.25rem; }
 .nav { background: #08305c; box-shadow: var(--shadow); }
 .nav .wrap { display: flex; flex-wrap: wrap; gap: .25rem .9rem; padding-top: .5rem; padding-bottom: .5rem; }
 .nav a { color: #cfe0f3; font-size: .9rem; }
@@ -387,7 +391,7 @@ a.iface { text-decoration: none; color: var(--brand); }
   .stacklist .stackrow > summary .col-name { overflow: visible; white-space: normal; text-overflow: clip; }
   /* Every wide block scrolls inside its own box so no section overflows the phone viewport. */
   table { display: block; overflow-x: auto; max-width: 100%; }
-  .wrap { padding: .8rem; }
+  .wrap, main.wrap, body.narrow-page main.wrap { padding: .8rem; }
   .card .body, .card > header { padding-left: .7rem; padding-right: .7rem; }
   /* Config/param FORM tables reflow to stacked rows (name → full-width input → help) instead of a
      3-column grid that overran the viewport. */
