@@ -103,41 +103,6 @@
       if (el) el.hidden = true;
     });
   }
-  function coreLoads(percore) {
-    if (!percore) return [];
-    return percore.map(function (row) {
-      var s = 0;
-      for (var i = 0; i < row.length; i++) s += row[i];
-      return [s, row[3] + row[4]];
-    });
-  }
-  function drawCoreBars(cores, prevCores) {
-    var grid = document.getElementById("sys-cpu-cores");
-    if (!grid || !cores.length) return;
-    if (grid.childElementCount !== cores.length) {  // (re)build once per core count
-      while (grid.firstChild) grid.removeChild(grid.firstChild);
-      for (var b = 0; b < cores.length; b++) {
-        var bar = document.createElement("span");
-        bar.className = "sysbar";
-        var fill = document.createElement("span");
-        fill.className = "sysbar-fill";
-        bar.appendChild(fill);
-        grid.appendChild(bar);
-      }
-    }
-    if (!prevCores || prevCores.length !== cores.length) return;
-    for (var ci = 0; ci < cores.length; ci++) {
-      var ds = cores[ci][0] - prevCores[ci][0], di = cores[ci][1] - prevCores[ci][1];
-      if (ds > 0 && di >= 0) {
-        var cp = Math.max(0, Math.min(100, 100 * (1 - di / ds)));
-        var barEl = grid.children[ci];
-        barEl.firstChild.style.width = cp + "%";
-        barEl.classList.remove("sys-warn", "sys-crit");     // normal <70, high ≥70, full ≥90
-        if (cp >= 90) barEl.classList.add("sys-crit");
-        else if (cp >= 70) barEl.classList.add("sys-warn");
-      }
-    }
-  }
   function setNetVal(rxText, txText) {
     var el = document.getElementById("sys-net-val");
     if (!el) return;
@@ -165,19 +130,20 @@
       var t = d.cpu.total, sum = 0, i;
       for (i = 0; i < t.length; i++) sum += t[i];
       var idle = t[3] + t[4];
-      var cores = coreLoads(d.cpu.percore);        // [[sum, idle] per core] for the delta
       if (prev && prev.cpu) {
         var dSum = sum - prev.cpu.sum, dIdle = idle - prev.cpu.idle;
         if (dSum > 0 && dIdle >= 0) {               // negative delta (reboot/wrap) -> skip sample
           var pct = 100 * (1 - dIdle / dSum);       // number + graph stay TOTAL-%
           set("sys-cpu-val", pct.toFixed(0) + " %");
+          // dash plan c15: ONE total-CPU bar like the rows below (the per-core bars are gone); levels as before
+          setBar("sys-cpu-bar", pct);
+          setLevel(rowOf("sys-cpu-bar"), pct >= 90 ? "sys-crit" : (pct >= 70 ? "sys-warn" : ""));
           pushHist(hist.cpu, pct);
           drawSpark("sys-cpu-spark", [hist.cpu], 0, 100);
         }
-        drawCoreBars(cores, prev.cpu.cores);        // per-core mini bars (2x2)
       }
       prev = prev || {};
-      prev.cpu = { sum: sum, idle: idle, cores: cores };
+      prev.cpu = { sum: sum, idle: idle };
     }
     // Memory (+ swap folded into the text as used/total, only when swap exists).
     if (d.mem && num(d.mem.total_kb) && d.mem.total_kb > 0) {
@@ -452,20 +418,15 @@
   }
   function resetDynamic() {
     hideOptionalRows();
-    // Fresh baseline must LOOK fresh: placeholders + empty graphs + neutral core bars — a
+    // Fresh baseline must LOOK fresh: placeholders + empty graphs + an empty CPU bar — a
     // reopened box must never keep showing the last session's values.
     set("sys-cpu-val", "…");
     var nv = document.getElementById("sys-net-val");
     if (nv) { while (nv.firstChild) nv.removeChild(nv.firstChild); nv.textContent = "…"; delete nv.dataset.txt; }
     var svgs = document.querySelectorAll("#sysbox polyline");
     for (var i = 0; i < svgs.length; i++) svgs[i].setAttribute("points", "");
-    var grid = document.getElementById("sys-cpu-cores");
-    if (grid) {
-      for (var b = 0; b < grid.children.length; b++) {
-        grid.children[b].classList.remove("sys-warn", "sys-crit");
-        grid.children[b].firstChild.style.width = "0%";
-      }
-    }
+    setBar("sys-cpu-bar", 0);                       // dash plan c15: the total-CPU bar starts empty and neutral
+    setLevel(rowOf("sys-cpu-bar"), "");
   }
   // --- history persistence (STAGE 1: client-side only, zero cost for the Pi) -----------------
   // Graph SHAPES survive reload/collapse via the browser's localStorage; the rate BASELINES

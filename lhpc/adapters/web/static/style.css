@@ -774,9 +774,6 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .sys-gaugewrap { display: flex; align-items: center; gap: .5rem; min-width: 0; }
 .sysbar { flex: 0 1 4rem; min-width: 1.5rem; height: .65rem; background: var(--pill-bg);
           border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
-.sys-cpubars { flex: 0 1 4rem; min-width: 1.5rem; display: grid;
-               grid-template-columns: 1fr 1fr; gap: 2px; }   /* per-core mini bars, 2x2 on 4 cores */
-.sys-cpubars .sysbar { flex: none; width: 100%; min-width: 0; height: .45rem; }
 .sysbar-ghost { visibility: hidden; }   /* reserves the bar slot (Net row) so every
                                            graph column starts at the same x */
 .sysbar-fill { display: block; height: 100%; width: 0; border-radius: 999px;
