@@ -790,7 +790,7 @@ def build_parser() -> argparse.ArgumentParser:
     # hardware list: `lhpc config daemon` deliberately exposes none of the daemon's run params, so this is the CLI
     # for them. Saves; restarts nothing.
     p_hw.add_argument("--high-power", nargs=2, metavar=("RID", "off|on"),
-                      help="Allow POWER=20 on radio RID (an SX127x board), off|on. Takes effect at the "
+                      help="Allow POWER=20 on radio RID (an SX127x board; 21-22 on a Meshstick), off|on, from the "
                            "radio's next daemon start. At +20 dBm: duty cycle <= 1 %%, VSWR <= 3:1, "
                            "cooling; nothing enforces it; warranty void if disregarded")
     p_hw.add_argument("--ocp", nargs=2, metavar=("RID", "auto|MA"),

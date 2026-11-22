@@ -316,24 +316,24 @@ class DaemonParamsMixin:
         """Apply the stack's SAVED daemon params to a READY band, once. Returns (lines, tx_ok,
         gate): TXMODE is gating (the app needs its mode); radio params (sent-unconfirmed) and CAD
         tuning are non-gating. `gate` names a refusal that is about THIS stack's configuration,
-        not the daemon (the POWER=20 permission): the daemon is fine and untouched, the stack
+        not the daemon (the high-power permission): the daemon is fine and untouched, the stack
         is not started — so the caller must not report the daemon as failed."""
         lines, tx_ok = [], True
         applies = self._daemon_param_applies(stack_id, rid)
-        # Preflight an explicit POWER=20 BEFORE the batch: a permission mismatch is known from
-        # the daemon's own STATUS without touching the radio, and refusing here avoids a
-        # half-retuned daemon. This one failure is START-GATING — the whole point of the
-        # high-power switch is explicit authorisation, so knowingly starting the app without it
-        # would not be truthful configuration. Every other radio-param failure stays warn-only.
-        if str(applies.get("POWER", "")).strip() == "20":
+        # Preflight a POWER of 20 or more (SX127x 20, the Meshstick's 21-22) BEFORE the batch: a permission mismatch
+        # is known from the daemon's own STATUS without touching the radio, and refusing here avoids a half-retuned
+        # daemon. This one failure is START-GATING — the whole point of the high-power switch is explicit
+        # authorisation, so knowingly starting the app without it would not be truthful configuration. Every other
+        # radio-param failure stays warn-only.
+        if (pw := str(applies.get("POWER", "")).strip()).isdecimal() and int(pw) >= 20:
             view = daemon_control.read_view(self._system, radio_start.daemon_key(self, rid or band))
-            err = (self._live_power_error(band, "20", view.status, rid) if view.reachable
+            err = (self._live_power_error(band, pw, view.status, rid) if view.reachable
                    else f"daemon not serving {band} MHz")
             if err:
-                lines.append(f"  [fail] {band}: {stack_id} requests POWER=20 but {err} "
+                lines.append(f"  [fail] {band}: {stack_id} requests POWER={pw} but {err} "
                              f"(grant {'on' if self._granted(band, rid) else 'off'}, "
                              f"running HIGHPOWER={view.status.get('HIGHPOWER', '?')})")
-                return lines, False, (f"{stack_id} requests POWER=20 on {band} MHz without the "
+                return lines, False, (f"{stack_id} requests POWER={pw} on {band} MHz without the "
                                       "running daemon's high-power permission")
         for key, val in applies.items():
             ok, detail = self._apply_daemon_param(band, key, val, rid)

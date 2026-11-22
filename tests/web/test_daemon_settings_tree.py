@@ -12,7 +12,7 @@ from htmlq import parse
 
 from lhpc.core import config as cfgmod
 from lhpc.core import daemon_control as dc
-from lhpc.core import radio_start
+from lhpc.core import radio_start, radios
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -123,6 +123,21 @@ def test_high_power_follows_the_saved_chip_family(web, tmp_path, monkeypatch, se
     assert ctrl and all(x.has_attr("disabled") == off for x in ctrl), setup
     assert (note in hp.text) if note else ("Not needed" not in hp.text and "chip unknown" not in hp.text)
     assert "running daemon:" in hp.text                                      # saved vs running kept
+
+
+def test_the_meshsticks_high_power_switch_is_live_and_no_other_sx1262s(web, tmp_path):
+    # daemon 1.5.0: the Meshstick's switch admits 21-22; the PineDio (an SX1262 without one) keeps it disabled
+    c, _svc, _fs = _box(web, tmp_path, live=("r4", "r5"))
+    rows = (radios.Radio("r1", "loraham 433", "loraham", "433"),
+            radios.Radio("r4", "pine64 868", "pinedio-usb-1262", "868", usb_port="1-1"),
+            radios.Radio("r5", "mstick 868", "meshstick-1262", "868", usb_serial="MS123456"))
+    (tmp_path / "config" / "radios.toml").write_text(radios.render(rows))
+    for rid, off in (("r5", False), ("r4", True)):
+        doc = _doc(c, f"/stacks?open=daemon&cfg=daemon&radio={rid}")
+        hp = doc.within(doc.by_id("high-power-daemon"))
+        ctrl = hp.find("select") + hp.find("button")
+        assert ctrl and all(x.has_attr("disabled") == off for x in ctrl), rid
+        assert ("Not needed on an SX1262" in hp.text) == off, rid
 
 
 def test_no_duplicate_badge_ids_on_the_daemon_body(web, tmp_path):

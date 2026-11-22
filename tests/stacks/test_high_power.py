@@ -409,3 +409,39 @@ def test_dashboard_cards_carry_the_witnesses(tmp_path):
     svc2, _ = _svc(tmp_path / "w", "waveshare-433", status=_status("SX1262", "1"))
     cards2 = {c["band"]: c for c in svc2.radio_overview()}
     assert not cards2["433"]["daemon"]["high_power"]["warn"]
+
+
+def _meshstick_wants(tmp_path, power, highpower):
+    """r2 a Meshstick (868) granted, its running daemon at HIGHPOWER=`highpower`; kiss@r2 saved at `power`."""
+    svc, fs = _svc(tmp_path, status=_status("SX1262", highpower))
+    rows = (radios.Radio("r1", "loraham 433", "loraham", "433"),
+            radios.Radio("r2", "mstick 868", "meshstick-1262", "868", usb_serial="MS123456"))
+    (tmp_path / "config" / "radios.toml").write_text(radios.render(rows))
+    assert svc.set_high_power("r2", "on").ok
+    assert svc.save_daemon_params("kiss", {"POWER": power}, rid="r2").ok
+    return svc, fs
+
+
+def _inst(svc):
+    from lhpc.core import instances
+    return instances.parse_target(svc, "kiss@r2", "start")[1]
+
+
+@pytest.mark.contract
+@pytest.mark.safety("RF-TX-opt-in")
+@pytest.mark.parametrize("power", ["21", "22"])
+def test_start_preflight_gates_a_meshstick_above_20_on_an_unavailable_permission(tmp_path, power):
+    # daemon 1.5.0: the Meshstick's 21-22 need the permission as the SX127x 20 does (red-before: the preflight read
+    # only "20", the start went on with a [warn] at the daemon's old power)
+    svc, fs = _meshstick_wants(tmp_path, power, "0")
+    res = svc.start("kiss", apply=True, inst=_inst(svc))
+    text = "\n".join((res.summary, *res.details))
+    assert not res.ok, text
+    assert f"POWER={power}" in text and "high-power permission" in text
+    assert fs.sent == []                                  # refused BEFORE any RF setter
+
+
+def test_start_preflight_passes_a_meshstick_22_with_the_running_permission(tmp_path):
+    svc, fs = _meshstick_wants(tmp_path, "22", "1")
+    res = svc.start("kiss", apply=True, inst=_inst(svc))
+    assert any(b"POWER=22" in payload for _p, payload in fs.sent), "\n".join((res.summary, *res.details))
