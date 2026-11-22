@@ -95,6 +95,14 @@ def test_live_predicate_on_sx1262_is_the_full_range(value, live, saved):
     assert dc.live_power_error(str(value), "sx1262", live, saved) is None
 
 
+@pytest.mark.parametrize("top", [None, 22])
+@pytest.mark.parametrize("live", [True, False, None])
+@pytest.mark.parametrize("saved", [True, False])
+def test_live_predicate_refuses_a_negative_power_on_sx1262_even_granted(top, live, saved):
+    err = dc.live_power_error("-1", "sx1262", live, saved, top)
+    assert err and "[0, " in err
+
+
 @pytest.mark.parametrize("value", [2, 10, 17])
 @pytest.mark.parametrize("family", ["sx127x", ""])
 @pytest.mark.parametrize("live", [True, False, None])

@@ -503,7 +503,7 @@ def live_power_error(value: str, running_family: str, live_high_power: bool | No
         top = max(20, power_top or 0)
         if 0 <= n <= 20:
             return None
-        if n <= top:
+        if 20 < n <= top:
             return _grant_refusal(n, live_high_power, saved_on)
         return f"POWER must be in [0, {top}] on the running SX1262"
     if running_family == "sx127x":
