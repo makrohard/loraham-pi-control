@@ -110,8 +110,8 @@ def test_w384h_a_stack_with_only_fixed_port_listeners_has_one_instances_pages_an
     try:
         svc = ControllerService(system=FakeSystem().system, paths=paths)
         assert svc._lifecycle().record_launch(kiss, kiss.component("loraham-kiss-tnc"), p.pid, band="433",
-                                              extra={"rid": "r3"})
-        assert [i.rid for i in commands.stack_instances(fixed, paths)] == ["r3"]      # the radio of its record
+                                              extra={"rid": "r3", "node_owner": True})   # as a one-node start writes it
+        assert [i.rid for i in commands.stack_instances(fixed, paths)] == ["r3"]      # the radio of its owner record
     finally:
         p.kill()
         p.wait(timeout=5)

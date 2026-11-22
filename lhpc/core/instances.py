@@ -158,12 +158,17 @@ def fixed_ports_only(stack) -> bool:                          # transitional: pe
     return bool(eps) and not any("{port" in (getattr(e, "address_template", "") or "") for e in eps)
 
 
-def recorded_radio(paths, sid: str, rids) -> str:              # transitional: per-radio Reticulum (next week)
-    """The radio of `sid`'s launch record among `rids` (the ownership records as written; their pids are verified
-    by every reader that acts on a process), or ""."""
+NODE_OWNER, MEMBER_OF = "node_owner", "member_of"   # a one-node stack's launch records: its owner, a member's owner rid
+
+
+def recorded_radio(paths, sid: str, rids) -> str:
+    """The radio of one-node stack `sid`'s owner among `rids`: its launch record that says `node_owner` (the ownership
+    records as written; their pids are verified by every reader that acts on a process), in any record order; a
+    member's record (`member_of`) never names it. "" without one."""
     from .lifecycle import Lifecycle
     recs = Lifecycle(paths, (), None, None).owned_inventory()[0]
-    return next((r["rid"] for r in recs if r.get("stack") == sid and r.get("rid") in rids), "")
+    return next((r["rid"] for r in recs if r.get("stack") == sid and r.get("rid") in rids and r.get(NODE_OWNER) is True),
+                "")
 
 
 def radios_of(stack, paths, disabled: str = "") -> tuple:

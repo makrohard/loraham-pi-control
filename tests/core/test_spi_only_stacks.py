@@ -52,7 +52,8 @@ def _running(svc, rid, band, alive=True, sid="reticulum", cid="rns"):
     p = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"], start_new_session=True)
     try:
         stk = svc.stack(sid)
-        assert svc._lifecycle().record_launch(stk, stk.component(cid), p.pid, band=band, extra={"rid": rid})
+        assert svc._lifecycle().record_launch(stk, stk.component(cid), p.pid, band=band, extra={
+                "rid": rid, **({"node_owner": True} if instances.fixed_ports_only(stk) else {})})   # as a start writes it
         if not alive:
             p.kill()
             p.wait(timeout=5)

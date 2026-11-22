@@ -51,7 +51,8 @@ def _box(tmp_path, *holders):
         svc = _svc(tmp_path, {p.pid: ARGV[h[1]](h[2], h[3]) for p, h in zip(procs, holders)})
         for p, (sid, cid, rid, band) in zip(procs, holders):
             stk = svc.stack(sid)
-            assert svc._lifecycle().record_launch(stk, stk.component(cid), p.pid, band=band, extra={"rid": rid})
+            assert svc._lifecycle().record_launch(stk, stk.component(cid), p.pid, band=band, extra={
+                "rid": rid, **({"node_owner": True} if instances.fixed_ports_only(stk) else {})})   # as a start writes it
         yield svc
     finally:
         for p in procs:
@@ -94,7 +95,7 @@ def box(tmp_path, monkeypatch, capsys):
 def test_the_default_backend_starts_reticulum_on_a_usb_radio(box):
     # red-before (d8e330cc): rc 1, "reticulum drives SPI radios only, r4 is a USB-CH341 radio"
     rc, out, calls = box("stack", "start", "reticulum@r4", "--yes")
-    assert (rc, calls[-1]) == (0, ("start", "reticulum", "r4")), out.err
+    assert (rc, calls[-1:]) == (0, [("start", "reticulum", "r4")]), out.err
 
 
 def test_backend_spi_on_a_usb_radio_is_refused_at_save_and_at_start(tmp_path, box):

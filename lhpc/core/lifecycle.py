@@ -572,7 +572,10 @@ class Lifecycle:
         With OBSERVE_TIMEOUT_S=0 (tests) it records directly."""
         # the instance's radio (L5; no slot, K4b) and the ports it launched on (G2-UIU3-R3: its saved bases, {} = the
         # defaults), so a listener left on an earlier saved port is still its own (instances.launched_insts)
+        from . import instances
         extra = {"rid": rid, "bases": {str(k): int(v) for k, v in (bases or {}).items()}} if rid else None
+        if extra and instances.fixed_ports_only(stack):     # a one-node stack's start is its node's owner (plan reti §1d)
+            extra[instances.NODE_OWNER] = True
         if self.OBSERVE_TIMEOUT_S <= 0:
             # Capture a COMPLETE identity first and pass it to both record and cleanup,
             # so the zero-observation path follows the SAME no-signal-without-identity
