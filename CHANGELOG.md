@@ -34,7 +34,7 @@
 - A self-update no longer changes saved settings to a release's new defaults, and its result lists the stacks with an
   update (from the next self-update on).
 - meshcom-qemu-raspi: 722b5e8e5 -> b4d3bc0c2 (pin/b4d3bc0), used by meshcom-gps-relay, meshcom-qemu
-- meshcom-loraham-bridge: 8500df8bf -> 47c8876be (v0.3.0), used by meshcom-bridge
+- meshcom-loraham-bridge: 8500df8bf -> 5c7843b3b (v0.3.1), used by meshcom-bridge
 
 Known limitations
 

@@ -1866,8 +1866,8 @@ main = "meshcom-qemu"
 
     [stack.component.source]
     path = "src/meshcom-loraham-bridge"
-    pin_commit = "47c8876beaf79b1b7bbc16e11ea1d98fb061ef17"
-    pin_tag = "v0.3.0"
+    pin_commit = "5c7843b3b094c29805db67f399308a7bfc4d539e"
+    pin_tag = "v0.3.1"
     remote = "https://github.com/makrohard/meshcom-loraham-bridge.git"
     branch = "main"
 
