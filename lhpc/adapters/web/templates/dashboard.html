@@ -5,7 +5,7 @@
    row's own action on the right (`caller('act')`); line 2: the note, the addresses (non-web ports), config, logs and
    the web UI, as the 0.13.x card linked them (A23). `rid`: an instance's radio (its Settings and log for that radio),
    "" for an entry without an instance. `caller('extra')`: what follows the row (an interactive part's command). #}
-{% macro comp_row(c, s, rid, rf='') %}{% set sid = s.sid if rid else s.id %}<li class="crow">
+{% macro comp_row(c, s, rid, rf='', card_rid='') %}{% set sid = s.sid if rid else s.id %}<li class="crow">
                     <div class="chead">{% if c.kind in ('library', 'firmware') %}<span class="badge badge-kind">{{ c.kind }}</span>{# dash plan c4: a dependency, never run here #}{% else %}<span class="badge badge-{{ c.state }}">{{ c.state }}</span>{% endif %}
                       <span class="cname">{{ c.name }}{% if c.optional %} <span class="pill">opt</span>{% endif %}</span>
                       <span class="cact">{{ caller('act') }}</span></div>
@@ -15,7 +15,7 @@
                       {% if c.writes_log %}<a class="logslink" href="{{ url_for('logs_view', target=c.id, radio=rid or None) }}" aria-label="{{ c.id }} logs">logs</a>{% endif %}
                       {{ rf }}{# dash plan c3: the caller's RF-log line (the daemon row only), its radio context built by the caller #}
                       {% for itf in c.interfaces if itf.is_web %}{{ iface(itf, sid, rid) }}{% endfor %}
-                      {% if c.has_password %}<a class="logslink" href="{{ url_for('stacks_overview', open=sid, radio=rid or None) }}#stack-password-{{ c.id }}" aria-label="{{ c.id }} password">password</a>{% endif %}{# dash plan c14: after the web pill, its Apps Password section #}</div>
+                      {% if c.has_password %}<a class="logslink" href="{{ url_for('stacks_overview', open=sid, radio=(rid or card_rid) or None) }}#stack-password-{{ c.id }}" aria-label="{{ c.id }} password">password</a>{% endif %}{# dash plan c14: after the web pill, its Apps Password section #}</div>
                     {{ caller('extra') }}</li>{% endmacro %}
 {# The href of a web interface that WORKS for this viewer, else "": a PROXIED web UI via the nginx proxy per its LIVE
    scope (exposed -> the reached host; loopback -> 127.0.0.1 for a LOCAL viewer only); a direct one at its endpoint
@@ -290,7 +290,7 @@
                   <span class="pill">{{ s.id }}</span>{{ head_web(s) }}</p>
                 {# the same row markup; an orphan keeps today's actions: state, Stop, note (its Run is withdrawn, his word) #}
                 <ul class="complist cgrid">{% for c in s.components %}
-                  {% call(part) comp_row(c, s, "", rfline if c.id == 'loraham-daemon' else '') %}{% if part == 'act' %}
+                  {% call(part) comp_row(c, s, "", rfline if c.id == 'loraham-daemon' else '', r.rid) %}{% if part == 'act' %}
                     {% if c.state in ('running', 'degraded') and (c.optional or c.interactive) %}{{ comp_act('stop', c.id ~ at, 'Stop') }}{% endif %}
                   {% elif c.interactive and c.state not in ('running', 'degraded') %}{{ interactive_cmd(c, s, "", 'runc-' ~ c.id ~ '-' ~ key, (c.commands or {}).get(r.rid, '')) }}{% endif %}{% endcall %}{% endfor %}</ul>
                 <p class="muted" id="noinst-{{ key }}-{{ s.id }}">No launch record or argv names the radio {{ s.name }}

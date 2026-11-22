@@ -1,7 +1,7 @@
 """Dash plan c14 (14a/14b decided): a Home card row whose component declares a UI password file (graywolf, meshcore-node)
 ends with a "password" logslink after its web pills, to its Apps Password section with the card's radio
 (/stacks?open=<sid>&radio=<rid>#stack-password-<cid>). No other row has one (meshcore-webui, MeshCom included), and
-Home reads no password file for it. Driven through the rendered Home page with a verified launch record per stack."""
+Home reads no password file for it. An orphan entry's row (rid "") links with the card's radio (a25 N1). Driven through the rendered Home page with a verified launch record per stack."""
 import subprocess
 import sys
 from urllib.parse import parse_qs, urlsplit
@@ -72,3 +72,21 @@ def test_home_reads_no_password_file(home, monkeypatch):
     monkeypatch.setattr(ControllerService, "ui_credentials_list", boom)
     page = home.get("/")
     assert page.status_code == 200 and "password" in page.get_data(as_text=True)
+
+
+def test_an_orphan_rows_password_link_carries_the_cards_radio(home, monkeypatch):
+    real = ControllerService.radio_overview
+
+    def orphaned(self, strays=None):           # the orphan caller (rid ""): the same entry without an instance
+        out = real(self, strays)
+        for e in out:
+            e["running"] = [dict(s, rid="", id=s["sid"]) if s.get("sid") == "graywolf" else s for s in e["running"]]
+        return out
+    monkeypatch.setattr(ControllerService, "radio_overview", orphaned)
+    doc = parse(home.get("/").get_data(as_text=True))
+    card = doc.within(doc.by_id("radio-r1"))
+    assert card.present("noinst-r1-graywolf")                                     # rendered by the orphan branch
+    links = [a for a in card.find("a") if a.text.strip() == "password"]
+    assert len(links) == 1
+    u = urlsplit(links[0]["href"])
+    assert (u.path, parse_qs(u.query), u.fragment) == ("/stacks", {"open": ["graywolf"], "radio": ["r1"]}, "stack-password-graywolf")
