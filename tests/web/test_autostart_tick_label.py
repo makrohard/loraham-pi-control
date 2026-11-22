@@ -95,3 +95,19 @@ def test_fixed_port_reticulum_names_the_radio_its_save_writes(web, tmp_path, csr
     r = c.post("/stacks/reticulum/config", data={"_csrf": token, "radio": radio, "c_autostart_lxmd": "on"})
     assert r.status_code == 302
     assert _stored(tmp_path, f"reticulum@{radio}.toml").get("autostart_lxmd") == "on"
+
+
+def test_the_web_ui_tick_reads_on_until_the_radios_form_is_saved_without_it(web, tmp_path, csrf):
+    """His word 11-21 (Q10): meshcore's Web UI starts by default, so its tick reads checked with nothing saved; the
+    radio's Settings form saved with the box unchecked (the field omitted, as a browser sends it) stores "off" for
+    that radio only. Red before: unchecked with nothing saved, and nothing stored by the unchecked save."""
+    radios_fixture.write(tmp_path, (radios.Radio("r2", "high", "loraham", "868"),
+                                    radios.Radio("r3", "stick", "meshstick-1262", "868", usb_serial="MSTICK01")))
+    c = web()
+    url = "/stacks?cfg=meshcore&radio=r3&open=meshcore"
+    assert _tick(_get(c, url), "c_autostart_meshcore-webui")[1] is True
+    r = c.post("/stacks/meshcore/config", data={"_csrf": csrf(c, url), "radio": "r3"})
+    assert r.status_code == 302, r.status_code
+    assert _stored(tmp_path, "meshcore@r3.toml").get("autostart_meshcore-webui") == "off", r.location
+    assert "autostart_meshcore-webui" not in _stored(tmp_path, "meshcore@r2.toml")
+    assert _tick(_get(c, url), "c_autostart_meshcore-webui")[1] is False

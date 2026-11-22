@@ -71,6 +71,10 @@ The update, then before the reboot:
 
 Radios and settings:
 
+- MeshCore's Web UI now starts with the stack (modes chat, chat+repeater) on the radio's one Companion connection: to
+  use another client there, or to keep it off, untick it in that radio's MeshCore Settings → Optional components.
+- An optional part that is not built is now skipped with a warning and the rest of its stack starts; for MeshCore's
+  Web UI run `lhpc build meshcore --yes`.
 - The box says "the old [radio] configuration is present and nothing was converted": set up your radio list with
   `lhpc hardware <setup>` (an existing list is kept; a bare `lhpc hardware` only shows it), add your USB sticks on the Hardware page, dismiss the old warning.
 - MeshCore keeps its identities: before its first start, move config/secrets/meshcore_identity.key,

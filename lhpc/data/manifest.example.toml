@@ -2830,6 +2830,7 @@ main = "meshcore-node"
   purpose = "Web GUI (adradr/meshcore-webui) — a browser client of the MeshCore Companion TCP endpoint. Reached through LHPC's TLS/PKI reverse proxy."
   tx_capable = false
   optional = true
+  autostart_default = true   # starts with the stack (chat / chat+repeater) unless unticked on the radio
   # Dashboard: show config + log links like every sibling component. The heuristic withholds
   # the config link because the backend exposes no lhpc-tunable params; force it on so the row
   # matches meshcore-node/cli — it opens the shared stack Settings. (log already shows.)

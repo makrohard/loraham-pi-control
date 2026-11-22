@@ -505,3 +505,9 @@ def test_every_client_endpoint_is_labelled():
                for ep in c.endpoints
                if getattr(ep, "client", False) and not getattr(ep, "description", "")]
     assert missing == [], f"client endpoints with no label: {missing}"
+
+
+def test_only_the_meshcore_web_ui_starts_with_its_stack_by_default():
+    # His word 11-21 (Q10): the chat UI auto-starts with meshcore. Red before: no component had the default.
+    on = {c.id for s in load_manifest() for c in s.components if getattr(c, "autostart_default", False)}
+    assert on == {"meshcore-webui"}, on

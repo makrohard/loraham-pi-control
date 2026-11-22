@@ -1905,9 +1905,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
             # plan does not want (the whole stack then stopped starting) or silently replay a
             # synthetic position. The plan below is the ONLY feed admitter; the fixture runs only
             # when named directly.
-            allowed_optional = {c.id for c in s.components
-                                if cfg.get(f"autostart_{c.id}") == "on"
-                                and self.optional_role(c) == "tickable"}
+            allowed_optional = {c.id for c in s.components if self._autostart_on(c, cfg)}
             # The GPS feed is NOT an operator auto-start choice: it is admitted from the ONE
             # resolved global GPS plan, computed HERE — before anything downstream acquires a
             # lock — so run order, claims and the rendered config all describe the same plan.

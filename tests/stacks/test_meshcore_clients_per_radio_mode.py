@@ -11,14 +11,14 @@ from lhpc.core.services import ControllerService
 ROWS = radios_fixture.RADIOS + (radios.Radio("r4", "pine64 868", "pinedio-usb-1262", "868", usb_port="1-1"),)
 
 
-def _start(tmp_path, modes):
+def _start(tmp_path, modes, tick=True):
     """{rid: whether the start plan of meshcore@rid starts the web UI}, with each radio's own `modes[rid]` saved and the
     web UI ticked (the stack's one global auto-start tick, K6)."""
     radios_fixture.write(tmp_path, ROWS)
     svc = ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
     for rid, mode in modes.items():
         values = {"file_node_name": f"N{rid}", "file_mode": mode, "file_repeater_name": "Relay",
-                  "autostart_meshcore-webui": "on"}
+                  **({"autostart_meshcore-webui": "on"} if tick else {})}
         assert svc.save_config_bundle("meshcore", values=values, inst=instances.copy_of(svc, "meshcore", rid)[0]).ok
     svc._invalidate_config()
     out = {}
@@ -51,3 +51,13 @@ def test_a_start_without_an_instance_keeps_todays_mode_read(tmp_path):
     svc.meshcore_mode = lambda inst=None: (calls.append(inst), real(inst))[1]
     svc._run_order("meshcore", None)
     assert calls and calls[-1] is None
+
+
+def test_with_no_tick_saved_each_chat_mode_starts_its_web_ui_and_a_repeater_none(tmp_path):
+    # His word 11-21 (Q10): the chat modes auto-start the Web UI; repeater-only has no Companion, so no client.
+    # Red before: no radio started it (absent = off).
+    assert _start(tmp_path, {"r2": "repeater", "r4": "chat"}, tick=False) == {"r2": False, "r4": True}
+
+
+def test_with_no_tick_saved_chat_and_repeater_starts_the_web_ui_too(tmp_path):
+    assert _start(tmp_path, {"r4": "chat+repeater"}, tick=False) == {"r4": True}

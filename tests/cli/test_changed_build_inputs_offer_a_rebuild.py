@@ -228,23 +228,22 @@ def test_a_required_component_whose_checkout_is_gone_refuses_the_start(box, web,
 
 
 def test_an_unticked_optional_component_does_not_refuse_the_start(box, web, csrf, tmp_path, monkeypatch):
-    """meshcore's web UI (optional, not ticked, so not in the run order) present and unbuilt: the start does
-    not launch it, so it neither refuses the start nor offers a rebuild. Ticked on r2 only, its readiness names it on
-    r2, not r3, and (Q11b, his word 11-22: "if component is optional, warn only but start the rest") the web start of
-    meshcore@r2 is not refused for it either: the start skips it with a warning.
+    """meshcore's web UI (optional, unticked on r3, so not in r3's run order) present and unbuilt: r3's start does
+    not launch it, so it neither refuses the start nor offers a rebuild. On by default on r2 (his word 11-21, Q10), its
+    readiness names it on r2, not r3, and (Q11b, his word 11-22: "if component is optional, warn only but start the
+    rest") the web start of meshcore@r2 is not refused for it either: the start skips it with a warning.
     Red before: [("meshcore-webui", "not built — ...")] refused the web start of meshcore@r3."""
     box((R1, R2_868, R3))
     svc = _built(tmp_path, monkeypatch, "meshcore", "")
     webui = svc.stack("meshcore").component("meshcore-webui")
     (svc._lifecycle().source_dir(webui) / webui.build_marker).unlink()
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore", {"autostart_meshcore-webui": "off"},
+                               inst=Instance("r3"))                          # unticked on r3 only
     svc = _fresh(tmp_path, monkeypatch)
     assert not svc.is_built(webui) and svc.install_blocker(webui).startswith("not built")
     page = _start_flash(web(), csrf, "meshcore@r3")
     assert "cannot start yet" not in page, page
     assert svc.start_readiness("meshcore", Instance("r3")) == ([], [])
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore", {"autostart_meshcore-webui": "on"},
-                               inst=Instance("r2"))                          # ticked on r2 only
-    svc = _fresh(tmp_path, monkeypatch)
     assert [cid for cid, _why in svc.start_readiness("meshcore", Instance("r2"))[0]] == ["meshcore-webui"]
     assert svc.start_readiness("meshcore", Instance("r3")) == ([], [])
     c = web()                                                                # the start gate, on the radio it starts on:

@@ -149,7 +149,7 @@ def normalize_remotes(remotes: dict, *, target: str, allowed, stacks,
 
 
 def plan_store(changes, autostart: dict, *, key_of, default_of, switches, stacks,
-               sid: str) -> tuple[dict, set, dict]:
+               sid: str, auto_on=frozenset()) -> tuple[dict, set, dict]:
     """Which stored keys the save sets and clears in the instance's own file → (stack_set, stack_remove, switched),
     with each touched switch name → (wanted, default). `key_of(change)` is the persisted key, `default_of(change)` the
     canonical default it is compared with. K6 (K6-SCOPE-v2, DEC-W384k): the switches are the instance's own, and so
@@ -188,8 +188,10 @@ def plan_store(changes, autostart: dict, *, key_of, default_of, switches, stacks
                 to_remove.add(key)
                 to_set.pop(key, None)
             switched[sw.name] = (want, default)
-    to_set.update({k: av for k, av in autostart.items() if av == "on"})   # a tick is "on"; off is the default
-    to_remove |= {k for k, av in autostart.items() if av != "on"}
+    # Only a tick that differs from its component's default is stored ("on" / "off"; `auto_on`: the default-on ids).
+    on = {f"autostart_{cid}" for cid in auto_on}
+    to_set.update({k: "off" if k in on else "on" for k, av in autostart.items() if (av == "on") != (k in on)})
+    to_remove |= {k for k, av in autostart.items() if (av == "on") == (k in on)}
     return to_set, to_remove, switched
 
 

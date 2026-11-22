@@ -7,7 +7,7 @@ persistence, readiness and lifecycle. The node never drives SPI or GPIO itself.
 
 | | |
 |---|---|
-| Components | `meshcore-node` (main; chat node and/or repeater, by `mode`) · `meshcore-gps` (position feed, admitted by the global GPS plan) · `meshcore-webui` (optional browser GUI) · `meshcore-cli` (optional REPL) · `openhop-repeater-src` (library, build-time only) |
+| Components | `meshcore-node` (main; chat node and/or repeater, by `mode`) · `meshcore-gps` (position feed, admitted by the global GPS plan) · `meshcore-webui` (optional browser GUI; starts with the stack in the chat modes unless unticked in that radio's Settings) · `meshcore-cli` (optional REPL) · `openhop-repeater-src` (library, build-time only) |
 | Source / pin | `src/openhop-core` ← `openhop-dev/openhop_core`, built **pristine** (no LHPC patch, so any modification reads `dirty`); selector policy: [provenance](../provenance.md) · `src/openhop-repeater` ← `openhop-dev/openhop_repeater` · `src/meshcore-webui` ← `adradr/meshcore-webui` (+ `meshcore-webui-lhpc-guards.patch`, applied idempotently at build; a conflict fails the build; the declared patch never reads `dirty`) · `src/meshcore-cli` ← `meshcore-dev/meshcore-cli` |
 | Build | `lhpc build meshcore`: `.venv` (`--system-site-packages`) → openHop Core → `meshcore_host` → the repeater's closure (`openhop-repeater-constraints.txt`) and checkout. Web UI: a backend venv from `meshcore-webui-constraints.txt`; the frontend is prebuilt package data (no npm). All headless |
 | Run | `.venv/bin/python -m meshcore_host <runtime>/config/files/<rid>/meshcore.toml` — the same command in every mode |
@@ -168,7 +168,7 @@ adverts pass.
 ## Command-line client
 
 `meshcore-cli` (`meshcli`, params `host`/`port`/`json`/`debug`) is interactive — you run it. The
-node serves one Companion client at a time: the CLI wrapper holds `state/<rid>/meshcore-cli.lock` while
+node serves one Companion client at a time, and the Web UI, running by default, holds it unless unticked: the CLI wrapper holds `state/<rid>/meshcore-cli.lock` while
 it runs and the Web UI waits on it instead of reconnecting. In `chat+repeater` a browser chat with
 LHPC's chat node on the repeater dashboard (`/ws/companion_frame`, e.g. Waev Outpost) takes the
 same lock (further companions set up in openHop take none); while

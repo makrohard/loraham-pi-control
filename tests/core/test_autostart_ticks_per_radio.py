@@ -48,6 +48,11 @@ def _tick(svc, sid, rid, comp, **values):
     assert res.ok, (res.summary, res.details)
 
 
+def _untick(svc, sid, rid, comp):
+    res = svc.save_config_bundle(sid, values={f"autostart_{comp}": ""}, inst=_inst(svc, f"{sid}@{rid}"))
+    assert res.ok, (res.summary, res.details)
+
+
 def _plan(svc, sid, rid=""):
     res = svc.run_action("start", sid, inst=_inst(svc, f"{sid}@{rid}") if rid else None, apply=False)
     return res, "\n".join(res.details)
@@ -68,9 +73,9 @@ def test_a_tick_on_one_radio_starts_that_radios_component_only(box):
 def test_the_tick_is_saved_in_the_radios_own_file(box, tmp_path):
     svc = box()
     _tick(svc, "kiss", "r1", SERIAL)
-    _tick(svc, "meshcore", "r3", "meshcore-webui")
+    _untick(svc, "meshcore", "r3", "meshcore-webui")        # default-on: its untick is what is stored
     assert _stored(tmp_path, "kiss@r1.toml").get(f"autostart_{SERIAL}") == "on"
-    assert _stored(tmp_path, "meshcore@r3.toml").get("autostart_meshcore-webui") == "on"
+    assert _stored(tmp_path, "meshcore@r3.toml").get("autostart_meshcore-webui") == "off"
     for other, key in (("kiss@r2.toml", SERIAL), ("kiss.toml", SERIAL), ("meshcore@r2.toml", "meshcore-webui"),
                        ("meshcore.toml", "meshcore-webui")):
         assert f"autostart_{key}" not in _stored(tmp_path, other), other
@@ -153,3 +158,61 @@ def test_a_restart_brings_back_by_name_only_what_its_radio_does_not_tick(box, mo
     def restarted(rid):
         return svc.run_action("restart", "kiss", inst=_inst(svc, f"kiss@{rid}"), apply=False).data.get("optional_restarted")
     assert (restarted("r1"), restarted("r2")) == ([], [SERIAL])
+
+
+WEBUI = "meshcore-webui"
+
+
+def _meshcore(box):
+    """The box with a node name saved on both 868 radios (meshcore's identity: its start refuses without one)."""
+    svc = box()
+    for rid in ("r2", "r3"):
+        assert svc.save_config_bundle("meshcore", values={"file_node_name": f"N{rid}"},
+                                      inst=_inst(svc, f"meshcore@{rid}")).ok
+    return svc
+
+
+def test_the_web_ui_starts_with_meshcore_when_no_tick_is_saved(box):
+    # His word 11-21 (Q10): each mode auto-starts its own web UI. Red before: no "[start] meshcore-webui".
+    svc = _meshcore(box)
+    res, plan = _plan(svc, "meshcore", "r3")
+    assert res.ok and f"[start] {WEBUI}" in plan, plan
+
+
+def test_an_untick_is_stored_as_off_for_that_radio_and_a_re_tick_removes_it(box, tmp_path):
+    # Only a deviation from the default is stored. Red before: the untick stored nothing (absent = off).
+    svc = _meshcore(box)
+    _untick(svc, "meshcore", "r3", WEBUI)
+    assert _stored(tmp_path, "meshcore@r3.toml").get(f"autostart_{WEBUI}") == "off"
+    assert f"[start] {WEBUI}" not in _plan(svc, "meshcore", "r3")[1]
+    assert f"[start] {WEBUI}" in _plan(svc, "meshcore", "r2")[1]           # the other radio keeps the default
+    _tick(svc, "meshcore", "r3", WEBUI)
+    assert f"autostart_{WEBUI}" not in _stored(tmp_path, "meshcore@r3.toml")
+    assert f"[start] {WEBUI}" in _plan(svc, "meshcore", "r3")[1]
+
+
+def test_a_reset_of_the_radios_settings_brings_the_default_back(box, tmp_path, monkeypatch, capsys):
+    # The off round trip through the CLI: `lhpc config meshcore@r3 --reset --yes` clears r3's untick only.
+    from lhpc.adapters.cli.main import main
+    svc = _meshcore(box)
+    _tick(svc, "kiss", "r1", SERIAL)
+    _untick(svc, "meshcore", "r3", WEBUI)
+    _untick(svc, "meshcore", "r2", WEBUI)
+    before = {n: (tmp_path / "config" / "stacks" / n).read_bytes() for n in ("meshcore@r2.toml", "kiss@r1.toml")}
+    monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
+    assert main(["config", "meshcore@r3", "--reset", "--yes"]) == 0, capsys.readouterr().out
+    assert f"autostart_{WEBUI}" not in _stored(tmp_path, "meshcore@r3.toml")
+    svc = ControllerService(system=FakeSystem(unix_replies=READY).system, paths=Paths(runtime_root=tmp_path))
+    assert svc.save_config_bundle("meshcore", values={"file_node_name": "Nr3"}, inst=_inst(svc, "meshcore@r3")).ok
+    assert f"[start] {WEBUI}" in _plan(svc, "meshcore", "r3")[1]        # (the reset cleared the node name too)
+    assert {n: (tmp_path / "config" / "stacks" / n).read_bytes() for n in before} == before
+
+
+def test_a_default_off_component_keeps_absent_as_off_and_stores_its_tick(box, tmp_path):
+    # Regression guard (green before): the default-off case is as it was.
+    svc = box()
+    assert f"[start] {SERIAL}" not in _plan(svc, "kiss", "r1")[1]
+    _tick(svc, "kiss", "r1", SERIAL)
+    assert _stored(tmp_path, "kiss@r1.toml").get(f"autostart_{SERIAL}") == "on"
+    _untick(svc, "kiss", "r1", SERIAL)
+    assert f"autostart_{SERIAL}" not in _stored(tmp_path, "kiss@r1.toml")

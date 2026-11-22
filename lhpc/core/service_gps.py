@@ -846,6 +846,10 @@ class GpsOpsMixin:
             return "hidden"
         return "tickable" if c.kind == ComponentKind.SERVICE else "listed"
 
+    def _autostart_on(self, c, stored) -> bool:   # THE tick reading: saved ("on"/"off") else `autostart_default`
+        dflt = "on" if c.autostart_default else ""
+        return self.optional_role(c) == "tickable" and stored.get(f"autostart_{c.id}", dflt) == "on"
+
     def _gps_components_excluded(self, target: str, inst) -> set:
         """Feed components that must not run under the current plan.
 

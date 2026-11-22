@@ -41,7 +41,7 @@ the firewall blocks it.
 |---|---|---|---|
 | LHPC console | `127.0.0.1:8443` (HTTPS) | `ssh -N -L 8443:127.0.0.1:8443 <user>@<host>` | `https://127.0.0.1:8443/` |
 | Graywolf APRS | web UI `127.0.0.1:8080` | `ssh -N -L 8080:127.0.0.1:8080 <user>@<host>` | `http://127.0.0.1:8080/` (admin login: the stack page's Password section) |
-| MeshCore web UI (an optional component, started from the stack's card or with `lhpc stack start meshcore-webui@<rid>`) | `127.0.0.1:8788` | `ssh -N -L 8788:127.0.0.1:8788 <user>@<host>` | `http://127.0.0.1:8788/` |
+| MeshCore web UI (an optional component; starts with the stack in the chat modes) | `127.0.0.1:8788` | `ssh -N -L 8788:127.0.0.1:8788 <user>@<host>` | `http://127.0.0.1:8788/` |
 | MeshCore repeater dashboard | `127.0.0.1:8000` | `ssh -N -L 8000:127.0.0.1:8000 <user>@<host>` | `http://127.0.0.1:8000/` (password: the stack page) |
 | MeshCore companion port (a `meshcore-cli` on your machine) | `127.0.0.1:5000` | `ssh -N -L 5000:127.0.0.1:5000 <user>@<host>` | `meshcli -t 127.0.0.1 -p 5000 …` (the packaged client is `meshcli`) |
 | MeshCom web UI | `127.0.0.1:18083` | `ssh -N -L 18083:127.0.0.1:18083 <user>@<host>` | `http://127.0.0.1:18083/` (502 until the firmware has booted) |

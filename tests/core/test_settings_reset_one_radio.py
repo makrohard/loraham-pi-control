@@ -37,14 +37,14 @@ def _stored(tmp_path, name):
 
 def test_a_radios_reset_clears_its_own_tick_and_keeps_the_other_radios(tmp_path):
     svc = _svc(tmp_path)
-    for rid in ("r2", "r3"):
-        assert svc.save_config_bundle("meshcore", values={TICK: "on"}, inst=_inst(svc, f"meshcore@{rid}")).ok
+    for rid in ("r2", "r3"):                    # the Web UI is on by default: its saved tick is the untick ("off")
+        assert svc.save_config_bundle("meshcore", values={TICK: ""}, inst=_inst(svc, f"meshcore@{rid}")).ok
     cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "meshcore", {TICK: "on", "dest": "ALL"})   # old global
     before = _stored(tmp_path, "meshcore.toml")
     res = svc.reset_config("meshcore", inst=_inst(svc, "meshcore@r3"))
     assert res.ok, (res.summary, res.details)
     assert TICK not in _stored(tmp_path, "meshcore@r3.toml")
-    assert _stored(tmp_path, "meshcore@r2.toml").get(TICK) == "on"
+    assert _stored(tmp_path, "meshcore@r2.toml").get(TICK) == "off"
     assert _stored(tmp_path, "meshcore.toml") == before                       # the old stack-wide file untouched
 
 

@@ -902,6 +902,7 @@ def _parse_component(raw: dict) -> Component:
             for r in raw.get("require", [])
         ),
         optional=raw.get("optional", False),
+        autostart_default=raw.get("autostart_default", False),
         gui_optional=raw.get("gui_optional", False),
         test_fixture=raw.get("test_fixture", False),
         reads_position=raw.get("reads_position", False),

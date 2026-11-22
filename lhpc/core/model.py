@@ -527,6 +527,7 @@ class Component:
     asset_inputs: tuple[str, ...] = ()
     requires: tuple[Requirement, ...] = ()   # external commands needed to run
     optional: bool = False       # an optional dependency component within a stack
+    autostart_default: bool = False   # an optional component's auto-start tick when none is saved (its radio's)
     # Optional ONLY for the GUI-dependency preflights (build refusal, gui_skipped_stack /
     # auto-install verdict): when its GUI toolkit is absent the component is DROPPED instead
     # of refusing the whole stack. Everywhere else it stays a normal component — in

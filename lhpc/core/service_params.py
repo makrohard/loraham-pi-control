@@ -616,7 +616,7 @@ class ParamsConfigMixin:
         # `optional_role` decides the row: hidden (library/firmware/feed/fixture), listed (run on
         # demand, no auto-start control) or tickable (the `autostart_<id>` checkbox).
         optional = [{"id": c.id, "name": c.name, "purpose": c.purpose,
-                     "autostart": stored.get(f"autostart_{c.id}") == "on",
+                     "autostart": self._autostart_on(c, stored),
                      "running": runs(c),
                      "startable": self.optional_role(c) == "tickable"}
                     for c in members if self.optional_role(c) != "hidden"]
@@ -811,7 +811,8 @@ class ParamsConfigMixin:
             clean_params, clean_auto, key_of=lambda ch: _store_key(ch.kind, ch.comp, ch.param),
             default_of=lambda ch: ("" if getattr(ch.param, "validator", "") in self._IDENTITY_ENFORCE
                                    else self._param_default_canon(ch.param, cfg_band, band, inst)),
-            switches=_STACK_SWITCHES, stacks=self.stacks(), sid=sid)
+            switches=_STACK_SWITCHES, stacks=self.stacks(), sid=sid,
+            auto_on={c.id for st in self.stacks() for c in st.components if c.autostart_default})
         _gps_now = USE_GPS_PARAM in switched
         _want, _gps_default = switched.get(USE_GPS_PARAM, ("", ""))
         # Flipping the switch under a RUNNING stack would leave its feed, its resource claims and
