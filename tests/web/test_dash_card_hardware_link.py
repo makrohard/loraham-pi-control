@@ -1,6 +1,7 @@
 """A radio card's header title is plain text (no link) and the body has no "<name> (<model>)" hardware
-line any more; a "Hardware" link (class logslink, id rd-hw-<rid>) to /hardware/radio/<rid> sits below the RX-TX Monitor
-while the daemon runs, and above "Running on <rid>" while it is stopped. It is the card's only link to its hardware page.
+line any more; a "Hardware" link (class logslink, id rd-hw-<rid>) to /hardware/radio/<rid> sits at the very bottom of
+the radio card (F19, his word; it sat below the RX-TX Monitor / above "Running on"), daemon running or stopped. It is the
+card's only link to its hardware page.
 Driven through the rendered Home page."""
 import radios_fixture
 from htmlq import parse
@@ -45,20 +46,27 @@ def _plain_title(card):
     assert "(uputronics)" not in card.text
 
 
-def test_running_card_hardware_link_below_monitor(web, tmp_path, monkeypatch):
+def _last_in_card(doc, rid, a):
+    """The link's paragraph is the radio card body's last element (red before F19: it sat mid-card)."""
+    box = doc.by_id(f"radiobox-{rid}")
+    [body] = [d for d in doc.within(box).find("div", class_="body") if d.index > box.index][:1]
+    [p] = [x for x in doc.within(body).find("p", class_="hwlink")
+           if doc.within(x).find("a", id=f"rd-hw-{rid}")]
+    assert p.end == body.end and doc.index(a) > doc.index(_running_on(doc, doc.within(box), rid))
+
+
+def test_running_card_hardware_link_at_the_bottom(web, tmp_path, monkeypatch):
     doc = _home(web, tmp_path, monkeypatch)
     card = doc.within(doc.by_id("radio-r1"))
     _plain_title(card)
     a = _hw_link(doc, card, "r1")
-    feed = doc.by_id("rd-feed-r1")  # last element of the RX-TX Monitor
-    assert feed is not None and doc.index(doc.by_id("monitor-r1")) < doc.index(feed) < doc.index(a)
-    assert doc.index(a) < doc.index(_running_on(doc, card, "r1"))
+    assert doc.index(doc.by_id("rd-feed-r1")) < doc.index(a)
+    _last_in_card(doc, "r1", a)
 
 
-def test_stopped_card_hardware_link_above_running_on(web, tmp_path, monkeypatch):
+def test_stopped_card_hardware_link_at_the_bottom(web, tmp_path, monkeypatch):
     doc = _home(web, tmp_path, monkeypatch)
     card = doc.within(doc.by_id("radio-r2"))
     _plain_title(card)
     assert not card.present("monitor-r2")
-    a = _hw_link(doc, card, "r2")
-    assert doc.index(a) < doc.index(_running_on(doc, card, "r2"))
+    _last_in_card(doc, "r2", _hw_link(doc, card, "r2"))

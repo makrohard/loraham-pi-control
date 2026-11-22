@@ -263,8 +263,6 @@
             {% endif %}{# the daemon starts from "Start a stack on rX"; no log links while it is stopped #}
           {% endif %}
 
-          {# the radio's hardware page, below the RX-TX Monitor (daemon up) or above "Running on" (stopped) #}
-          {% if r.rid %}<p class="hwlink"><a class="logslink" id="rd-hw-{{ key }}" href="{{ url_for('hardware_radio', rid=r.rid) }}">Hardware</a></p>{% endif %}
 
           {# --- running stack(s) on this radio (W2: its rid; a stray band's card: the band) --- #}
           <h3>Running on {{ r.rid }}</h3>
@@ -376,6 +374,9 @@
           {% endif %}
 
           {% endif %}{# /r.stray else #}
+
+          {# F19: the radio's hardware page, at the very bottom of the radio card #}
+          {% if r.rid %}<p class="hwlink"><a class="logslink" id="rd-hw-{{ key }}" href="{{ url_for('hardware_radio', rid=r.rid) }}">Hardware</a></p>{% endif %}
         </div>
        </details>
       </div>
