@@ -1,25 +1,28 @@
 # Stack: Reticulum (RNS)
 
-A [Reticulum](https://reticulum.network) node driving the LoRa radio **directly over SPI** on its
-radio's band (868 or 433 MHz). No rnoded, no RNode firmware, no KISS layer: one LoRa packet is one RNS
-packet. The driver is [loraham-rns-interface](https://github.com/makrohard/loraham-rns-interface). SPI radios only: a USB radio is not offered, its start is refused.
+A [Reticulum](https://reticulum.network) node on its radio's band (868 or 433 MHz), reaching the radio through
+the LoRaHAM daemon (`backend = daemon`, the default, any radio) or driving an SPI radio directly (`backend =
+spi`). No rnoded, no RNode firmware, no KISS layer: one LoRa packet is one RNS packet. The interfaces are
+[loraham-rns-interface](https://github.com/makrohard/loraham-rns-interface)'s. One node per box; further radios
+join it — [Radios of one node](#radios-of-one-node).
 
 | | |
 |---|---|
 | Components | `rns` (main — owns the radio and the shared instance; runs `loraham-rns-node`) · `rns-lora-interface` (library, build-time: the direct-SPI driver, RNS interface and service runner) · `nomadnet` (optional, interactive) · `lxmd` (optional; propagation **off** by default) · `sideband` (optional desktop GUI, `--with-gui` only) · `meshchat` (optional browser GUI) |
 | Source / pin | `src/reticulum` ← `markqvist/Reticulum` · `src/loraham-rns-interface` ← `makrohard/loraham-rns-interface` · `src/nomadnet` · `src/lxmf` · `src/sideband` (installed as `sbapp==1.9.2` from PyPI — a source install drops every `.kv` layout) · `src/meshchat` ← `liamcottle/reticulum-meshchat` |
 | Build | a venv with `--system-site-packages` (SPI/GPIO bindings from the `python3-libgpiod` + `python3-spidev` packages, so the node needs no compiler); Reticulum + the driver; the interface copied to `state/reticulum/interfaces/LoRaSPIInterface.py`; an import probe before the marker |
-| Run | `.venv/bin/loraham-rns-node --config <runtime>/state/reticulum --interface LoRa --ready-file <runtime>/state/reticulum/ready --client-allow <allow-list>` — it exits rather than staying up without a radio |
+| Run | `.venv/bin/loraham-rns-node --config <runtime>/state/reticulum --interface "LoRa <rid>" --ready-file <runtime>/state/reticulum/ready --client-allow <allow-list>` — it exits rather than staying up without a radio |
 | Endpoints | shared instance `127.0.0.1:37428` · instance control `:37429` · client access `:4242` · optional outbound TCP to an internet peer (no listener) · MeshChat `127.0.0.1:8790` (via the LHPC proxy) · readiness = the `ready` file, written only after the node owns the instance **and** the radio is online |
 | Config | `<runtime>/state/reticulum/config` (0400) from `lhpc/data/bases/reticulum.conf`, regenerated on every start — change it through lhpc. Read-only even to its owner, so a client that offers to edit interfaces cannot; lhpc replaces it by rename |
-| Resources | `loraham.radio.868` + `.433` exclusive · `spi.bus.0` cooperative · `spi.bus.0.unlocked` exclusive · `tcp.port.37428` / `.37429` / `.4242` / `.8790` exclusive |
-| System | `/dev/spidev0.0` (soft chip selects) or `/dev/spidev0.0`/`0.1` (kernel chip selects, [deps](../cli.md#deps)); `spi` + `gpio` groups; `python3-libgpiod`, `python3-spidev` |
+| Resources | `tcp.port.37428` / `.37429` / `.4242` / `.8790` exclusive; `daemon`: `loraham.daemon-socket.<radio>` consumer; `spi`: `loraham.radio.868` + `.433` exclusive · `spi.bus.0` cooperative · `spi.bus.0.unlocked` exclusive |
+| System | with `backend = spi`: `/dev/spidev0.0` (soft chip selects) or `/dev/spidev0.0`/`0.1` (kernel chip selects, [deps](../cli.md#deps)); `spi` + `gpio` groups; `python3-libgpiod`, `python3-spidev` |
 | State | `state/reticulum` (transport identity, path tables, config), `state/meshchat`, `state/nomadnet`, `state/lxmd`, `state/sideband` (their LXMF identities = the addresses contacts know). Updates and `uninstall` keep them; `lhpc clean reticulum --purge` removes them, so a reinstall gets new addresses |
 | Install channel | source only |
 
 ## Contents
 
 - [Settings](#settings)
+- [Radios of one node](#radios-of-one-node)
 - [Hardware](#hardware)
 - [Position (GPS)](#position-gps)
 - [Clients](#clients)
@@ -34,6 +37,7 @@ packet. The driver is [loraham-rns-interface](https://github.com/makrohard/lorah
 
 | setting | default | notes |
 |---|---|---|
+| `backend` | `daemon` | per radio: `daemon` (through the LoRaHAM daemon, any radio) or `spi` (the direct driver, SPI radios only); a save is refused while that radio's interface runs and for `spi` on a USB radio; it takes effect at the next start |
 | `frequency` | 868 500 000 Hz / 434 500 000 Hz | per band — see [Band limits](#band-limits) |
 | `bandwidth` · `spreadingfactor` · `codingrate` | 125 000 Hz · 8 · 5 | BW 62.5–500 kHz, SF 7–12 (SF6 needs implicit-header mode, unsupported), CR 4/5–4/8 |
 | `txpower` | 14 dBm (868) / 10 dBm (433) | the driver refuses anything above the band policy: 14 dBm on 868, 10 dBm on 433 |
@@ -57,7 +61,19 @@ network name and the passphrase, or neither — a half-configured IFAC fails the
 … was not registered"); a missing key never becomes an empty key. Pins, chip type, TCXO and PA
 come from `lhpc hardware`, not settings: a wrong PA or TCXO value can damage the module.
 
+## Radios of one node
+
+The radio Reticulum is started on owns the node (`[[LoRa <rid>]]` in its config). A Start on another radio while
+the node runs asks to connect it instead — live, no restart: `lhpc stack start reticulum@<rid> --join --yes`, or
+Connect on the radio's card. Its card then says "Connected to the Reticulum node on <owner>"; its Stop
+(Disconnect) detaches it and the node keeps running. A radio that should be connected and is not says "Not
+connected — <why>" with Connect and Remove. A member's saved settings reload its interface live. The owner's Stop
+ends the node and its memberships; a restart of the owner restarts the node once and connects its radios again.
+MeshChat lists a newly connected radio after its own restart ([Clients](#clients)).
+
 ## Hardware
+
+The direct driver's (`backend = spi`) boards; with `backend = daemon` the radio is the daemon's.
 
 | `lhpc hardware` | bands | chip | driver profile |
 |---|---|---|---|
@@ -242,8 +258,8 @@ accounting state blocks transmit, never receive.
 
 ## Conflicts
 
-- The stack claims its band **exclusively**: not with the daemon serving that band (and so not
-  with its clients), not with meshtastic on that band. Opposite bands coexist — the 433 daemon and
-  Reticulum on 868 run together.
-- `spi.bus.0.unlocked`: `meshtastic + reticulum` is refused on any band pair
+- `backend = daemon`: a client of its radio's daemon, as every daemon stack (one app stack per radio).
+- `backend = spi`: the radio claimed **exclusively** — not with the daemon serving that radio (and so not with its
+  clients), not with meshtastic there; another radio's daemon coexists (the 433 daemon and Reticulum on 868).
+- `spi.bus.0.unlocked` (`backend = spi`): `meshtastic + reticulum` is refused on any band pair
   ([architecture](../architecture.md#radios-bands-and-resource-claims)).

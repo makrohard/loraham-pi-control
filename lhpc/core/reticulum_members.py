@@ -161,9 +161,10 @@ def reconcile(svc, owner: str, deadline: float) -> list[tuple[str, str]]:
     return out
 
 
-def detach(svc, rid: str) -> str:
+def detach(svc, rid: str, clear_intent: bool = True) -> str:
     """A member's Stop: detached (when live), its block, record and intent removed — a not-connected member's Stop is its
-    Remove (no rnstatus call). "" = done, else why (nothing changed)."""
+    Remove (no rnstatus call); a restart's stop keeps the intent (`clear_intent` False), so its start joins again. "" =
+    done, else why (nothing changed)."""
     rec = member_record(svc, rid)
     if rec is not None and rid in (listed(svc) or set()):
         res = rnstatus(svc, "--detach", reticulum_node.name(rid))
@@ -173,17 +174,21 @@ def detach(svc, rid: str) -> str:
         _write_block(svc, rid, "")
     if rec is not None:
         svc._lifecycle()._remove_record(rec)
-    update_stack_config(svc._paths, STACK_ID, {instances.MEMBER_OF: ""}, inst=commands.Instance(rid))
-    svc._invalidate_config()
+    if clear_intent:
+        update_stack_config(svc._paths, STACK_ID, {instances.MEMBER_OF: ""}, inst=commands.Instance(rid))
+        svc._invalidate_config()
     return ""
 
 
-def end_node(svc, owner: str) -> None:
-    """After the owner's verified Stop: every member record of the node and every intent naming it cleared (an explicit
-    Stop ends the memberships, plan §1d)."""
+def end_node(svc, owner: str, intents: bool = True) -> None:
+    """After the owner's verified stop: every member record of the node removed (the process is gone); an operator's
+    Stop also clears every intent naming it (it ends the memberships, plan §1d), a restart keeps them (`intents`
+    False: its start reconciles them, once per node)."""
     life = svc._lifecycle()
     for rec in [r for r in life.owned_records(NODE_ID, role=None) if r.get(instances.MEMBER_OF) == owner]:
         life._remove_record(rec)
+    if not intents:
+        return
     for m in instances.node_members(svc, STACK_ID, owner):
         update_stack_config(svc._paths, STACK_ID, {instances.MEMBER_OF: ""}, inst=commands.Instance(m.rid))
     svc._invalidate_config()

@@ -357,3 +357,25 @@ def test_the_dashboard_signature_follows_the_members_without_asking_the_node(box
     box.svc.invalidate_snapshot()
     # red-before (f4ff210c): the signature does not change when an intent goes (the page would not reload)
     assert box.svc.dash_signature() != sig and not [c for c in box.node.calls[calls:] if c == ("-j",)]
+
+
+# ---- restart once per node (B7) ---------------------------------------------------------------------------------------
+
+def test_an_owner_restart_restarts_the_node_once_and_its_members_come_back(box):
+    owner = _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    launched = len(box.spawned)
+    res = box.svc.restart("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r2")[0])
+    # red-before (bbaf96b6): the restart's stop ended the memberships: r1 not back, its intent gone
+    assert res.ok, res.summary + "\n".join(res.details)
+    assert owner.wait(timeout=10) is not None and len(box.spawned) == launched + 1      # one node launch, no member's
+    assert [r["pid"] for r in _member(box, "r1")] == [box.spawned[-1].pid] and _intent(box, "r1") == "r2"
+
+
+def test_a_member_restart_rejoins_the_node(box):
+    owner = _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    res = box.svc.restart("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r1")[0])
+    # red-before (bbaf96b6): its stop cleared the intent, so its start was the Connect offer (refused)
+    assert res.ok, res.summary + "\n".join(res.details)
+    assert owner.poll() is None and _member(box, "r1") and _intent(box, "r1") == "r2"
