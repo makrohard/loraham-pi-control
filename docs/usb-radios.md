@@ -26,8 +26,8 @@ The release that ships these sticks is listed in the [changelog](../CHANGELOG.md
 BUSY lines sit on the CH341's INT# and SLCT status pins, not on the D0–D7 lines the other sticks use.
 
 **Power:** every stick starts at `POWER` 14 dBm; its range is its chip's: SX1262 0–20 (the Meshstick up to 22), the
-RFM98PW stick 2–17 (exactly 20); above 20 needs the radio's high-power switch. The PINE64 adapter's 15–20 need
-daemon 1.4.2 and have not yet been run on the adapter.
+RFM98PW stick 2–17 (exactly 20 with its high-power switch); the Meshstick's 21–22 need the radio's high-power
+switch too. The PINE64 adapter's 15–20 need daemon 1.4.2 and have not yet been run on the adapter.
 
 ## One USB id for every stick
 
