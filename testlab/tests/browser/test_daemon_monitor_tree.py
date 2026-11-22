@@ -372,6 +372,24 @@ def test_live_settings_grey_while_the_daemon_is_down_and_re_enable_with_its_curr
     page.wait_for_function("l => document.querySelector(l + ' .setform button').disabled", arg=live, timeout=15000)
 
 
+
+def test_the_live_page_shows_one_daemon_pin_up_and_down(flask_page):
+    """F21 (red before: the page head carried a second, always-shown pill): the Live page shows ONE daemon pin, its
+    node's, which polls although rendered hidden (the node is open) and follows the daemon up and down."""
+    page, _posts = flask_page(path=LIVE)
+    state = {"up": True}
+    _serve(page, state=state)
+    pin = _sel("live") + " > summary .dbadge"
+    page.clock.run_for(3000)
+    page.wait_for_function("s => { const b = document.querySelector(s); return b && !b.hidden && /READY/.test(b.textContent); }",
+                           arg=pin, timeout=15000)
+    assert page.locator(".dbadge:visible").count() == 1 and page.locator(".pagehead .dbadge").count() == 0
+    state["up"] = False
+    page.clock.run_for(3000)
+    page.wait_for_function("s => { const b = document.querySelector(s); return b && !b.hidden && !/READY/.test(b.textContent); }",
+                           arg=pin, timeout=15000)
+    assert page.locator(".dbadge:visible").count() == 1
+
 _INSERT = """([m, up]) => { const old = document.querySelector(m), host = old.parentElement;
   const html = old.outerHTML.replace(/data-up="[01]"/, 'data-up="' + up + '"'); old.remove();
   const box = document.createElement('div'); box.innerHTML = html; host.appendChild(box);

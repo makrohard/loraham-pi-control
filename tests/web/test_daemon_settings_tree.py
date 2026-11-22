@@ -174,14 +174,15 @@ def test_a_per_radio_page_has_the_switch_to_the_same_level_and_the_pill(web, tmp
     links = {a.text.strip(): (a["href"], a.has_class("sel")) for a in doc.within(head).find("a")}
     assert links == {"r1 · 433": (f"/stacks/daemon/menu/stack-settings-daemon--r1-{kind}?radio=r1", True),
                      "r2 · 868": (f"/stacks/daemon/menu/stack-settings-daemon--r2-{kind}?radio=r2", False)}, links
-    assert [b["data-rid"] for b in doc.within(head).find("span", class_="dbadge")] == ["r1"]
+    assert not doc.within(head).find("span", class_="dbadge")                  # F21: no page pill beside the switch
+    assert [b["data-rid"] for b in doc.find("span", class_="dbadge")] == ["r1"]  # the node's own pin, once
     assert doc.find("div", class_="menupage")[0]["data-fullpage"] == "1"
     assert not _doc(c, "/stacks/daemon/menu/stack-settings-daemon?radio=r1").find("div", class_="pagehead")
 
 
-def test_the_monitor_and_live_header_pins_are_rendered_hidden_and_the_page_pills_are_not(web, tmp_path):
+def test_the_monitor_and_live_header_pins_are_rendered_hidden_and_no_page_pill_repeats_them(web, tmp_path):
     # F11: a closed node never shows the load-time state: the Monitor / Live header pin is rendered hidden (dash.js
-    # shows it on a live answer while its node is open); the page pills that share the macro show from the load
+    # shows it on a live answer while its node is open); no page pill repeats them (F15, F21)
     c, _svc, _fs = _box(web, tmp_path)
     doc = _doc(c, "/stacks/daemon/body?radio=r1")
     for node_id in ("stack-settings-daemon--monitor", "stack-settings-daemon--r1-live"):
@@ -191,7 +192,16 @@ def test_the_monitor_and_live_header_pins_are_rendered_hidden_and_the_page_pills
     doc = _doc(c, "/stacks/daemon/menu/stack-settings-daemon--monitor?radio=r1")    # F7: the Monitor's page
     [pin] = doc.find("span", class_="dbadge")                                     # F15: only its node's pin (hidden)
     assert pin.has_attr("hidden") and not doc.find("div", class_="pagehead")
-    doc = _doc(c, "/stacks/daemon/menu/stack-settings-daemon--r1-live?radio=r1")    # Live's page pill: from the load
-    [head] = doc.find("div", class_="pagehead")
-    [pill] = doc.within(head).find("span", class_="dbadge")
-    assert not pill.has_attr("hidden")
+    doc = _doc(c, "/stacks/daemon/menu/stack-settings-daemon--r1-live?radio=r1")    # F21: Live's page, like the Monitor's:
+    [pin] = doc.find("span", class_="dbadge")                                     # only its node's pin (hidden; dash.js
+    assert pin.has_attr("hidden")                                                 # shows it while the node is open)
+    assert not doc.within(doc.find("div", class_="pagehead")[0]).find("span", class_="dbadge")
+
+
+def test_the_live_page_of_a_one_radio_daemon_has_no_page_head_and_one_pin(web, tmp_path):
+    # F21 (red before: the page head carried a second daemon pill, beside the node's own): one radio, so no switch
+    # either -> no page head at all
+    c, _svc, _fs = _box(web, tmp_path, live=("r1",), setup="waveshare-433")
+    doc = _doc(c, "/stacks/daemon/menu/stack-settings-daemon--r1-live?radio=r1")
+    assert not doc.find("div", class_="pagehead")
+    assert [b["data-rid"] for b in doc.find("span", class_="dbadge")] == ["r1"]

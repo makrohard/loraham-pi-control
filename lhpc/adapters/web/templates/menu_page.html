@@ -11,15 +11,14 @@
 {% block content %}
   {% if page_rid %}
     {#- UI-REORG s4: a Monitor/Live level of one radio, like a log page: the radio switch (the same level of the other
-        radio) and the daemon status pill upper right (Live; the Monitor page has neither, F7/F15); its views repeat
-        every 3 s (data-fullpage, daemoncfg.js). -#}
-    {% from "_radio_switch.html" import radio_switch %}{% from "_macros.html" import daemon_badge %}
+        radio) above it; no page pill: the level's own node carries the daemon pill (F21: the page one showed it twice;
+        the Monitor page likewise keeps only its node's pin, F7/F15); its views repeat every 3 s (data-fullpage, daemoncfg.js). -#}
+    {% from "_radio_switch.html" import radio_switch %}
     {% set _ch = [] %}
     {% for rid, _name, band in here.vars.view.live_radios %}{% set _ = _ch.append({'label': rid ~ ' · ' ~ band, 'selected': rid == page_rid,
          'href': url_for('menu_page', owner=here.vars.stack.id, mid=with_radio(here.id, rid), radio=rid)}) %}{% endfor %}
-    {% if not monitor_view %}{#- F7: the Monitor has its pins; F15: its page keeps only its node's pin -#}
-    <div class="pagehead">{% if _ch | length > 1 %}{{ radio_switch(_ch) }}{% endif %}
-      <span class="pagepill">{{ daemon_badge(here.vars.radio, live=True, rid=page_rid) }}</span></div>{% endif %}
+    {% if not monitor_view and _ch | length > 1 %}{#- F7: the Monitor has its pins; F15/F21: a page keeps only its node's pin -#}
+    <div class="pagehead">{{ radio_switch(_ch) }}</div>{% endif %}
   {% endif %}
   <div class="card"><div class="body stacklist menupage"{% if page_rid %} data-fullpage="1"{% endif %}>
     {{ body }}
