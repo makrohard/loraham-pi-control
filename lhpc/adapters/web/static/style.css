@@ -204,6 +204,17 @@ details.monitor > summary .txpill { float: right; font-weight: 600; }
 .rparams .rp { white-space: nowrap; }
 .rparams .rpk { color: var(--muted); font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .4px; margin-right: .35rem; }
 .rparams .rpv { font-size: .92rem; }
+/* dash plan c9 (radio cards only): each component row and the RX-TX Monitor in a light box (no separator lines between
+   rows); below the phone breakpoint the Apps-style inset tightening for .runstack, the boxes and the Monitor */
+.radio-col ul.complist { display: flex; flex-direction: column; gap: .45rem; padding: 0; }
+.radio-col ul.complist > li.crow, .radio-col details.monitor {
+  border: 1px solid var(--line); border-radius: 6px; padding: .45rem .6rem; margin: 0;
+  background: color-mix(in srgb, var(--line) 18%, transparent); }
+.radio-col details.monitor { margin: .6rem 0; }
+.radio-col details.monitor > summary { margin-top: 0; }
+@media (max-width: 480px) {
+  .radio-col .runstack, .radio-col ul.complist > li.crow, .radio-col details.monitor { padding: .3rem .35rem; }
+}
 .monrssi td { display: flex; align-items: center; gap: .5rem; white-space: nowrap; }   /* A32: the value and its unit never break; the meter gives way */
 pre.next { background: var(--code-bg); color: var(--code-ink); border: 1px solid var(--line); padding: .6rem .8rem; border-radius: 8px; overflow-x: auto; font-size: .85rem; }
 .endpoint-ok { color: var(--ok); }
