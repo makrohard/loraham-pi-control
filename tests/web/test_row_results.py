@@ -21,7 +21,7 @@ EXEMPT = {                                           # route -> why its controls
     "hardware_changes_dismiss": "the persistent notice's own server close",
 }
 ADDRESSED = {                                        # route -> the row address its route flashes to (= its slot id)
-    "stack_config_save": "stack-cfgacts-", "stack_config_reset": "stack-cfgacts-", "stack_mode_save": "stack-mode-",
+    "stack_config_save": "stack-cfgacts-", "stack_config_reset": "stack-cfgacts-",
     "stack_web_configure": "stack-webserver-", "stack_webs_configure": "ws-stackwebs",
 }
 _FORM = re.compile(r'<form\b[^>]*method="post"[^>]*>.*?</form>', re.S | re.I)

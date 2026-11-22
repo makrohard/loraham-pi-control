@@ -59,7 +59,7 @@ def test_without_a_page_radio_the_tool_command_is_the_stacks_own(tmp_path, web):
 def test_a_radios_page_lists_no_tools_of_a_stack_running_only_on_another_radio(tmp_path, web):
     # red-before (747d4a63): r3's page listed meshcore-cli while meshcore ran only on r2 (the stack-wide running state)
     doc = _page(tmp_path, web, "/stacks?radio=r3&open=meshcore", running=("r2",))
-    assert doc.by_id("stack-mode-meshcore") is not None          # anchor: meshcore's own row body is on the page
+    assert doc.by_id("stack-settings-meshcore") is not None          # anchor: meshcore's own row body is on the page
     assert doc.by_id("runc-meshcore-cli") is None
 
 
@@ -67,5 +67,5 @@ def test_a_stopped_stack_lists_no_tools(tmp_path, web):
     # unchanged: meshcore runs nowhere -> no tools, on a radio's page and without one
     for n, query in enumerate(("/stacks?radio=r2&open=meshcore", "/stacks?open=meshcore")):
         doc = _page(tmp_path / str(n), web, query, running=())
-        assert doc.by_id("stack-mode-meshcore") is not None, query  # anchor: meshcore's own row body is on the page
+        assert doc.by_id("stack-settings-meshcore") is not None, query  # anchor: meshcore's own row body is on the page
         assert doc.by_id("runc-meshcore-cli") is None, query

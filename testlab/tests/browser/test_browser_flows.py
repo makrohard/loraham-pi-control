@@ -645,23 +645,30 @@ def test_each_stacks_default_restores_a_row_changed_by_hand(page):
         arg=[sid, defaults[sid]], timeout=10000)
 
 
-def test_an_identity_refusal_lands_on_a_visibly_marked_callsign_row(page):
-    """P1.13 (C7): a licensed start refused for a missing callsign redirects to the stack's Settings
-    with `?cfg=<stack>&bad=<field>` (the route and the markup are unit-tested in test_web.py). Here
-    the RENDERED page: that stack's Settings section is open and its callsign row is visibly marked
-    (the field-bad background and the input outline), and the global "Base callsign" row is not
-    marked — the refusal names both, but only the stack's own field is highlighted."""
-    page.goto(page.lab_base + "/stacks?cfg=chat&bad=f_call#stack-settings-chat", wait_until="networkidle")
-    page.wait_for_selector("#stack-settings-chat[open] tr.field-bad input[name='f_call']", timeout=15000)
+def test_an_identity_refusal_lands_on_visibly_marked_name_rows(page):
+    """P1.13 (C7): an identity refusal redirects to the stack's Settings with `?cfg=<stack>&bad=<fields>`; here the
+    RENDERED page after a REAL refusal (the lab installs no licensed stack, so the licensed start without a callsign
+    cannot be reached here: its route and markup are unit-tested in test_web.py). The refusal is MeshCore's: repeater
+    mode saved with no repeater name. Its Settings section is open, exactly its two node-name rows are visibly marked
+    (the field-bad background and the input outline), the global "Base callsign" row is not, and a reload of the same
+    URL marks nothing (the marks show only with their refusal)."""
+    page.goto(page.lab_base + "/stacks?open=meshcore&cfg=meshcore#stack-settings-meshcore", wait_until="networkidle")
+    sec = page.locator("#stack-settings-meshcore")
+    sec.locator("select[name=f_mode]").first.select_option("repeater")
+    sec.locator("input[name=f_repeater_name]").first.fill("")
+    sec.locator("button:has-text('Save')").first.click()
+    page.wait_for_load_state("networkidle")
+    assert "bad=" in page.url, page.url
+    page.wait_for_selector("#stack-settings-meshcore[open] tr.field-bad input[name='f_repeater_name']", timeout=15000)
     marked = page.evaluate(
-        "() => { const tr = document.querySelector('#stack-settings-chat tr.field-bad');"
+        "() => [...document.querySelectorAll('#stack-settings-meshcore tr.field-bad')].map(tr => {"
         " const td = tr.querySelector('td'), inp = tr.querySelector('input');"
-        " return {bg: getComputedStyle(td).backgroundColor, outline: getComputedStyle(inp).outlineStyle,"
-        "         rows: document.querySelectorAll('#stack-settings-chat tr.field-bad').length}; }")
-    assert marked["rows"] == 1
-    assert marked["bg"] not in ("rgba(0, 0, 0, 0)", "transparent"), marked
-    assert marked["outline"] == "solid", marked
+        " return {name: inp.name, bg: getComputedStyle(td).backgroundColor, outline: getComputedStyle(inp).outlineStyle}; })")
+    assert sorted(m["name"] for m in marked) == ["f_node_name", "f_repeater_name"], marked
+    assert all(m["bg"] not in ("rgba(0, 0, 0, 0)", "transparent") and m["outline"] == "solid" for m in marked), marked
     assert page.locator("#operator-callsign tr.field-bad").count() == 0
+    page.reload(wait_until="networkidle")
+    assert page.locator("tr.field-bad").count() == 0, "a reload of the refusal's URL marks nothing"
 
 
 def test_the_install_confirm_offers_no_pin_override(page):

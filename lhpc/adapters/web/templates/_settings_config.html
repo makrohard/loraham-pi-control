@@ -5,6 +5,24 @@
 <form method="post" action="{{ url_for('stack_config_save', stack_id=stack.id) }}" id="cfg-form-{{ stack.id }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
       {% if view.radio %}<input type="hidden" name="radio" value="{{ view.radio }}">{% endif %}
+      {#- F31 (his choice A): MeshCore's mode, this radio's, as the FIRST thing of its Settings (inside the form: every save
+          sends it); the running hint beside it. `_sg` = the stack row (the group loop below names its groups `g`). -#}
+      {% set _sg = g %}{% set _mf = _sg.meshcore_mode_field if _sg is defined and _sg.meshcore_mode_field is defined else '' %}
+      {% set _mrows = [] %}{% for grp in config_groups or [] %}{% for r in grp.rows if _mf and r.field == _mf %}{% set _ = _mrows.append(r) %}{% endfor %}{% endfor %}
+      {% if _mrows %}{% set r = _mrows[0] %}
+        <section class="cfgsec cfgmode">
+          <table class="paramgrid dptab">
+            <tr class="spgroup"><th colspan="3">Mode</th></tr>
+            <tr class="{% if r.field in _bad %}field-bad{% endif %}">
+              <th>{{ r.name }}</th>
+              <td><select name="{{ r.field }}" aria-label="{{ r.name }}">
+                {% for ch in r.choices %}<option value="{{ ch }}"{% if r.value == ch %} selected{% endif %}>{{ ch }}</option>{% endfor %}
+              </select></td>
+              <td class="dphelp muted">{{ r.label }}{% if _sg.running and _sg.meshcore_running_mode and _sg.meshcore_running_mode != _sg.meshcore_mode %}<br><strong>Running: {{ _sg.meshcore_running_mode }} — restart to apply {{ _sg.meshcore_mode }}.</strong>{% endif %}</td>
+            </tr>
+          </table>
+        </section>
+      {% endif %}
 
       {% if config_groups %}
         <section class="cfgsec">
@@ -14,7 +32,7 @@
                  service's rule flags still bracket the dependency components at the end. #}
               {% if g.rule_before or not loop.first %}<tr class="cfgrule"><td colspan="3"><hr></td></tr>{% endif %}
               <tr class="spgroup"><th colspan="3">{{ g.name }}</th></tr>
-              {% for r in g.rows %}
+              {% for r in g.rows if not (_mf and r.field == _mf) %}{# F31: the Mode row stands first, above #}
                 <tr class="{% if r.advanced %}advrow{% endif %}{% if r.field in _bad %} field-bad{% endif %}" data-adv="{{ 'y' if r.advanced else 'n' }}">
                   <th>{{ r.name }}{% if r.is_identity %} <span class="req" title="required to start">*</span>{% endif %}</th>
                   <td>

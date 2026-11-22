@@ -58,7 +58,8 @@ def test_the_run_selector_preselects_the_shown_radio(client, rid):
 
 @pytest.mark.parametrize("rid", ["r2", "r4"])
 def test_the_meshcore_mode_saves_the_shown_radio(client, rid):
-    s = _scope(client, f"/stacks?radio={rid}&open=meshcore", "stack-mode-meshcore")
+    # F31: the Mode lives in Settings; the Settings form saves the shown radio's mode
+    s = _scope(client, f"/stacks?radio={rid}&open=meshcore&cfg=meshcore", "cfg-form-meshcore")
     assert _hidden_radio(s) == [rid]
 
 

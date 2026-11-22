@@ -7,7 +7,8 @@
 {% set _sid = settings_id | default('stack-settings') %}
 {# `?bad=<field>[,<field>]` (a start refused over the saved identity) marks those rows — only
    when this stack's section is the one the link opened. #}
-{% set _bad = (request.args.get('bad') or '').split(',') if request.args.get('cfg') == stack.id else [] %}
+{#- F31: only while the page shows the refusal itself (a warn/err result): a reload or a hand-typed bad= marks nothing -#}
+{% set _bad = (request.args.get('bad') or '').split(',') if request.args.get('cfg') == stack.id and result_shown() else [] %}
 {# #70: the daemon's Daemon radio parameters stand in its Settings; their Save/Apply/Reset (`dp=<stack>`) reopen it #}
 {% set _dp_here = g is defined and g.daemon_params and params_in_settings(stack.id) %}
 <details class="advcfg settings" id="{{ _sid }}"{% if request.args.get('cfg') == stack.id or (_dp_here and request.args.get('dp') == stack.id) %} open data-force-open="1"{% endif %}>

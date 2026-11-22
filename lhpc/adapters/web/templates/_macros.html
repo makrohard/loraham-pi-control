@@ -37,9 +37,8 @@
 
 {# The action results addressed to one panel (`rs` = panel_results(<its id>), K4): ONE banner at the control, its
    first result the title and the others one line each, in the first result's severity. #}
-{# `link` (optional): an (href, text) pair shown in the banner's links part (F26). #}
-{% macro panel_banner(rs, link=none) %}{% if rs %}
-{% call(part) banner(rs[0][0], title=rs[0][1], extra='panel-result', close=true) %}{% if part == 'body' and rs | length > 1 %}<ul>{% for sev, msg in rs[1:] %}<li>{{ msg }}</li>{% endfor %}</ul>{% elif part == 'links' and link %}<a href="{{ link[0] }}">{{ link[1] }}</a>{% endif %}{% endcall %}
+{% macro panel_banner(rs) %}{% if rs %}
+{% call(part) banner(rs[0][0], title=rs[0][1], extra='panel-result', close=true) %}{% if part == 'body' and rs | length > 1 %}<ul>{% for sev, msg in rs[1:] %}<li>{{ msg }}</li>{% endfor %}</ul>{% endif %}{% endcall %}
 {% endif %}{% endmacro %}
 
 {# F28: a button row's result, directly under that row (Apps pages; the button carries `name="_slot" value="<id>"`) #}

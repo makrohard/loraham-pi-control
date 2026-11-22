@@ -33,7 +33,7 @@ def test_each_radios_pages_note_its_own_mode(tmp_path):
     svc, _r2, _r3 = _box(tmp_path)
     notes = {p.page_id: svc.page_mode_note(p) for p in svc.stack_web_pages("meshcore")}
     assert notes["meshcore-meshcore-node@r3"] == "", notes
-    tail = " — change it with the Mode switch on the stack page, then restart the stack."
+    tail = " — change it in the stack's Settings (Mode), then restart the stack."
     assert notes["meshcore@r3"] == ("Not served in the current mode (repeater): this upstream runs in the chat and "
                                     "chat+repeater modes" + tail), notes
     assert notes["meshcore-meshcore-node@r2"] == ("Not served in the current mode (chat): this upstream runs in the "

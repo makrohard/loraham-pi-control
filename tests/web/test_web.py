@@ -2524,38 +2524,21 @@ def test_the_settings_card_refusal_does_not_ask_for_two_saves(tmp_path, web, csr
     assert svc.meshcore_mode() == "chat"                                     # refused, unchanged
 
 
-def test_the_meshcore_mode_switch_on_the_stack_body_saves_the_same_setting(tmp_path, web, csrf):
-    """One route, one key: the stack body's Mode form writes the Settings row's setting through
-    the config API (CSRF-enforced, MeshCore-only, refusals reported as flashes, never a start)."""
+def test_the_meshcore_mode_is_saved_in_settings_only(tmp_path, web, csrf):
+    """F31 (his choice A): the stack body has no Mode form any more (its route is gone); the mode is a Settings row,
+    the first one, saved with the Settings form (refusals reported, never a start)."""
     from lhpc.core.paths import Paths
     from lhpc.core.services import ControllerService
     c = web()
     tok = csrf(c)
-    assert c.post("/stacks/meshcore/mode", data={"mode": "repeater"}).status_code == 400   # CSRF
-    assert c.post("/stacks/graywolf/mode", data={"_csrf": tok, "mode": "chat"}).status_code == 404
+    assert c.post("/stacks/meshcore/mode", data={"_csrf": tok, "mode": "repeater"}).status_code in (404, 405)
+    body = c.get("/stacks/meshcore/body").get_data(as_text=True)
+    assert 'id="stack-mode-meshcore"' not in body
     svc = ControllerService(paths=Paths(runtime_root=tmp_path))
-    # a repeater mode without a saved repeater name is refused (the save-time rule), mode stays
-    r = c.post("/stacks/meshcore/mode", data={"_csrf": tok, "mode": "repeater", "radio": "r2"})   # K8f: the form's radio
-    assert r.status_code in (302, 303) and "#stack-mode-meshcore" in r.headers["Location"]
-    assert svc.meshcore_mode() == "chat"
-    # C08: the refusal names where the name is saved (this form has no name field), and the
-    # hint under the Mode select says so before the button is pressed
-    shown = c.get("/stacks?open=meshcore").get_data(as_text=True)
-    assert "Settings → Repeater, &#39;Repeater node name&#39;" in shown or \
-        "Settings → Repeater, 'Repeater node name'" in shown
-    assert "saves both at once" not in shown
-    assert "A repeater mode needs a saved repeater name" in shown
-    refused = svc.save_config("meshcore", {"file_mode": "repeater"})         # the same text, CLI too
+    refused = svc.save_config("meshcore", {"file_mode": "repeater"})         # the save-time rule, CLI too
     text = refused.summary + " " + " ".join(refused.details)
     assert not refused.ok and "`lhpc config meshcore@r2 repeater_name <name>`" in text     # its instance (W323)
-    assert svc.save_config("meshcore", {"file_repeater_name": "Relay"}).ok
-    r = c.post("/stacks/meshcore/mode", data={"_csrf": tok, "mode": "chat+repeater", "radio": "r2"})
-    assert r.status_code in (302, 303)
-    svc._invalidate_config()
-    assert svc.meshcore_mode() == "chat+repeater"
-    body = c.get("/stacks/meshcore/body").get_data(as_text=True)
-    assert 'id="stack-mode-meshcore"' in body and 'option value="chat+repeater" selected' in body
-    assert "stack-webserver-meshcore-meshcore-node" in body
+    assert svc.save_config("meshcore", {"file_repeater_name": "Relay", "file_mode": "chat+repeater"}).ok
     page = c.get("/stacks").get_data(as_text=True)
     assert "mode: chat+repeater" in page                                    # the Apps-row pill
 

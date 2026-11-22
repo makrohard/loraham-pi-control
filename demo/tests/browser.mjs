@@ -474,18 +474,19 @@ try {
     return w.location.hash === "#sysbox" && w.scrollY > 0 && r.top > -4 && r.top < w.innerHeight; }, { timeout: 30000 });   // -4: sub-pixel rounding
   await page.setViewport({ width: 1280, height: 900 });
   ok("/#sysbox scrolls the System box into view");
-  // (k) an in-page #anchor jumps inside the page, as on a box (the meshcore body's "Settings → Repeater"): the frame
-  // stays the page (about:srcdoc), the target is in view, no new boot.
+  // (k) an in-page #anchor jumps inside the page, as on a box: the frame stays the page (about:srcdoc), the target is
+  // in view, no new boot. No product page links a bare #anchor since the MeshCore mode moved into Settings, so the
+  // check adds one to the meshcore body; the bridge's click handling under test is the same.
   await render(page, "/stacks?open=meshcore", "#stackrow-meshcore");
-  const ANCHOR = '#stackrow-meshcore a[href="#stack-settings-meshcore"]';
-  await page.waitForFunction((sel) => !!doc().querySelector(sel), { timeout: 30000 }, ANCHOR);
-  await page.evaluate((sel) => doc().querySelector(sel).click(), ANCHOR);
+  await page.waitForFunction(() => !!doc().getElementById("stack-settings-meshcore"), { timeout: 30000 });
+  await page.evaluate(() => { const a = doc().createElement("a"); a.setAttribute("href", "#stack-settings-meshcore");
+    a.textContent = "Settings"; doc().getElementById("stackrow-meshcore").appendChild(a); a.click(); });
   await page.waitForFunction(() => { const w = doc().defaultView, t = doc().getElementById("stack-settings-meshcore");
     const r = t && t.getBoundingClientRect();
     return w.location.href === "about:srcdoc#stack-settings-meshcore" && !!r && r.top > -4 && r.top < w.innerHeight; },
   { timeout: 30000 });
   if (await boots(page) !== "1") throw new Error("an in-page anchor booted Pyodide again");
-  ok("an in-page #anchor (Settings → Repeater) jumps inside the page, no new boot");
+  ok("an in-page #anchor (to the meshcore Settings) jumps inside the page, no new boot");
   // (l) a link to another site (the first https:// link on Home without a target; the OK line names it) opens a
   // new tab; the frame stays the page: a frame navigated to another origin would show that site in the demo, and its
   // pages are unreadable to the demo.

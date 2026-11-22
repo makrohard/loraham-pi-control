@@ -446,6 +446,13 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             _g.row_result_shown = True
         return rs
 
+    def _result_shown() -> bool:
+        """F31: whether this page shows a warn/err action result (read without taking it: the marks of refused fields
+        appear only with their refusal, never from a stale or hand-typed `bad=`). Page-wide on purpose: ANY warn/err result
+        on this page counts, not only the opened stack's (one request-local check)."""
+        return any(sev.split()[:1] and sev.split()[0] in ("warn", "warning", "err", "error", "bad")
+                   for sev, _d, _m in _flash_entries())
+
     def _slot_key(text) -> str:
         """A row's stable result-slot key from what names it (a connection uuid, an SSID: any characters): its row
         keeps its slot when the list around it changes, never another row's."""
@@ -457,7 +464,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         return [(sev, msg) for sev, d, msg in entries if not d or d not in _g.flash_taken]
 
     app.jinja_env.globals.update(panel_results=_panel_results, page_results=_page_results,
-                                 own_results=_own_results, result_slot_results=_result_slot, slot_key=_slot_key)
+                                 own_results=_own_results, result_slot_results=_result_slot,
+                                 result_shown=_result_shown, slot_key=_slot_key)
 
     @app.context_processor
     def _inject_selfupdate():
@@ -1233,18 +1241,15 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
                 "update_component": _upd_comp,            # the behind component to deep-link to
                 "update_component_is_main": _upd_is_main,  # main -> Install section; dep -> #comp-<id>
                 "update_checked_ago": _checked_ago(_fresh.get("checked_at", 0)),
-                # The MeshCore stack's Mode switch on the stack body and its pill on the Apps row
-                # ("" elsewhere): the saved mode, the choices, and the mode the running launch was
-                # generated with (shown only while the stack runs and differs from the saved one).
+                # The MeshCore stack's mode pill on the Apps row and its Settings Mode block (F31: the mode lives only
+                # in Settings, per radio): the saved mode, the mode the running launch was generated with (the hint
+                # shows while the stack runs and they differ), and the Mode row's form field ("" elsewhere).
                 "meshcore_mode": (service.meshcore_mode_display(_view_inst)          # K8f S4-2: the shown radio's
                                   if stack.id == _meshcore_mode.STACK_ID else ""),
-                "meshcore_modes": list(_meshcore_mode.MODES),
                 "meshcore_running_mode": (service.meshcore_running_mode(_view_inst)
                                           if stack.id == _meshcore_mode.STACK_ID else ""),
-                "meshcore_rid": getattr(_view_inst, "rid", "") if stack.id == _meshcore_mode.STACK_ID else "",
-                # F26: the two node-name rows a repeater-name refusal marks (chat node + repeater), as the Settings
-                # form names them; the Mode banner's link carries them in `bad=`
-                "meshcore_name_fields": (_meshcore_name_fields() if stack.id == _meshcore_mode.STACK_ID else ""),
+                "meshcore_mode_field": (service._config_field(stack.id, "file", _meshcore_mode.NODE_ID, "mode")
+                                        if stack.id == _meshcore_mode.STACK_ID else ""),
                 "installed": installed,
                 "has_source": has_source,
                 "buildable": buildable,
@@ -2718,7 +2723,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # rows share
         flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
               ("ok" if result.ok else "warn") + f" @stack-cfgacts-{stack_id}")
-        return redirect(url_for("stacks_overview", radio=inst.rid if inst else None, cfg=stack_id)
+        # F31: a repeater mode refused for its missing repeater name marks both node-name rows (shown only with this
+        # result, _stack_settings.html); nothing is persisted
+        named = (not result.ok and stack_id == _meshcore_mode.STACK_ID
+                 and (result.data or {}).get("reason") == _meshcore_mode.REASON_REPEATER_NAME_REQUIRED)
+        return redirect(url_for("stacks_overview", radio=inst.rid if inst else None, cfg=stack_id,
+                                **({"bad": _meshcore_name_fields()} if named else {}))
                         + "#stack-settings-" + stack_id)
 
     @app.post("/stacks/<stack_id>/remotes")
@@ -3065,32 +3075,6 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         """F26: the Settings form fields of the chat node name and the repeater node name, comma-joined (`?bad=`)."""
         return ",".join(service._config_field(_meshcore_mode.STACK_ID, "file", _meshcore_mode.NODE_ID, n)
                         for n in ("node_name", "repeater_name"))
-
-    @app.post("/stacks/<stack_id>/mode")
-    def stack_mode_save(stack_id: str):
-        """The MeshCore stack's Mode, saved from the stack body: the SAME saved setting as the
-        Settings card's row, through the same config API and the same save-time rules (a repeater
-        mode needs the saved repeater name; a change is restart-required). Never a start value."""
-        if stack_id != _meshcore_mode.STACK_ID or service.stack(stack_id) is None:
-            abort(404)
-        if not _csrf_ok():
-            abort(400)
-        rid = request.form.get("radio", "")              # K8f S4-2 (D2-CTX N3): the form's radio, kept on the way back
-        inst, why = None, ""
-        if not rid and _radios_mod.load(service._paths).kind != _radios_mod.ABSENT:   # G1-K8F-S4-2 B1: a box with a
-            why = _instances.parse_target(service, stack_id, "start")[3] or "name the radio"   # list saves a radio's mode
-        elif rid:                                                                         # only; refused by name
-            _sid, inst, _band, why = _instances.parse_target(service, f"{stack_id}@{rid}", "start")
-        if why:
-            abort(make_response(f"Mode: {why}", 400))
-        result = service.save_config(stack_id, {"file_mode": request.form.get("mode", "")}, inst=inst)
-        # F26: the result belongs under the Mode line (its own address), never on top; a repeater-name refusal also
-        # names the two node-name rows (`bad=`), the signal for the banner's link to them (nothing is persisted)
-        flash(result.summary + (" " + "; ".join(result.details) if result.details else ""),
-              ("ok" if result.ok else "warn") + f" @stack-mode-{stack_id}")
-        named = (not result.ok and (result.data or {}).get("reason") == _meshcore_mode.REASON_REPEATER_NAME_REQUIRED)
-        return redirect(url_for("stacks_overview", open=stack_id, **({"radio": rid} if rid else {}),
-                                **({"bad": _meshcore_name_fields()} if named else {})) + "#stack-mode-" + stack_id)
 
     @app.post("/stacks/<stack_id>/config/reset")
     def stack_config_reset(stack_id: str):

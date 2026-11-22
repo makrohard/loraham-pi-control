@@ -607,7 +607,7 @@ class WebserverOpsMixin:
             return ""
         modes = " and ".join(m for m in _mm.MODES if served(m))
         return (f"Not served in the current mode ({mode}): this upstream runs in the {modes} "
-                f"modes — change it with the Mode switch on the stack page, then restart the stack.")
+                f"modes — change it in the stack's Settings (Mode), then restart the stack.")
 
     def web_pages(self) -> list:
         """Every proxied page on the box, in MANIFEST order (stacks, then each stack's pages) —

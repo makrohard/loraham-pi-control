@@ -111,7 +111,7 @@ def test_the_dashboard_page_exists_in_every_mode_and_says_when_it_is_served(tmp_
     monkeypatch.setattr(type(svc), "build_snapshot", lambda self, *a, **k: snap)
     row = next(w for w in svc.dashboard_webservers() if w.get("pid") == "meshcore-meshcore-node@r2")
     assert "Not served in the current mode (chat)" in row["mode_note"]
-    assert "Mode switch" in row["mode_note"] and "chat+repeater and repeater" in row["mode_note"]
+    assert "Settings (Mode)" in row["mode_note"] and "chat+repeater and repeater" in row["mode_note"]
     # the other way round: in repeater-only the WEB UI's upstream is the one not served
     r = svc.save_config("meshcore", {"file_mode": "repeater", "file_repeater_name": "Relay"})
     assert r.ok
