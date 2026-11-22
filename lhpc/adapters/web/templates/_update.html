@@ -1,3 +1,4 @@
+{% from "_macros.html" import result_slot -%}
 {# Controller UPDATE UI — embedded in the /stacks controller row. CACHED status (`st`) on
    every GET; no live git/network/identity call while rendering. "Update now" is ONE-CLICK:
    a confirmed POST starts the parameter-free updater unit, which stops the console, applies
@@ -71,9 +72,10 @@
           <label><input type="checkbox" name="overwrite" value="yes"> Overwrite: discard local changes / reset to upstream</label>
           <p></p>
         {% endif %}
-        <button type="submit">Update &amp; restart now</button>
+        <button type="submit" name="_slot" value="slot-ctl-update-apply">Update &amp; restart now</button>
         <a class="act" href="{{ url_for('stacks_overview') }}"><button type="button">Cancel</button></a>
       </form>
+      {{ result_slot('slot-ctl-update-apply') }}
     </section>
   {% endif %}
 
@@ -114,19 +116,20 @@
     <div class="actrow">
       <form method="post" action="{{ url_for('self_update_check') }}" class="act">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
-        <button type="submit">Check for updates</button>
+        <button type="submit" name="_slot" value="slot-ctl-update">Check for updates</button>
       </form>
       {% if st.update_available and not jobs and updater and updater.status == 'ok' %}
         <form method="post" action="{{ url_for('self_update_apply') }}" class="act">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
-          <button type="submit">Update now</button>
+          <button type="submit" name="_slot" value="slot-ctl-update">Update now</button>
         </form>
       {% elif st.update_available and not jobs and updater and updater.fixable %}
         <form method="post" action="{{ url_for('self_update_apply') }}" class="act">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
-          <button type="submit">Repair &amp; update</button>
+          <button type="submit" name="_slot" value="slot-ctl-update">Repair &amp; update</button>
         </form>
       {% endif %}
     </div>
+    {{ result_slot('slot-ctl-update') }}{# F28: this row's results #}
   {% endif %}
 {% endif %}

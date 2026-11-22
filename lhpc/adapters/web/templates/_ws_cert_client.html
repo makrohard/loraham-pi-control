@@ -1,4 +1,4 @@
-{% from "_macros.html" import cmdbox -%}
+{% from "_macros.html" import cmdbox, result_slot -%}
 {#- UI-REORG s7 (L78): Certificates › Client certificate: issue, the remote-session warning, the .p12 fetch
     commands, the certificates table (Revoke, Download .p12). -#}
 <details class="advcfg" id="webserver-row--certificates--client">
@@ -14,8 +14,9 @@
           <input id="ws-issue-clock" type="checkbox" name="accept_unverified_clock" value="1">
           <span class="muted">Only if this box's clock is not synchronised. The certificate will be
             dated from it. Not the same as confirming a destructive change.</span></p>
-        <button type="submit">Issue</button>
+        <button type="submit" name="_slot" value="slot-ws-issue">Issue</button>
       </form>
+      {{ result_slot('slot-ws-issue') }}
       {% if not loopback %}
         <p class="depnote depnote-warn">Remote session: a NEW private-key bundle can be downloaded
           only from a loopback session. You may still manage existing certificates.</p>
@@ -55,7 +56,7 @@
                 <label class="muted" title="Only if this box's clock is not synchronised — the CRL
                   will be dated from it"><input type="checkbox" name="accept_unverified_clock"
                   value="1"> unverified clock</label>
-                <button type="submit">Revoke</button>
+                <button type="submit" name="_slot" value="slot-ws-revoke-{{ c.label | lower }}">Revoke</button>
               </form>
               {% if c.export and loopback %}
                 <a href="{{ url_for('webserver_cert_download', label=c.label) }}">Download .p12</a>
@@ -63,6 +64,8 @@
             {% endif %}
           </td>
         </tr>
+        {%- set _rv = result_slot('slot-ws-revoke-' ~ (c.label | lower)) %}{% if _rv | trim %}
+        <tr class="rowresult"><td colspan="5">{{ _rv }}</td></tr>{# F28: under this certificate's row #}{% endif %}
         {% else %}
         <tr><td colspan="5">(no client certificates)</td></tr>
         {% endfor %}

@@ -1,3 +1,4 @@
+{% from "_macros.html" import result_slot -%}
 {% from "_stackweb_port.html" import live_port_of %}{% set sw = stack_web %}{% set live_port = live_port_of(sw) -%}
 {#- UI-REORG s8: its results show under its row (page_actions); no hard `open` -#}
 <details class="advcfg" id="stack-webserver-{{ sw.page_id }}--settings">
@@ -68,5 +69,6 @@
           </section>
           <button type="submit">Apply</button>
         </form>
+        {{ result_slot('stack-webserver-' ~ sw.page_id ~ '--settings') }}{# F28: the route's own address #}
       </div>
     </details>

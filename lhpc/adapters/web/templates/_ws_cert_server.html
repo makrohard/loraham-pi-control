@@ -1,3 +1,4 @@
+{% from "_macros.html" import result_slot -%}
 {#- UI-REORG s7 (L78): Certificates › Server certificate: renew it. -#}
 <details class="advcfg" id="webserver-row--certificates--server">
     <summary>Server certificate</summary>
@@ -7,7 +8,8 @@
           <p class="setting"><label for="ws-tls-clock">Accept unverified clock</label>
             <input id="ws-tls-clock" type="checkbox" name="accept_unverified_clock" value="1">
             <span class="muted">Only if this box's clock is not synchronised. Certificates will be dated from it. Not the same as confirming a destructive change.</span></p>
-        <button type="submit">Renew server certificate</button>
+        <button type="submit" name="_slot" value="slot-ws-renew">Renew server certificate</button>
       </form>
+      {{ result_slot('slot-ws-renew') }}
     </section>
   </details>

@@ -1,3 +1,4 @@
+{% from "_macros.html" import result_slot -%}
 {# Per-stack daemon radio-parameter panel (Settings): its own form with Save/Apply/Reset — the only WebGUI place daemon parameters change (CLI: `lhpc config <stack> --daemon-param|--apply-daemon|--reset-daemon`); a start applies the saved ones. Requires `daemon_params`
    + `stack_id`. #}
 {% if daemon_params %}
@@ -54,14 +55,16 @@
           </tr>
         {% endfor %}
       </table>
+      {%- set _dps = 'slot-dparams-' ~ stack_id ~ '-' ~ (daemon_params.rid or 'x') %}
       <div class="actrow">
-          <button type="submit" class="act">Save</button>
-          <button type="submit" class="act"
+          <button type="submit" class="act" name="_slot" value="{{ _dps }}">Save</button>
+          <button type="submit" class="act" name="_slot" value="{{ _dps }}"
                   {% if not daemon_params.can_apply %}disabled title="Available only while the stack is running"{% endif %}
                   formaction="{{ url_for('daemon_params_apply', stack_id=stack_id) }}">Apply live</button>
-          <button type="submit" class="act"
+          <button type="submit" class="act" name="_slot" value="{{ _dps }}"
                   formaction="{{ url_for('daemon_params_reset', stack_id=stack_id) }}">Reset to defaults</button>
       </div>
+      {{ result_slot(_dps) }}
     </form>
   </details>
 {% endif %}

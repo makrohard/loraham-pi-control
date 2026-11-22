@@ -362,6 +362,9 @@ a.webpill:hover, a.webpill:focus-visible { filter: brightness(1.12); text-decora
 /* A16, the approved banner concept (MOCK-BANNER-v2): a banner's ✕ on the banner's own colour, no box of its own */
 .depnote > .dismiss button { background: transparent; color: inherit; border-color: transparent; font-size: 1.1rem; }
 .depnote > .dismiss button:hover { background: transparent; color: inherit; border-color: currentColor; }
+/* F28: an action result's ✕ draws the same glyph by CSS (the button keeps its "Close" label), so a banner's text
+   stays its message */
+.depnote > .dismiss .bnrclose::before { content: "\00d7"; }
 /* K4 banner parts: the title on its own line, a list indented, ONE bottom row for links and buttons */
 .depnote .bnr-title { display: block; margin-bottom: .15rem; }
 .depnote ul { margin: .2rem 0 .3rem 1.1rem; padding: 0; }

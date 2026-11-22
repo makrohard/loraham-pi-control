@@ -31,11 +31,12 @@
         "All menus · Home › Apps › <its title>" + "‹ Back"; every other page defines its own -#}
     {% block nav %}{% with here = self.title() | replace(" — LoRaHAM Pi Control", "") %}{% include "_apps_crumbs.html" %}{% endwith %}
     {% include "_back.html" %}{% endblock %}
+    {% from "_macros.html" import close_x %}
     {% for sev, msg in page_results() %}
-      <p class="depnote {{ depnote_classes(sev) }} flash">{{ msg }}</p>
+      <p class="depnote {{ depnote_classes(sev) }} flash">{{ close_x() }}{{ msg }}</p>
     {% endfor %}
     {% if new_passphrase %}
-      <p class="depnote depnote-ok flash">One-time passphrase (record it now; it is not shown again):
+      <p class="depnote depnote-ok flash">{{ close_x() }}One-time passphrase (record it now; it is not shown again):
         <code id="one-time-passphrase">{{ new_passphrase }}</code></p>
     {% endif %}
     {# Persistent: the disk-space warning while the worst filesystem is low or critical. #}
@@ -90,6 +91,7 @@
   </footer>
   <script src="{{ url_for('static', filename='shown.js') }}" defer></script>{# s13: before every poller #}
   <script src="{{ url_for('static', filename='copy.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='banners.js') }}" defer></script>{# F28: an action result's ✕ #}
   <script src="{{ url_for('static', filename='back.js') }}" defer></script>{# ‹ Back #}
   <script src="{{ url_for('static', filename='bandfilter.js') }}" defer></script>
   <script src="{{ url_for('static', filename='daemoncfg.js') }}" defer></script>

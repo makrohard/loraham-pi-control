@@ -14,8 +14,14 @@
    bottom row of links and buttons. `sev` is a level (depnote_classes). `x` is the ✕ form's action (none: no ✕),
    `x_fields` its hidden (name, value) pairs, `x_label` its accessible name. The caller is asked twice:
    caller('body') for the text or list, caller('links') for the bottom row (left empty: no row). #}
-{% macro banner(sev, title='', id='', x='', x_fields=(), x_label='Close', extra='') %}
+{# F28 (his word): an action result's ✕ (`close`): the same place and look as the persistent ✕, closes the banner on the page
+   (banners.js; nothing stored: a result lives one page load). Rendered hidden; banners.js shows it, so no dead control. #}
+{% macro close_x() -%}
+<span class="act dismiss"><button type="button" class="bnrclose" aria-label="Close" title="Close" hidden></button></span>
+{%- endmacro %}
+{% macro banner(sev, title='', id='', x='', x_fields=(), x_label='Close', extra='', close=false) %}
 <div class="depnote {{ depnote_classes(sev) }}{{ ' ' ~ extra if extra }}"{% if id %} id="{{ id }}"{% endif %}>
+  {%- if close and not x %}{{ close_x() }}{% endif %}
   {%- if x %}
   <form method="post" action="{{ x }}" class="act dismiss" title="Close">
     <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
@@ -33,8 +39,11 @@
    first result the title and the others one line each, in the first result's severity. #}
 {# `link` (optional): an (href, text) pair shown in the banner's links part (F26). #}
 {% macro panel_banner(rs, link=none) %}{% if rs %}
-{% call(part) banner(rs[0][0], title=rs[0][1], extra='panel-result') %}{% if part == 'body' and rs | length > 1 %}<ul>{% for sev, msg in rs[1:] %}<li>{{ msg }}</li>{% endfor %}</ul>{% elif part == 'links' and link %}<a href="{{ link[0] }}">{{ link[1] }}</a>{% endif %}{% endcall %}
+{% call(part) banner(rs[0][0], title=rs[0][1], extra='panel-result', close=true) %}{% if part == 'body' and rs | length > 1 %}<ul>{% for sev, msg in rs[1:] %}<li>{{ msg }}</li>{% endfor %}</ul>{% elif part == 'links' and link %}<a href="{{ link[0] }}">{{ link[1] }}</a>{% endif %}{% endcall %}
 {% endif %}{% endmacro %}
+
+{# F28: a button row's result, directly under that row (Apps pages; the button carries `name="_slot" value="<id>"`) #}
+{% macro result_slot(id) %}{{ panel_banner(result_slot_results(id)) }}{% endmacro %}
 
 {# The two webserver-panel status pills (security + running) from a posture dict, plus the reached
    address. Shared by the controller console, per-stack proxies, and the dashboard Webserver box so all
@@ -70,9 +79,9 @@
 {# Remote freshness probe (git ls-remote) for a stack or a single component. Its own route, NOT an
    /action op: it mutates nothing but the cached status marker, and needs no confirm stage. #}
 {% macro source_check_btn(target) %}
-<form method="post" action="{{ url_for('source_check', target=target) }}" class="act">
+<form method="post" action="{{ url_for('source_check', target=target) }}" class="act">{# F28: its row slot: slot-srccheck-<target> #}
   <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
-  <button type="submit">Check for updates</button>
+  <button type="submit" name="_slot" value="slot-srccheck-{{ target }}">Check for updates</button>
 </form>
 {% endmacro %}
 
@@ -114,18 +123,19 @@
     {% if upstream %}
       <form method="post" action="{{ url_for('graywolf_upstream_check', target=stack_id) }}" class="act">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
-        <button type="submit">Check upstream</button>
+        <button type="submit" name="_slot" value="slot-upstream-{{ stack_id }}">Check upstream</button>
       </form>
       {% if upstream.ahead %}
       <form method="post" action="{{ url_for('graywolf_upstream_update', target=stack_id) }}" class="act">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
-        <button type="submit" class="warnbtn">Update to {{ upstream.latest }}</button>
+        <button type="submit" class="warnbtn" name="_slot" value="slot-upstream-{{ stack_id }}">Update to {{ upstream.latest }}</button>
       </form>
       {% endif %}
     {% endif %}
     {{ action_btn('uninstall', stack_id, 'Uninstall') }}
     {{ action_btn('clean', stack_id, 'Clean all') }}
   </div>
+  {% if upstream %}{{ result_slot('slot-upstream-' ~ stack_id) }}{% endif %}
 {% endif %}
 {% if has_source %}
   <div class="actline">
@@ -136,6 +146,7 @@
     {# Last in the Source line. Only once installed — there is no local head to compare before that. #}
     {% if installed %}{{ source_check_btn(stack_id) }}{% endif %}
   </div>
+  {% if installed %}{{ result_slot('slot-srccheck-' ~ stack_id) }}{% endif %}
 {% endif %}
 {# Setup is offered for an installed source stack AND for a source-less one whose artifact is
    produced by a build step (a fetched package) — the Build button must exist in both cases. #}

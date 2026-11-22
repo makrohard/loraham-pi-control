@@ -1,4 +1,4 @@
-{% from "_macros.html" import cmdbox %}
+{% from "_macros.html" import cmdbox, result_slot %}
 {# Network panel — Wi-Fi client mode with AP fallback. Rendered ONLY when `network_view`
    is present (AP-managed box: the lhpc-ap NM profile exists). The id sits on the
    <details class="advcfg"> itself (hash-open JS constraint, see _firewall.html). #}
@@ -38,14 +38,16 @@
                spellcheck="false" autocomplete="off"></label>
         <label>type <code>{{ nv.ap_cidr_confirm }}</code> <input type="text" name="confirm_phrase" value="" size="16"
                autocomplete="off"></label>
-        <button type="submit" class="act">Change AP subnet</button>
+        <button type="submit" class="act" name="_slot" value="slot-net-apcidr">Change AP subnet</button>
       </form>
+      {{ result_slot('slot-net-apcidr') }}
     {% endif %}
     {% if nv.authorized and nv.mode == 'client' %}
       <form method="post" action="{{ url_for('network_action', op='ap') }}" class="act">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
-        <button type="submit" class="act">Back to AP mode…</button>
+        <button type="submit" class="act" name="_slot" value="slot-net-ap">Back to AP mode…</button>
       </form>
+      {{ result_slot('slot-net-ap') }}
     {% endif %}
 
     {% if not nv.authorized %}
@@ -96,29 +98,33 @@
                   <form method="post" action="{{ url_for('network_action', op='connect') }}" class="act">
                     <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
                     <input type="hidden" name="uuid" value="{{ c.uuid }}">
-                    <button type="submit" class="act" aria-label="Reconnect to {{ c.name }}">Reconnect…</button>
+                    <button type="submit" class="act" name="_slot" value="slot-net-stored-{{ slot_key(c.uuid) }}" aria-label="Reconnect to {{ c.name }}">Reconnect…</button>
                   </form>
                   <form method="post" action="{{ url_for('network_action', op='prefer') }}" class="act">
                     <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
                     <input type="hidden" name="uuid" value="{{ c.uuid }}">
                     <input type="hidden" name="on" value="{{ '0' if c.preferred else '1' }}">
-                    <button type="submit" class="act" aria-label="{{ 'Stop preferring' if c.preferred else 'Prefer' }} {{ c.name }}">{{ 'Stop preferring' if c.preferred else 'Prefer' }}</button>
+                    <button type="submit" class="act" name="_slot" value="slot-net-stored-{{ slot_key(c.uuid) }}" aria-label="{{ 'Stop preferring' if c.preferred else 'Prefer' }} {{ c.name }}">{{ 'Stop preferring' if c.preferred else 'Prefer' }}</button>
                   </form>
                   <form method="post" action="{{ url_for('network_action', op='forget') }}" class="act">
                     <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
                     <input type="hidden" name="uuid" value="{{ c.uuid }}">
-                    <button type="submit" class="act" aria-label="Forget {{ c.name }}">Forget</button>
+                    <button type="submit" class="act" name="_slot" value="slot-net-stored" aria-label="Forget {{ c.name }}">Forget</button>
                   </form>
                 </td>
                 <td class="dphelp muted">{% if c.preferred %}re-joined automatically whenever reachable{% else %}kept for one-click reconnect{% endif %}</td>
               </tr>
+              {%- set _nr = result_slot('slot-net-stored-' ~ slot_key(c.uuid)) %}{% if _nr | trim %}
+              <tr class="rowresult"><td colspan="3">{{ _nr }}</td></tr>{% endif %}
             {% endfor %}
           </table>
+          {{ result_slot('slot-net-stored') }}{# a Forget: its row is gone, so its result sits under the list #}
           {% if nv.preferred and nv.mode == 'ap' %}
             <form method="post" action="{{ url_for('network_action', op='retry') }}" class="act">
               <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
-              <button type="submit" class="act">Retry {{ nv.preferred.ssid }} now</button>
+              <button type="submit" class="act" name="_slot" value="slot-net-retry">Retry {{ nv.preferred.ssid }} now</button>
             </form>
+            {{ result_slot('slot-net-retry') }}
           {% endif %}
         </section>
       {% endif %}
@@ -138,13 +144,15 @@
           <label><input type="checkbox" name="allow_console" value="1" checked
                         aria-label="Allow console from the joined network">
             allow console from that network</label>
-          <button type="submit" class="act">Join…</button>
+          <button type="submit" class="act" name="_slot" value="slot-net-join">Join…</button>
         </form>
+        {{ result_slot('slot-net-join') }}
         {% if nv.mode != 'ap' %}
         <form method="post" action="{{ url_for('network_action', op='scan') }}" class="act">
           <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
-          <button type="submit" class="act">Scan for networks</button>
+          <button type="submit" class="act" name="_slot" value="slot-net-scan">Scan for networks</button>
         </form>
+        {{ result_slot('slot-net-scan') }}
         {% endif %}
         {% if nv.scan and nv.mode != 'ap' %}
           <table class="paramgrid dptab">
@@ -158,11 +166,13 @@
                     <label><input type="checkbox" name="allow_console" value="1" checked
                                   aria-label="Allow console from the joined network">
                       allow console from that network</label>
-                    <button type="submit" class="act">Join…</button>
+                    <button type="submit" class="act" name="_slot" value="slot-net-scan-{{ slot_key(s.ssid) }}">Join…</button>
                   </form>
                 </td>
                 <td class="dphelp muted">{{ s.signal }}% · {{ s.security }}</td>
               </tr>
+              {%- set _sr = result_slot('slot-net-scan-' ~ slot_key(s.ssid)) %}{% if _sr | trim %}
+              <tr class="rowresult"><td colspan="3">{{ _sr }}</td></tr>{% endif %}
             {% endfor %}
           </table>
         {% endif %}

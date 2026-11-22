@@ -17,6 +17,7 @@ Security posture:
 
 from __future__ import annotations
 
+import hashlib as _hashlib
 import ipaddress as _ipaddress
 import json as _json
 import logging as _logging
@@ -259,40 +260,102 @@ def _open_first_details(html: str) -> str:
 
 
 class _FormScan(HTMLParser):
-    """The POST forms of a rendered page: (action, {hidden field: [values]})."""
+    """The POST forms of a rendered page: (action, {hidden field: [values]}, {submitter (name, value)}). F28: submitter-
+    aware: a submit button inside the form, or outside it naming the form (`form="<id>"`), is one of its submitters."""
 
     def __init__(self):
         super().__init__()
         self.forms: list = []
         self._open = False
+        self._by_id: dict = {}
+        self._ext_submitters: list = []                # external submitters (form=), joined at close()
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         if tag == "form" and (a.get("method") or "").lower() == "post":
-            self.forms.append((a.get("action") or "", {}))
+            self.forms.append((a.get("action") or "", {}, set()))
             self._open = True
+            if a.get("id"):
+                self._by_id[a["id"]] = self.forms[-1]
         elif tag == "input" and self._open and (a.get("type") or "").lower() == "hidden" and a.get("name"):
             self.forms[-1][1].setdefault(a["name"], []).append(a.get("value") or "")
+        elif tag in ("button", "input") and (a.get("type") or ("submit" if tag == "button" else "")).lower() == "submit":
+            pair = (a.get("name") or "", a.get("value") or "")
+            if a.get("form"):
+                self._ext_submitters.append((a["form"], pair))
+            elif self._open:
+                self.forms[-1][2].add(pair)
 
     def handle_endtag(self, tag):
         if tag == "form":
             self._open = False
 
+    def close(self):
+        super().close()
+        for fid, pair in self._ext_submitters:
+            if fid in self._by_id:
+                self._by_id[fid][2].add(pair)
+
 
 def _renders_form(html: str, path: str, args, form) -> bool:
     """U4 (E3-1): whether `html` renders the form this POST came from: one posting to `path` (with
     the POST's own query) whose every hidden field, but the CSRF token and `return`, has the posted
-    values. The fields a person fills in are not compared. Read on the page as it was before the
-    action (`_menu_block_before`)."""
+    values. The fields a person fills in are not compared. F28: a POST naming its row (`_slot`) came from the
+    form whose submitter carries that row. Read on the page as it was before the action (`_menu_block_before`)."""
     scan = _FormScan()
     scan.feed(html)
-    for action, hidden in scan.forms:
+    scan.close()
+    slot = form.get("_slot", "")
+    for action, hidden, submitters in scan.forms:
         act = urlsplit(action)
         if act.path != path or parse_qs(act.query) != {k: args.getlist(k) for k in args}:
+            continue
+        if slot and ("_slot", slot) not in submitters:
             continue
         if all(form.getlist(k) == v for k, v in hidden.items() if k not in ("_csrf", "return")):
             return True
     return False
+
+
+class _ResultNodes(HTMLParser):
+    """F28 (his "(a)": the node holding a result opens automatically): the ">" offsets of every <details> start tag that
+    contains a rendered result banner (`div.panel-result`). A <script> body is data to the parser (never a tag)."""
+
+    def __init__(self, text: str):
+        super().__init__(convert_charrefs=False)
+        self._lines = [0]                              # line starts, counted by "\n" only, as getpos() counts them
+        for line in text.split("\n"):                  # (splitlines also breaks at \r, \x0c, \x85, U+2028, ...)
+            self._lines.append(self._lines[-1] + len(line) + 1)
+        self._stack: list = []                         # [tag, offset, has_open]
+        self.to_open: set = set()
+
+    def _offset(self):
+        line, col = self.getpos()
+        return self._lines[line - 1] + col
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("input", "br", "img", "meta", "link", "hr", "source", "wbr", "area", "col", "embed", "param", "track"):
+            return
+        if tag == "div" and "panel-result" in (dict(attrs).get("class") or "").split():
+            self.to_open.update(off for t, off, has in self._stack if t == "details" and not has)
+        end = self._offset() + len(self.get_starttag_text()) - 1           # the tag's closing ">"
+        self._stack.append([tag, end, any(k == "open" for k, _v in attrs)])
+
+    def handle_endtag(self, tag):
+        for i in range(len(self._stack) - 1, -1, -1):  # close up to its own start tag; a stray end tag closes nothing
+            if self._stack[i][0] == tag:
+                del self._stack[i:]
+                break
+
+
+def _open_result_nodes(html: str) -> str:
+    """` open` on every <details> start tag that holds a rendered row result (and is not open yet)."""
+    scan = _ResultNodes(html)
+    scan.feed(html)
+    scan.close()
+    for end in sorted(scan.to_open, reverse=True):
+        html = html[:end] + " open" + html[end:]
+    return html
 
 
 # U4: the Stacks redirect's query keys that only navigate; any other (`pw=` one-time passphrase, `bad=`
@@ -305,6 +368,10 @@ def _row_needs_body(inline: bool, only_sid) -> bool:
     or the one row a lazy body request asks for."""
     return inline or only_sid is not None
 
+
+
+# F28: a row's result address, as a button's `_slot` names it (the K4 panel-id alphabet; bounded)
+_SLOT_ID = _re.compile(r"[a-z0-9][a-z0-9@._-]{0,159}")
 
 def create_app(service_factory: ServiceFactory | None = None) -> Flask:
     """Build the Flask app. `service_factory` is injectable for tests."""
@@ -369,13 +436,28 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         _g.flash_shown.add(dest)
         return rs
 
+    def _result_slot(dest: str) -> list:
+        """F28: a button row's result slot (Apps pages only: Home and other pages keep their results on top). Marks the
+        request so the open pass (`_open_result_nodes`) opens the nodes around the rendered banner."""
+        if not request.path.startswith("/stacks"):
+            return []
+        rs = _own_results(dest)
+        if rs:
+            _g.row_result_shown = True
+        return rs
+
+    def _slot_key(text) -> str:
+        """A row's stable result-slot key from what names it (a connection uuid, an SSID: any characters): its row
+        keeps its slot when the list around it changes, never another row's."""
+        return _hashlib.sha256(str(text).encode("utf-8", "surrogatepass")).hexdigest()[:16]
+
     def _page_results() -> list:
         """(severity, text) of the results no panel took: the global ones and any whose panel is absent."""
         entries = _flash_entries()
         return [(sev, msg) for sev, d, msg in entries if not d or d not in _g.flash_taken]
 
     app.jinja_env.globals.update(panel_results=_panel_results, page_results=_page_results,
-                                 own_results=_own_results)
+                                 own_results=_own_results, result_slot_results=_result_slot, slot_key=_slot_key)
 
     @app.context_processor
     def _inject_selfupdate():
@@ -1525,7 +1607,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         a firewall view), else "": never a dead link. Builds the owner's menus once per request (memoised)."""
         try:
             return _level_url(owner, mid, radio) if _submenus.chain(_owner_menus(owner)[1], mid) else ""
-        except Exception:
+        except Exception:                                  # never break the card; a menus defect is logged, not hidden
+            _logging.getLogger(__name__).warning("level link %s/%s unavailable", owner, mid, exc_info=True)
             return ""
 
     app.jinja_env.globals["level_url_if"] = _level_url_if
@@ -1652,14 +1735,26 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         new = flashes[request.environ["lhpc.flash_n"]:]
         if not any("@" not in str(cat) for cat, _msg in new):
             return response
+        # F28: the clicked button names its row (`_slot`): the result goes right under that row, more precise than the
+        # level; a bad value is ignored (then the level, as before)
+        slot = request.form.get("_slot", "")
         try:
-            level = _acted_level()
+            level = slot if _SLOT_ID.fullmatch(slot) else _acted_level()
         except Exception:                                                  # never break the POST's answer
             level = ""
         if level:
             n = request.environ["lhpc.flash_n"]
             session["_flashes"] = flashes[:n] + [(cat if "@" in str(cat) else f"{cat} @{level}", msg)
                                                  for cat, msg in new]
+        return response
+
+    @app.after_request
+    def _open_result_nodes_hook(response):
+        """F28: an Apps page that rendered a row result opens every node around that banner (his "(a)"), so a result
+        never arrives hidden in a closed node. Only when a row result rendered (no-op elsewhere)."""
+        if (getattr(_g, "row_result_shown", False) and request.method == "GET" and response.mimetype == "text/html"
+                and not response.direct_passthrough):
+            response.set_data(_open_result_nodes(response.get_data(as_text=True)))
         return response
 
     @app.after_request
@@ -1837,6 +1932,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             abort(404)                             # unknown target -> 404, and no network
         res = service.source_check(target)         # NETWORK (explicit): git ls-remote, refresh cache
         flash(f"{res.summary} {' '.join(res.details[:6])}", "ok" if res.ok else "warn")
+        # F28: a shared component's check (e.g. the daemon shown under Chat) returns to the stack whose page sent it,
+        # where its row (and the result under it) is; else the target's own stack
+        page = _menu_page_of(request.form.get("return", "")) if request.form.get("return") else None
+        st = service.stack(page[0]) if page else None
+        if st is not None and (st.component(target) is not None or page[1].startswith(f"comp-{target}")):
+            sid = st.id                            # its own component, or a provider shown as this stack's level
         return _install_back(sid)                  # land on the stack's Install section
 
     @app.post("/network/<op>")

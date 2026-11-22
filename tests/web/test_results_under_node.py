@@ -97,6 +97,12 @@ def test_a_result_from_the_monitor_page_shows_inside_the_monitor(web, csrf):
     _inside_monitor(doc, banners)
 
 
+def _under_form(doc, action):
+    """F28: the result banner(s) directly after the clicked form posting to `action` (its row)."""
+    forms = [f for f in doc.find("form") if f["action"] == action]
+    return [b for f in forms for b in doc.find("div", class_="panel-result") if b.index == f.end + 1]
+
+
 def test_an_addressed_result_keeps_its_address(web, csrf):
     # K4: a bulk-proxy refusal names ws-stackwebs itself; a _level does not re-address it
     c = web()
@@ -104,7 +110,7 @@ def test_an_addressed_result_keeps_its_address(web, csrf):
                                       "access_mode": "local-open-remote-auth", "_level": "controller/webserver-row"})
     doc, banners, top = _results(c)
     assert not top
-    assert banners and _slot(doc, "ws-stackwebs") == banners
+    assert banners and _under_form(doc, "/webserver/stacks") == banners           # F28: under its Apply row
 
 
 # ---- F27: Save configuration / Reset to defaults show their result INSIDE the Settings node, under their button row ----

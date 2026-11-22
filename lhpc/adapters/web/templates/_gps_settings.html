@@ -1,3 +1,4 @@
+{% from "_macros.html" import result_slot -%}
 <details class="advcfg" id="gps-settings"{% if request.args.get('open') == 'gps' and request.args.get('cfg') == 'gps' %} open{% endif %}>
         <summary>Settings</summary>
       <section class="cfgsec">
@@ -81,7 +82,8 @@
                          placeholder="{{ 'set' if gps_global.fixed_alt else 'metres' }}"></td>
               <td class="dphelp muted">optional</td></tr>
           </table>
-          <p><button type="submit">Apply</button></p>
+          <p><button type="submit" name="_slot" value="slot-gps">Apply</button></p>
         </form>
+        {{ result_slot('slot-gps') }}
       </section>
       </details>

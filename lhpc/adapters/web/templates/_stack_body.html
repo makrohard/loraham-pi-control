@@ -25,7 +25,7 @@
     {#- F26: the Mode result under the Mode line. A repeater-name refusal (a warn/err result, and the redirect naming both
         node-name rows in `bad=`) links to those rows, marked red in Settings; a reload (result gone) shows neither. -#}
     {% from "_macros.html" import panel_banner %}
-    {% set _mrs = panel_results('stack-mode-' ~ g.stack.id) %}
+    {% set _mrs = result_slot_results('stack-mode-' ~ g.stack.id) %}{# F28: the row slot (its route addresses it, F26) #}
     {% set _named = _mrs and _mrs[0][0] in ('warn', 'err') and request.args.get('bad') == g.meshcore_name_fields %}
     {{ panel_banner(_mrs, link=((url_for('stacks_overview', open=g.stack.id, cfg=g.stack.id, bad=g.meshcore_name_fields,
                                          radio=g.meshcore_rid or None) ~ '#stack-settings-' ~ g.stack.id), 'Set the node names →')

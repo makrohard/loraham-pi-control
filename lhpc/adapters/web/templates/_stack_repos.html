@@ -1,3 +1,4 @@
+{% from "_macros.html" import result_slot -%}
 {# UI-REORG s2: Install › Repositories: the stack's source remotes (global, not per radio), its own form; it writes
    `remotes` only (stack_remotes_save). Requires `g` (g.view.sources). #}
 <details class="advcfg" id="stack-install-{{ g.stack.id }}--repositories"><summary>Repositories</summary>
@@ -14,7 +15,8 @@
                  placeholder="{{ src.default }}" autocomplete="off" class="wide"></td></tr>
         {% endfor %}
       </table>
-      <div class="actrow"><button type="submit">Save repositories</button></div>
+      <div class="actrow"><button type="submit" name="_slot" value="slot-repos-{{ g.stack.id }}">Save repositories</button></div>
+      {{ result_slot('slot-repos-' ~ g.stack.id) }}
     </form>
   </div>
 </details>

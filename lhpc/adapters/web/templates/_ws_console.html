@@ -1,3 +1,4 @@
+{% from "_macros.html" import result_slot -%}
 <details class="advcfg" id="webserver-row--lhpc-webgui">
     <summary>LHPC Webserver</summary>
     <section class="cfgsec">
@@ -50,14 +51,16 @@
               the server certificate, which would be dated from it. Separate from the confirmation
               above — that one confirms exposure, this one accepts the clock</td></tr>
         </table>
-        <button type="submit">Apply</button>
+        <button type="submit" name="_slot" value="slot-ws-apply">Apply</button>
       </form>
+      {{ result_slot('slot-ws-apply') }}
       {# Reset — distinct safety function (loopback defaults + disable every proxy + prove cessation). #}
       <form method="post" action="{{ url_for('webserver_reset') }}" class="cfgreset">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
         <input name="confirm_phrase" placeholder="type 'reset'" autocomplete="off">
-        <button type="submit">Reset to defaults</button>
+        <button type="submit" name="_slot" value="slot-ws-reset">Reset to defaults</button>
       </form>
+      {{ result_slot('slot-ws-reset') }}
       <p class="muted">Reset keeps HTTPS on, sets loopback:8443, local unauthenticated, remote off; it
         never deletes CAs, certificates, CRL, revocation history, exports, or the session secret.</p>
     </section>

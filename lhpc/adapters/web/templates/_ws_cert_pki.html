@@ -1,4 +1,4 @@
-{% from "_macros.html" import cmdbox -%}
+{% from "_macros.html" import cmdbox, result_slot -%}
 {#- UI-REORG s7 (L78): Certificates › PKI: initialize / recreate the PKI; the CA (fetch command, Download ca.crt). -#}
 <details class="advcfg" id="webserver-row--certificates--pki">
     <summary>PKI</summary>
@@ -9,8 +9,9 @@
           <input id="ws-init-confirm" name="confirm_phrase" autocomplete="off">
           <span class="muted">To RE-create existing CAs (destructive) type <code>recreate</code></span></p>
           <p class="muted">Needs no clock: if this box's clock is not yet verified, the certificates get a fixed provisional validity (not dates from the clock); such a server certificate is over the Apple 825-day cap while it is provisional.</p>
-        <button type="submit">Initialize / recreate PKI</button>
+        <button type="submit" name="_slot" value="slot-ws-pki">Initialize / recreate PKI</button>
       </form>
+      {{ result_slot('slot-ws-pki') }}
       {% if ws_fetch and ws_fetch.ca and mon.pki.server_ca.present %}
         {# Fetch the SERVER TRUST to a Linux PC — the address is the one THIS session reached
            the console at (10.42.0.1 in AP mode), so the command works as pasted. #}

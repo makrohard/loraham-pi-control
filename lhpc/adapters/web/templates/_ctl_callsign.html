@@ -1,3 +1,4 @@
+{% from "_macros.html" import result_slot -%}
 <details class="advcfg" id="operator-callsign">
             <summary>Global operator callsign{% if operator_callsign %} <span class="pill mono">{{ operator_callsign }}</span>{% else %} <span class="pill">not set</span>{% endif %}</summary>
             <div class="body">
@@ -25,7 +26,8 @@
                     <td class="dphelp muted">digit-bearing base, 3–6 letters/digits;
                       empty clears it</td></tr>
                 </table>
-                <button type="submit">Save</button>
+                <button type="submit" name="_slot" value="slot-callsign">Save</button>
               </form>
+              {{ result_slot('slot-callsign') }}
             </div>
           </details>

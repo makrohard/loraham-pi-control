@@ -40,8 +40,8 @@ def test_the_list_is_one_row_per_radio_each_opening_its_detail(web, tmp_path, mo
 
 def test_the_row_button_reads_disable_or_enable(web, tmp_path, monkeypatch):
     page = _text(_box(web, tmp_path, monkeypatch).get("/hardware").get_data(as_text=True))
-    assert re.search(r'data-rid="r1">.*?name="enabled" value="off"> <button type="submit">Disable', page)
-    assert re.search(r'data-rid="r3">.*?name="enabled" value="on"> <button type="submit">Enable', page)
+    assert re.search(r'data-rid="r1">.*?name="enabled" value="off"> <button type="submit"[^>]*>Disable', page)
+    assert re.search(r'data-rid="r3">.*?name="enabled" value="on"> <button type="submit"[^>]*>Enable', page)
 
 
 def _row(page, rid):

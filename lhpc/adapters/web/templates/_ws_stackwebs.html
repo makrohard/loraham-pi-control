@@ -1,3 +1,4 @@
+{% from "_macros.html" import result_slot -%}
 {#- UI-REORG s8: its results show under its row (page_actions in _webserver.html); a result still opens it -#}
 {% set wsg_results = panel_results('ws-stackwebs') -%}
 <details class="advcfg" id="ws-stackwebs"{% if wsg_open or wsg_results %} open{% endif %}>
@@ -53,6 +54,7 @@
           </table>
           <button type="submit">Apply to all stack web proxies</button>
         </form>
+        {{ result_slot('ws-stackwebs') }}{# F28: its row slot = the route's own address (@ws-stackwebs) #}
       {% else %}
         <p class="muted">No installed stack currently exposes a web UI.</p>
       {% endif %}

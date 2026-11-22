@@ -1,4 +1,4 @@
-{% from "_macros.html" import depnote_classes, panel_banner -%}
+{% from "_macros.html" import depnote_classes, result_slot -%}
 {#- F16: its results show INSIDE it, under Verify (own_results), and open it -#}
 <details class="advcfg" id="webserver-row--monitor"{% if panel_results('webserver-row--monitor') %} open{% endif %}>
     <summary>Monitor</summary>
@@ -37,8 +37,8 @@
       </ul>
       <form method="post" action="{{ url_for('webserver_verify') }}">
         <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
-        <button type="submit">Verify now</button>
+        <button type="submit" name="_slot" value="webserver-row--monitor">Verify now</button>
       </form>
-      {{ panel_banner(own_results('webserver-row--monitor')) }}
+      {{ result_slot('webserver-row--monitor') }}{# F28: its row slot (F16: inside the Monitor) #}
     </section>
   </details>

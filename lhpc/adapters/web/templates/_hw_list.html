@@ -1,7 +1,7 @@
 {#- The radio list (with its state line when the list is not valid) and Add Hardware: one partial, so every page that shows the list includes the same markup. The
    USB setup stays on the /hardware page (it is the only page that prepares it). Context: view, models, hp, and
    `hw_back` (the page its forms return to; /hardware when unset). -#}
-{%- from "_macros.html" import daemon_badge -%}
+{%- from "_macros.html" import daemon_badge, result_slot -%}
     {% if view.kind != "valid" %}
       <p class="depnote depnote-warn" id="hardware-list-state">The hardware list is {{ view.kind }}{% if view.reasons %}:
         {{ view.reasons|join("; ") }}{% endif %}.</p>
@@ -27,9 +27,11 @@
               <input type="hidden" name="rid" value="{{ r.rid }}">
               <input type="hidden" name="back" value="{{ hw_back|default(url_for('hardware_view')) }}">{{ menu_return_field() }}
               <input type="hidden" name="enabled" value="{{ 'off' if r.enabled else 'on' }}">
-              <button type="submit">{{ 'Disable' if r.enabled else 'Enable' }}</button>
+              <button type="submit" name="_slot" value="slot-hw-{{ r.rid }}">{{ 'Disable' if r.enabled else 'Enable' }}</button>
             </form></td>
         </tr>
+        {%- set _hwr = result_slot('slot-hw-' ~ r.rid) %}{% if _hwr | trim %}
+        <tr class="rowresult"><td colspan="6">{{ _hwr }}</td></tr>{# F28: under this radio's row (Apps pages) #}{% endif %}
       {% endfor %}
       </tbody>
     </table>

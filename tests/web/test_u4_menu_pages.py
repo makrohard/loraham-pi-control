@@ -136,6 +136,12 @@ def _slot(doc, block):
     return [b for b in doc.find("div", class_="panel-result") if b.index == anchor.end + 1]
 
 
+def _under_form(doc, action):
+    """F28: the result banner(s) directly after the clicked form posting to `action` (its row)."""
+    forms = [f for f in doc.find("form") if f["action"] == action]
+    return [b for f in forms for b in doc.find("div", class_="panel-result") if b.index == f.end + 1]
+
+
 def _crumbs(doc):
     return doc.find("nav", class_="crumbs")[0]
 
@@ -324,7 +330,7 @@ def test_a_refused_post_from_a_webserver_page_returns_there_with_its_message(tmp
               port="80", scheme="https", access_mode="no-auth", cidrs="", confirm_phrase="")
     assert r.status_code in (302, 303) and r.headers["Location"].split("#")[0] == page
     doc = parse(_html(c, page))
-    assert _slot(doc, "stack-webserver-meshcore@r2--settings"), "the refusal shows at its form's block on that page"
+    assert _under_form(doc, "/stacks/meshcore/webserver"), "the refusal shows at its form's block on that page"
 
 
 @pytest.mark.parametrize("page", ["/stacks/meshcore/menu/stack-webserver-meshcore@r2--settings?radio=r2",
@@ -337,7 +343,7 @@ def test_a_refused_proxy_apply_returns_to_its_settings_page_or_the_webserver_sub
               port="80", scheme="https", access_mode="no-auth", cidrs="", confirm_phrase="")
     level = urlsplit_path(page).rsplit("/", 1)[1]
     assert r.status_code in (302, 303) and r.headers["Location"] == page + "#" + level
-    assert _slot(parse(_html(c, page)), "stack-webserver-meshcore@r2--settings")
+    assert _under_form(parse(_html(c, page)), "/stacks/meshcore/webserver")
 
 
 @pytest.mark.parametrize("ret", [
@@ -471,7 +477,7 @@ def test_a_refused_save_with_another_owners_return_falls_back_to_stacks(tmp_path
     # the K4 fallback: the Stacks page with the action's stack open and its radio (the view names neither)
     assert r.headers["Location"] == "/stacks?open=meshcore&radio=r2#stack-webserver-meshcore@r2"
     doc = parse(_html(c, r.headers["Location"].split("#")[0]))
-    assert _slot(doc, "stack-webserver-meshcore@r2--settings")
+    assert _under_form(doc, "/stacks/meshcore/webserver")
     # seen without JS: the panel around the Settings block holding the result renders open (its sibling does not)
     assert doc.by_id("stack-webserver-meshcore@r2").has_attr("open")
     assert not doc.by_id("stack-webserver-meshcore-meshcore-node@r2").has_attr("open")
@@ -617,15 +623,33 @@ def test_a_successful_revoke_returns_to_certificates_though_its_form_is_gone(tmp
 
 
 
-def test_a_shared_components_action_is_its_own_stacks_and_falls_back(tmp_path, web):
-    """`comp-loraham-daemon` is a level of MeshCore too, but its source check is the daemon's
-    action (its redirect opens the daemon's Install): from MeshCore's page it falls back."""
+def test_a_shared_components_check_returns_to_the_page_that_shows_it(tmp_path, web):
+    """`comp-loraham-daemon` is a level of MeshCore too. F28 (his rule: the result under the clicked button's row;
+    was: the daemon's Install, a fall back): from MeshCore's page its source check returns there, under its row."""
     c, _svc = _client(web, tmp_path)
     page = "/stacks/meshcore/menu/comp-loraham-daemon"
     doc = parse(_html(c, page))
     form = [f for f in doc.find("form") if f["action"] == "/source-check/loraham-daemon"][0]
-    r = c.post(form["action"], data=_fields(doc, form))
-    assert r.headers["Location"] == "/stacks?open=daemon&inst=daemon#stack-install-daemon--actions"
+    data = {**_fields(doc, form), "_slot": "slot-srccheck-loraham-daemon"}          # the button a browser sends
+    r = c.post(form["action"], data=data)
+    assert r.headers["Location"].split("#")[0] == page
+    after = parse(_html(c, page))
+    btn = [b for b in after.find("button") if b["value"] == "slot-srccheck-loraham-daemon"][0]
+    holders = [e for tag, cls in (("div", "actrow"), ("div", "actline"), ("p", "actrow")) for e in after.find(tag, class_=cls)
+               if e.index < btn.index <= e.end] or [f for f in after.find("form") if f.index < btn.index <= f.end]
+    row = max(holders, key=lambda e: e.index)
+    assert [e for e in after.find("div", class_="panel-result") if e.index == row.end + 1], "directly under its row"
+
+
+def test_a_check_from_a_page_that_neither_owns_nor_shows_the_target_lands_on_its_own_install(tmp_path, web):
+    """The fall back of source_check: the sending page's stack (Chat) neither owns the MeshCore web UI nor shows it as a
+    level, so the check lands on the target's own stack Install section."""
+    c, _svc = _client(web, tmp_path)
+    src = parse(_html(c, "/stacks/meshcore/menu/comp-meshcore-webui"))
+    form = [f for f in src.find("form") if f["action"] == "/source-check/meshcore-webui"][0]
+    data = {**_fields(src, form), "return": "/stacks/chat/menu/comp-loraham-daemon"}
+    r = c.post(form["action"], data=data)
+    assert r.headers["Location"].endswith("#stack-install-meshcore--actions")
 
 
 # ---- E3-1: the block that holds the form, or its nearest ancestor --------------------------------
@@ -639,7 +663,7 @@ def test_a_refused_apply_from_the_standalone_settings_child_returns_there(tmp_pa
     page = "/stacks/meshcore/menu/stack-webserver-meshcore@r2--settings?radio=r2"
     r = _post(c, csrf, "/stacks/meshcore/webserver", page, page, **_REFUSED_PROXY)
     assert r.headers["Location"] == page + "#stack-webserver-meshcore@r2--settings"
-    assert _slot(parse(_html(c, page)), "stack-webserver-meshcore@r2--settings"), "the refusal shows in that block"
+    assert _under_form(parse(_html(c, page)), "/stacks/meshcore/webserver"), "the refusal shows in that block"
 
 
 def test_a_return_to_the_info_child_goes_to_the_panel_that_holds_the_settings(tmp_path, web, csrf):
@@ -753,7 +777,7 @@ def test_a_flash_pending_before_a_post_still_shows_after_it(tmp_path, web, csrf)
     assert r.headers["Location"] == page + "#stack-webserver-meshcore@r2--settings"
     doc = parse(_html(c, page))
     assert [p.text.strip() for p in doc.find("p", class_="flash")] == ["a pending note"]
-    assert _slot(doc, "stack-webserver-meshcore@r2--settings")                   # and the refusal at its block
+    assert _under_form(doc, "/stacks/meshcore/webserver")                   # and the refusal at its block
 
 
 def test_the_tree_and_its_links_keep_the_pages_radio(tmp_path, web):

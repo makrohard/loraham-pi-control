@@ -1,3 +1,4 @@
+{% from "_macros.html" import result_slot -%}
 <details class="advcfg" id="firewall-row--configure">
         <summary>Configure</summary>
         <section class="cfgsec">
@@ -31,16 +32,19 @@
                 cidr <input type="text" name="ap_cidr" value="{{ firewall_view.ap.cidr }}" placeholder="10.42.0.0/24" size="14">
               </td></tr>
             </table>
-            <button type="submit">Save firewall settings</button>
+            <button type="submit" name="_slot" value="slot-fw-save">Save firewall settings</button>
           </form>
+          {{ result_slot('slot-fw-save') }}
           <form method="post" action="{{ url_for('firewall_configure') }}" class="cfgreset">
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
             <input type="hidden" name="recommended" value="yes">
-            <button type="submit">Use recommended settings</button>
+            <button type="submit" name="_slot" value="slot-fw-recommended">Use recommended settings</button>
           </form>
+          {{ result_slot('slot-fw-recommended') }}
           <form method="post" action="{{ url_for('firewall_refresh') }}" class="cfgreset">
             <input type="hidden" name="_csrf" value="{{ csrf_token() }}">{{ menu_return_field() }}
-            <button type="submit">Refresh status</button>
+            <button type="submit" name="_slot" value="slot-fw-refresh">Refresh status</button>
           </form>
+          {{ result_slot('slot-fw-refresh') }}
         </section>
       </details>

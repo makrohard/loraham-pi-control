@@ -1,3 +1,4 @@
+{% from "_macros.html" import result_slot -%}
 {#- UI-REORG s3: the selected radio's +20 dBm permission (view.high_power holds that one radio). Family = the SAVED one
     (hardware list): an SX1262 without a switch needs no permission (control and Save disabled); the Meshstick's
     switch admits 21-22 (daemon 1.5.0); unknown: selectable, with a warning. -#}
@@ -23,10 +24,11 @@
                     <option value="on"{% if hp.saved %} selected{% endif %}>on</option>
                   </select>
                 </label>
-                <button type="submit"{% if _off %} disabled{% endif %}>Save</button>
+                <button type="submit" name="_slot" value="slot-hp-{{ hp.rid }}"{% if _off %} disabled{% endif %}>Save</button>
                 <span class="muted" id="hp-live-{{ hp.rid }}">running daemon:
                   {% if not hp.reachable %}not serving{% elif hp.live is none %}HIGHPOWER unknown (older daemon){% elif hp.live %}permission ON{% else %}permission OFF{% endif %}{% if hp.family %} ({{ hp.family }}){% endif %}</span>
               </form>
+              {{ result_slot('slot-hp-' ~ hp.rid) }}
               {% if _off %}
                 <p class="muted" id="hp-sx1262-{{ hp.rid }}">Not needed on an SX1262 (up to 20 dBm without permission)</p>
               {% elif not hp.saved_family %}
