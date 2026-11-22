@@ -140,15 +140,13 @@ try {
     const sparkSet = (id) => { const el = d.getElementById(id);
       const l = el && el.querySelector("polyline");
       return l && (l.getAttribute("points") || "").length > 3; };   // sparkline drawn
-    const cores = d.getElementById("sys-cpu-cores");
     return hasNum("sys-cpu-val") && hasNum("sys-mem-val") &&
-           barSet("sys-mem-bar") && barSet("sys-temp-bar") &&
-           sparkSet("sys-cpu-spark") && sparkSet("sys-mem-spark") &&
-           !!cores && cores.childElementCount > 0;             // per-core CPU bars built
+           barSet("sys-cpu-bar") && barSet("sys-mem-bar") && barSet("sys-temp-bar") &&   // one total-CPU bar
+           sparkSet("sys-cpu-spark") && sparkSet("sys-mem-spark");
   }, { timeout: 30000 });
   await sysOpen();
   await sysLive();
-  ok("System box live — values, gauge bars, per-core CPU bars, and sparklines");
+  ok("System box live — values, gauge bars (one total-CPU bar), and sparklines");
   // Time pill: the demo box is synced (timesyncd), so the product logic shows green "NTP".
   await page.waitForFunction(() => {
     const p = doc().getElementById("sys-time-pill");
