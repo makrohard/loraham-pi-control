@@ -70,6 +70,8 @@ def test_the_nav_lines_come_first(client, path, crumbs, second):
         nxt = top[2]
     else:
         assert not (nxt.tag == "p" and nxt.has_class("pagebar")), path
+    backs = [a for a in doc.find("a") if a.has_attr("data-back")]                 # never both lines on one page
+    assert len(backs) == (second == "‹ Back"), (path, len(backs))
     notice = doc.by_id("disk-notice")
     assert notice is not None and notice.index >= nxt.index, path                 # every notice after the nav lines
 
