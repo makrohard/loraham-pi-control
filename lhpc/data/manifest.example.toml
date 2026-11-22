@@ -309,6 +309,7 @@ main = "loraham-daemon"
 [[stack]]
 id = "chat"
 name = "LoRaHAM Chat"
+license = "ham"   # F32: the Home card's licence mark (README "Free to use" column)
 summary = "Interactive daemon-backed APRS/chat client (loraham_chat) on 433."
 main = "loraham-chat"
 
@@ -357,6 +358,7 @@ main = "loraham-chat"
     fmt = "env"
       [[stack.component.config_file.param]]
       name = "call"
+      card_ident = 1   # F30: shown in the Home card's stack title
       validator = "callsign"
       key = "CALL"
       default = "{callsign}"
@@ -412,6 +414,7 @@ main = "loraham-chat"
 [[stack]]
 id = "voice"
 name = "LoRaHAM Voice"
+license = "ham"   # F32: the Home card's licence mark (README "Free to use" column)
 summary = "Daemon-backed Codec2 voice over LoRa: GTK app on a desktop, ncurses terminal UI on a headless/Lite box. Configurable callsign, audio devices and per-band radio params."
 main = "loraham-voice"
 
@@ -523,6 +526,7 @@ main = "loraham-voice"
       # are NOT hidden under "Advanced config" — they are shown inline with the basic ones.
       [[stack.component.config_file.param]]
       name = "callsign"
+      card_ident = 1   # F30: shown in the Home card's stack title
       validator = "callsign_voice"
       key = "callsign"
       default = "{callsign}"
@@ -943,6 +947,7 @@ main = "loraham-kiss-tnc"
 [[stack]]
 id = "graywolf"
 name = "Graywolf APRS"
+license = "ham"   # F32: the Home card's licence mark (README "Free to use" column)
 summary = "Graywolf APRS station (web UI on 127.0.0.1:8080, digipeater, iGate) driving the radio through the LoRaHAM KISS TNC."
 main = "graywolf"
 
@@ -1091,6 +1096,7 @@ main = "graywolf"
     # passcode from this callsign itself, so no passcode is ever stored by LHPC.
     [[stack.component.param]]
     name = "call"
+    card_ident = 1   # F30: shown in the Home card's stack title
     kind = "str"
     validator = "callsign"
     arg = "--callsign"
@@ -1161,6 +1167,7 @@ main = "graywolf"
 [[stack]]
 id = "meshtastic"
 name = "Meshtastic"
+license = "free"   # F32: the Home card's licence mark (README "Free to use" column)
 radio_access = "spi"     # meshtasticd drives the RF95 directly: SPI radios only (instances.radio_refusal)
 summary = "Native meshtasticd on the RF95 (433 or 868). Run ROOTLESS by lhpc as a user process. Direct SPI — conflicts with the LoRaHAM daemon."
 main = "meshtastic"
@@ -1354,12 +1361,14 @@ main = "meshtastic"
     label = "LoRa region (sets TX legality; required for TX)"
     [[stack.component.param]]
     name = "node_name"
+    card_ident = 1   # F30: shown in the Home card's stack title
     validator = "node_long"
     kind = "str"
     default = ""
     label = "Node name (long, max 39 bytes) — required; local, never the operator callsign"
     [[stack.component.param]]
     name = "node_short"
+    card_ident = 2   # F30: shown in the Home card's stack title
     validator = "node_short"
     kind = "str"
     default = ""
@@ -1714,6 +1723,7 @@ main = "meshtastic"
 [[stack]]
 id = "meshcom"
 name = "MeshCom (QEMU)"
+license = "ham"   # F32: the Home card's licence mark (README "Free to use" column)
 summary = "MeshCom firmware under QEMU, bridged to the daemon. 433 MHz, daemon MANAGED. Order: daemon -> bridge -> GPS -> QEMU."
 main = "meshcom-qemu"
 
@@ -2239,6 +2249,7 @@ main = "meshcom-qemu"
     # operator callsign. Applied via the net-console after boot (see post_start).
     [[stack.component.param]]
     name = "mc_callsign"
+    card_ident = 1   # F30: shown in the Home card's stack title
     validator = "callsign_meshcom"
     kind = "str"
     default = "{callsign}"
@@ -2339,6 +2350,7 @@ main = "meshcom-qemu"
 [[stack]]
 id = "meshcore"
 name = "MeshCore (OpenHop)"
+license = "free"   # F32: the Home card's licence mark (README "Free to use" column)
 summary = "MeshCore on openHop, daemon-backed on 868 (auto-starts the daemon). Mode: chat node, chat + repeater, or repeater only. Optional web GUI (browser, via the LHPC proxy) and CLI."
 main = "meshcore-node"
 
@@ -2475,6 +2487,7 @@ main = "meshcore-node"
       label = "Enable TX (off = RX-only)"
       [[stack.component.config_file.param]]
       name = "node_name"
+      card_ident = 1   # F30: shown in the Home card's stack title
       validator = "node"
       key = "name"
       section = "companion"
@@ -2596,6 +2609,7 @@ main = "meshcore-node"
       label = "Mode — chat: companion node only; chat+repeater: repeater hosting the companion; repeater: repeater only (no chat GUI/CLI)"
       [[stack.component.config_file.param]]
       name = "repeater_name"
+      card_ident = 2   # F30: shown in the Home card's stack title
       validator = "repeater_name"
       key = "name"
       section = "repeater"
@@ -3073,6 +3087,7 @@ main = "meshcore-node"
 [[stack]]
 id = "reticulum"
 name = "Reticulum (RNS)"
+license = "free"   # F32: the Home card's licence mark (README "Free to use" column)
 radio_access = "spi"     # drives the radio directly: SPI radios only (instances.radio_refusal); "daemon" once it runs on it
 summary = "Reticulum node driving the LoRa radio DIRECTLY over SPI — no rnoded, no RNode firmware, no KISS. Owns the radio for its band; shares the SPI bus with the daemon through spi0.lock."
 main = "rns"

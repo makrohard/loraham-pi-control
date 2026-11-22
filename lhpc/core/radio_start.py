@@ -1346,6 +1346,31 @@ def relocate_card_interfaces(rows: list) -> list:
     return rows
 
 
+def card_ident(svc, stk, inst) -> str:
+    """F30: the name / call LHPC sets for instance `inst` of `stk`, for the Home card's stack title: the values of the
+    stack's `card_ident` params in their order, empty ones dropped, joined with " · ", each the instance's own saved
+    value (the operator callsign fallback and openHop's own file included: `_resolved_param_value`). MeshCore follows
+    its RUNNING mode: the chat node's name only while the companion runs, the repeater's name only in repeater modes.
+    A failing read gives "" (never breaks the card)."""
+    from . import meshcore_mode
+    try:
+        mode = svc.meshcore_running_mode(inst) if stk.id == meshcore_mode.STACK_ID else ""
+        picks = []
+        for c in stk.components:
+            for kind, params in (("run", c.run_params), ("file", c.config_file.params if c.config_file else ())):
+                for p in params:
+                    if not p.card_ident:
+                        continue
+                    if mode and p.name == "node_name" and not meshcore_mode.chat_identity_required(mode):
+                        continue
+                    if mode and p.name == "repeater_name" and not meshcore_mode.repeater_on(mode):
+                        continue
+                    picks.append((p.card_ident, svc._resolved_param_value(stk.id, kind, c.id, p.name, inst=inst)))
+        return " · ".join(v.strip() for _o, v in sorted(picks, key=lambda t: t[0]) if v and v.strip())
+    except Exception:                                   # a card shows no name rather than no card
+        return ""
+
+
 def running_instances(svc, band: str, live: dict, procs=None) -> list:
     """Cleanup C7c (W286, W290; K5: decision B out), K1: Home's entry for each instance that runs on a radio of
     `band` (`<sid>@<rid>`, for its own radio's card only), with a row per component of its stack. A row's state is
@@ -1382,7 +1407,8 @@ def running_instances(svc, band: str, live: dict, procs=None) -> list:
         out.append({"id": instances.key(stk.id, inst), "sid": stk.id, "rid": inst.rid, "name": stk.name,
                     "main": stk.main, "components": relocate_card_interfaces(rows), "multi_band": False,
                     # F29: the MeshCore instance's RUNNING mode (the saved one when the running role is unknown)
-                    "mode": svc.meshcore_running_mode(inst) if stk.id == meshcore_mode.STACK_ID else ""})
+                    "mode": svc.meshcore_running_mode(inst) if stk.id == meshcore_mode.STACK_ID else "",
+                    "ident": card_ident(svc, stk, inst), "license": stk.license})          # F30, F32
     return out
 
 

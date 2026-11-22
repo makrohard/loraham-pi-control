@@ -311,6 +311,13 @@ a.iface { text-decoration: none; color: var(--brand); }
 .radio-col details.runstack > summary.stitle::before { content: "▸ "; color: var(--muted); }
 .radio-col details.runstack[open] > summary.stitle::before { content: "▾ "; }
 .radio-col details.runstack:not([open]) > summary.stitle { margin-bottom: .1rem; }
+.radio-col details.runstack > summary.stitle .sident { margin-left: .3rem; }          /* F30: the name / call */
+.radio-col details.runstack > summary.stitle .lic { cursor: help; }                   /* F32: the licence mark */
+.radio-col details.runon > summary.ronsum { cursor: pointer; list-style: none; }       /* Running on / Start a stack */
+.radio-col details.runon > summary.ronsum::-webkit-details-marker { display: none; }
+.radio-col details.runon > summary.ronsum > h3 { display: inline; }
+.radio-col details.runon > summary.ronsum::before { content: "▸ "; color: var(--muted); }
+.radio-col details.runon[open] > summary.ronsum::before { content: "▾ "; }
 .radio-col details.runstack > p.smode { margin: 0 0 .4rem; font-size: .92em; }   /* F29: MeshCore's mode line */
 .radio-col details.cbox > summary.shead { cursor: pointer; list-style: none; display: flex; align-items: center;
   flex-wrap: wrap; gap: .45rem; color: var(--ink); }

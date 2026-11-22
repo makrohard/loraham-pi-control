@@ -63,6 +63,8 @@
                         {% endif %}
                         <div class="muted">Interactive — run local:</div>
                         {{ cmdbox(box, cmd) }}{% endmacro %}
+{# F32: a stack's licence mark (the manifest's `license`), first in its title, with its meaning on hover #}
+{% macro licence_mark(lic) %}{% if lic == 'ham' %}<span class="lic" role="img" aria-label="Ham stack: amateur licence required" title="Ham stack: amateur licence required">📜</span> {% elif lic == 'free' %}<span class="lic" role="img" aria-label="Free stack, uses encryption: respect local frequency and duty-cycle regulations" title="Free stack, uses encryption: respect local frequency and duty-cycle regulations">✅</span> {% endif %}{% endmacro %}
 {# Home's one nav line "All menus · Home", the first thing after the header #}
 {% block nav %}
   <div class="crumbline">{% include "_crumbs_all.html" %}<nav class="crumbs" aria-label="You are here"><h2 class="here">Home</h2></nav></div>
@@ -270,7 +272,8 @@
 
 
           {# --- running stack(s) on this radio (W2: its rid; a stray band's card: the band) --- #}
-          <h3>Running on {{ r.rid }}</h3>
+          {#- his word: the whole "Running on" box folds (open by default; remembered per browser) -#}
+          <details class="runon" id="runon-{{ key }}" open><summary class="ronsum"><h3>Running on {{ r.rid }}</h3></summary>
           {# Cleanup C7c, W2 (G1-W2 3): an instance (its `rid`) shows on its own radio's card only, with its Stop and
              Restart; an entry without a rid names no instance (no launch record or argv token tells its radio): it shows
              on each card of its band with its state and its Stop (W370), never Run (which could start nothing). #}
@@ -284,7 +287,8 @@
               {#- F18: the stack block folds, its title line the toggle (no link: each row keeps its config link); the daemon's
                   starts closed, every other stack open; dash.js remembers the viewer's choice by its id. -#}
               <details class="runstack" id="stk-{{ key }}-{{ s.id }}"{% if (s.sid or s.id) != 'daemon' %} open{% endif %}>
-                <summary class="stitle" data-stack="{{ s.id }}"><strong>{{ s.name }}</strong> <span class="pill">{{ s.id }}</span></summary>
+                <summary class="stitle" data-stack="{{ s.id }}">{{ licence_mark(s.license) }}<strong>{{ s.name }}</strong> <span class="pill">{{ s.id }}</span>
+                  {%- if s.ident %} <b class="sident">{{ s.ident }}</b>{% endif %}</summary>{# F32: licence mark first; F30: its name / call #}
                 {% if s.mode %}<p class="smode muted">Mode: <b>{{ s.mode }}</b></p>{% endif %}{# F29: display only, the running mode #}
                 {% if s.rid %}
                 {# K1: a row per component of the instance, stopped ones too; a part's own Run/Stop names `<comp>@<rid>`;
@@ -362,21 +366,24 @@
             {% endfor %}
           {% endif %}
 
+          </details>{# /Running on #}
+
           {# --- start another stack on this radio; while THIS radio's daemon is installed and stopped, its
                  "daemon <band>" (daemon@rX) is the first entry, added here outside the stacks' radio filter --- #}
           {% set daemon_offer = r.rid and not up and r.daemon.installed %}
           {% if r.startable or daemon_offer %}
-            <h3>Start a stack on {{ r.rid }}</h3>
+            <details class="runon" id="starton-{{ key }}" open><summary class="ronsum"><h3>Start a stack on {{ r.rid }}</h3></summary>{# his word: folds, open #}
             <form method="post" action="{{ url_for('action') }}" class="startform">
               <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
               <input type="hidden" name="op" value="start">
               <input type="hidden" name="from" value="dash">
               <select name="target" aria-label="Stack to start on {{ key }}">
                 {% if daemon_offer %}<option value="daemon{{ at }}">daemon {{ r.band }}</option>{% endif %}
-                {% for s in r.startable %}<option value="{{ s.id }}{{ at }}">{{ s.name }}{% if s.multi_band %} ({{ r.band }}){% endif %}</option>{% endfor %}
+                {% for s in r.startable %}<option value="{{ s.id }}{{ at }}">{{ {'ham': '📜 ', 'free': '✅ '}.get(s.license, '') }}{{ s.name }}{% if s.multi_band %} ({{ r.band }}){% endif %}</option>{% endfor %}
               </select>
               <button type="submit">Start</button>
             </form>
+            </details>
           {% endif %}
 
           {% endif %}{# /r.stray else #}

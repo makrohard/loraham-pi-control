@@ -296,6 +296,7 @@ class RunParam:
                                  # own titled block (e.g. "Network exposure") in the config panel
     # The manifest's default when it carries instance tokens; `default` is its template value (no radio). "" = none.
     default_template: str = ""
+    card_ident: int = 0           # F30: >0 = shown in the Home card's stack title (order), e.g. a node name or call
 
 
 def emit_param(p: RunParam, value) -> list[str]:
@@ -357,6 +358,7 @@ class FileParam:
     default_template: str = ""
     radio_power: bool = False    # a TX power: its default is at most the instance radio's model default (USB 14, SPI 17)
     panel_power: bool = False    # hidden, derived: the instance's daemon-panel POWER (radio_start.post_power), never stored
+    card_ident: int = 0          # F30: >0 = shown in the Home card's stack title (order), e.g. a node name
 
 
 @dataclass(frozen=True)
@@ -574,6 +576,7 @@ class Stack:
     main: str = ""               # id of the primary component (the app itself)
     binary: BinarySpec | None = None   # optional prebuilt-binary channel declaration
     radio_access: str = "daemon"  # "spi": drives its radio itself, starts on SPI radios only; "daemon": any radio
+    license: str = ""             # F32: "ham" (amateur licence required) | "free" | "" (no mark: daemon, kiss)
 
     def component(self, component_id: str) -> Component | None:
         for c in self.components:

@@ -318,7 +318,7 @@
   document.querySelectorAll("details.radiobox[id^='radiobox-']").forEach(function (box) { remember(box, "lhpc:" + box.id); });
   // F18: a radio card's stack blocks and component boxes keep the viewer's open/closed choice the same way (their
   // server-rendered defaults apply until one is toggled).
-  document.querySelectorAll("details.runstack[id^='stk-'], details.cbox[id^='cbox-']").forEach(function (box) {
+  document.querySelectorAll("details.runstack[id^='stk-'], details.cbox[id^='cbox-'], details.runon").forEach(function (box) {
     remember(box, "lhpc:" + box.id);
   });
 })();

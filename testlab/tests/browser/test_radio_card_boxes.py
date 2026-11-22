@@ -37,3 +37,16 @@ def test_stack_and_box_states_are_remembered_across_a_reload(flask_page, tmp_pat
     assert page.locator("details#stk-r3-meshcore\\@r3").evaluate("d => d.open")
     assert not page.locator("details#cbox-r3-meshcore\\@r3-meshcore-node").evaluate("d => d.open")
     page.context.close()
+
+
+def test_running_on_and_start_a_stack_folds_persist_independently(flask_page, tmp_path):
+    # F30 (his words): both boxes fold, open by default; each keeps its own state across a reload
+    page, _posts = flask_page(path="/", cmdlines=_meshcore_r3(tmp_path), listeners=[Listener("ipv4", "127.0.0.1", 5399, 1)])
+    run, start = page.locator("details#runon-r3"), page.locator("details#starton-r3")
+    assert run.evaluate("d => d.open") and start.evaluate("d => d.open")
+    run.locator("> summary").click(position={"x": 6, "y": 8})
+    page.wait_for_function("() => localStorage.getItem('lhpc:runon-r3') === '0'")
+    page.reload()
+    assert not page.locator("details#runon-r3").evaluate("d => d.open")
+    assert page.locator("details#starton-r3").evaluate("d => d.open")                 # the other keeps its own state
+    page.context.close()

@@ -2952,7 +2952,7 @@ class LifecycleOpsMixin:
                         state="booting" if booting else (live[c.id].run_state.value if c.id in live else "unknown"),
                         interfaces=self._client_interfaces(live.get(c.id), s.id),
                         commands=radio_start.commands_by_radio(self, c, band_rids) if c.interactive else {}))
-                entry = {"id": s.id, "name": s.name, "main": s.main,
+                entry = {"id": s.id, "name": s.name, "main": s.main, "license": s.license,    # F32; no F30 ident: no instance
                          "components": radio_start.relocate_card_interfaces(comps), "multi_band": multi}
                 entries[s.id] = entry
                 main_comp = s.component(s.main)

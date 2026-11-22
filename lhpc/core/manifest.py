@@ -81,6 +81,7 @@ def _parse_file_config(raw: dict | None) -> FileConfig | None:
             secret_file=str(p.get("secret_file", "")),
             radio_power=p.get("radio_power", False) is True,
             panel_power=p.get("panel_power", False) is True,
+            card_ident=_card_ident(p, "config_file"),
         )
         for p in raw.get("param", [])
     )
@@ -614,6 +615,9 @@ def parse_manifest(data: dict) -> tuple[Stack, ...]:
         )
         for comp in components:
             _validate_component(comp)
+        lic = stack_raw.get("license", "")                         # F32: the card's licence mark
+        if lic not in ("", "ham", "free"):
+            raise ManifestError(f"[{stack_raw.get('id', '?')}]: license must be \"ham\" or \"free\", got {lic!r}")
         access = stack_raw.get("radio_access", "daemon")
         if access not in RADIO_ACCESS:
             raise ManifestError(f"[{stack_raw.get('id', '?')}]: radio_access must be one of {RADIO_ACCESS}, got {access!r}")
@@ -629,6 +633,7 @@ def parse_manifest(data: dict) -> tuple[Stack, ...]:
                 main=stack_raw.get("main", ""),
                 binary=binary,
                 radio_access=access,
+                license=lic,
             )
         )
     result = tuple(stacks)
@@ -927,7 +932,7 @@ def _parse_component(raw: dict) -> Component:
 _PARAM_KEYS = frozenset((
     "name", "kind", "choices", "default", "flag", "label",
     "min", "max", "advanced", "arg", "apply_mode", "band_defaults",
-    "validator", "group",
+    "validator", "group", "card_ident",
 ))
 
 
@@ -954,7 +959,16 @@ def _parse_param(p: dict, cid: str) -> RunParam:
                             for k, v in p.get("band_defaults", {}).items()),
         validator=p.get("validator", ""),
         group=p.get("group", ""),
+        card_ident=_card_ident(p, cid),
     )
+
+
+def _card_ident(p: dict, cid: str) -> int:
+    """F30: a param shown in the Home card's stack title: a positive int (its order), else absent (0)."""
+    v = p.get("card_ident", 0)
+    if isinstance(v, bool) or not isinstance(v, int) or v < 0:
+        raise ManifestError(f"{cid}: param {p.get('name', '?')!r}: card_ident must be a positive int, got {v!r}")
+    return v
 
 
 # A claim's `claims_if` transports. Until L5 every radio is an SPI HAT (config.HW_SETUPS names SPI
