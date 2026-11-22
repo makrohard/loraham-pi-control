@@ -543,6 +543,8 @@ tr.field-bad input, tr.field-bad select { outline: 2px solid var(--bad, #e05252)
 .logbox-half { max-height: 22rem; }
 .tasklist { width: 100%; border-collapse: collapse; margin-bottom: 0.8rem; }
 .tasklist th, .tasklist td { text-align: left; padding: 0.25rem 0.6rem 0.25rem 0; }
+/* dash plan c12 S12 (his word): Auto-install's two tables keep today's 950 px on big screens (.tasklist itself unchanged) */
+#ai-select, #ai-tasks { width: min(100%, 59.375rem); }
 .badge-ok { background: var(--badge-ok-bg); color: var(--ok); border-color: var(--badge-ok-border); }
 .badge-failed, .badge-not-running { background: var(--badge-bad-bg); color: var(--bad); border-color: var(--badge-bad-border); }
 .inline { display: inline; }
