@@ -11,8 +11,8 @@ import re as _re
 import time
 from pathlib import Path
 
-from . import config as _config
 from . import (
+    commands,
     daemon_control,
     gps,
     instances,
@@ -24,6 +24,7 @@ from . import (
     runtime_fs,
     validators,
 )
+from . import config as _config
 from . import meshcore_mode as _meshcore_mode
 from . import openhop_store as _ohs
 from . import resources as resources_mod
@@ -932,10 +933,11 @@ class LifecycleOpsMixin:
         op_band = self.operation_band(target, band)
         _sid = self.stack_of(target) or target    # K5: an instance runs on its radio's band (the one-band rule is gone)
         # K7 (DEC-W384h): fixed ports only (Reticulum's one node, W391): one instance at a time, by the running ones
+        _rid = getattr(inst, "rid", "")             # on the owner's own radio its live members are the same node
+        _mine = {instances.key(_sid, commands.Instance(m)) for m in _rm.owner_members(self, _rid)} if _sid == _ri.STACK_ID else set()
         if (not self._is_daemon_target(_sid) and instances.fixed_ports_only(self.stack(_sid))
-                and (_run := [k for k in instances.running_keys(self, _sid) if k != instances.key(_sid, inst)])
+                and (_run := [k for k in instances.running_keys(self, _sid) if k != instances.key(_sid, inst) and k not in _mine])
                 and not _rm.joining(self, inst)):                       # B5: a member joins the running node
-            _rid = getattr(inst, "rid", "")
             if _sid == _ri.STACK_ID and (_own := _rm.owner_record(self)) is not None and _rid:
                 return ActionResult(False, f"Reticulum runs on {_own['rid']}. Connect {_rid} to that node? (live, no restart) Restart "
                                            f"MeshChat afterwards to see {_rid} in its interfaces.", data={"connect": {"node": _own["rid"], "radio": _rid}},

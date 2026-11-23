@@ -17,6 +17,7 @@ from seams import seed_framing_driver
 
 from lhpc.adapters.cli import main as cli
 from lhpc.core import instances, kill, radios
+from lhpc.core import reticulum_members as _rm
 from lhpc.core.lifecycle import Lifecycle
 from lhpc.core.outcomes import Outcome
 from lhpc.core.paths import Paths
@@ -228,6 +229,75 @@ def test_the_owners_stop_ends_the_memberships(box):
     assert (_member(box, "r1"), _intent(box, "r1")) == ([], "")
 
 
+def test_a_meshchat_stop_on_the_owner_keeps_the_nodes_members(box):
+    # red-before (921ca5b0): the owner's MeshChat stop counted as the node's stop: the plan named r1, the apply
+    # dropped r1's member record and intent with no detach while rns kept r1 attached
+    owner = _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    plan = _stop(box, "r2", apply=False, target="meshchat")
+    assert plan.ok and not [d for d in plan.details if "[also disconnects]" in d], plan.details
+    calls = len(box.node.calls)
+    res = _stop(box, "r2", target="meshchat")
+    assert res.ok, res.summary + "\n".join(res.details)
+    assert [r.component for r in res.results] == ["meshchat"] and owner.poll() is None
+    assert _member(box, "r1") and _intent(box, "r1") == "r2" and "[[LoRa r1]]" in _sections(box)
+    assert box.node.calls[calls:] == [] and "LoRa r1" in box.node.attached        # no rnstatus: the node keeps r1
+
+
+def test_a_start_and_a_meshchat_restart_on_the_owner_pass_with_a_live_member(box):
+    # plan v3 F3, red-before (921ca5b0): the one-instance gate counted the member's key and refused the owner's own
+    # start: "Reticulum runs on r2. Connect r2 to that node?"
+    owner = _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    r2 = instances.copy_of(box.svc, "reticulum", "r2")[0]
+    records = [r["pid"] for r in _member(box, "r1")]
+    calls = len(box.node.calls)
+    res = box.svc.start("meshchat", apply=True, inst=r2)
+    assert "Connect r2" not in res.summary, res.summary
+    res = box.svc.restart("meshchat", apply=True, inst=r2)
+    assert "Connect r2" not in res.summary, res.summary + "\n".join(res.details)
+    assert owner.poll() is None and [r["pid"] for r in _member(box, "r1")] == records and _intent(box, "r1") == "r2"
+    assert "[[LoRa r1]]" in _sections(box) and "LoRa r1" in box.node.attached
+    assert not [c for c in box.node.calls[calls:] if c[0] in ("--detach", "--attach")]
+
+
+def test_a_meshchat_stop_on_a_member_claims_no_disconnect(box):
+    # plan v3 C2, red-before (921ca5b0) on the plan leg: `stop meshchat@r1` stops nothing of r1's node link, yet its
+    # plan said "[disconnects] r1 from the Reticulum node"
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    plan = _stop(box, "r1", apply=False, target="meshchat")
+    assert not [d for d in plan.details if "from the Reticulum node" in d], plan.details
+    calls = len(box.node.calls)
+    _stop(box, "r1", target="meshchat")
+    assert _member(box, "r1") and _intent(box, "r1") == "r2" and "[[LoRa r1]]" in _sections(box)
+    assert "LoRa r1" in box.node.attached and not [c for c in box.node.calls[calls:] if c[0] == "--detach"]
+    whole = _stop(box, "r1", apply=False)                                   # guard: its whole-stack Stop still says it
+    assert "  [disconnects] r1 from the Reticulum node (it keeps running)" in whole.details, whole.details
+
+
+def test_a_third_radios_start_still_asks_to_connect(box):
+    # guard (green before and after F3): only the owner's own members are the same node
+    owner = _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    res = _start(box, "r4")
+    assert not res.ok and res.summary.startswith("Reticulum runs on r2. Connect r4 to that node?"), res.summary
+    owner.kill()                                 # G1 254 N1: a dead node's member key is exempted for no radio
+    owner.wait(timeout=10)
+    assert _rm.owner_members(box.svc, "r2") == [] and _member(box, "r1")
+
+
+@pytest.mark.parametrize("target", ["reticulum", "rns"])
+def test_a_stop_of_the_node_on_the_owner_names_and_ends_the_memberships(box, target):
+    # regression guard: the whole-stack Stop and `stop rns` take the node, so they still end its memberships
+    owner = _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    plan = _stop(box, "r2", apply=False, target=target)
+    assert "  [also disconnects] reticulum@r1: a radio of this node" in plan.details, plan.details
+    res = _stop(box, "r2", target=target)
+    assert res.ok and owner.wait(timeout=10) is not None and (_member(box, "r1"), _intent(box, "r1")) == ([], "")
+
+
 def test_no_generic_stop_or_kill_signals_through_a_member_record(box):
     owner = _owner_up(box)
     assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
@@ -412,6 +482,15 @@ def test_a_web_start_of_another_radio_asks_connect_and_the_owners_stop_names_its
     assert "[also disconnects] reticulum@r1: a radio of this node" in page
     res = box.svc.stop("reticulum", inst=instances.copy_of(box.svc, "reticulum", "r1")[0])
     assert "[removes]" not in " ".join(res.details) and "[disconnects] r1 from the Reticulum node" in " ".join(res.details)
+
+
+def test_the_web_stop_of_the_owners_meshchat_names_no_member(box, web, csrf):
+    # red-before (921ca5b0): the confirm of a MeshChat Stop on the owner listed r1 as disconnected
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    client = web(service_factory=lambda: box.svc)
+    page = client.post("/action", data={"_csrf": csrf(client), "op": "stop", "target": "meshchat@r2"}).get_data(as_text=True)
+    assert "[stop] meshchat" in page and "[also disconnects]" not in page
 
 
 def test_the_dashboard_signature_follows_the_members_without_asking_the_node(box):

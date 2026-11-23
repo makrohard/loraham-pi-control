@@ -232,7 +232,7 @@ class StopOpsMixin:
             or (_rm.owner_record(self) is not None and not [                  # while the node runs on another radio
                 r for r in life.owned_records(_ri.NODE_ID, role=None, rid=_rid) if not r.get(instances.MEMBER_OF)]))
         _owner = not _member and self.stack_of(target) == _ri.STACK_ID and (_o := _rm.owner_record(self)) is not None \
-            and _o.get("rid") == _rid
+            and _o.get("rid") == _rid and any(c.id == _ri.NODE_ID for _, c in items)   # a stop of the node, not MeshChat's
         # a member's whole-stack Stop: what its start ran (rns) + its own records, never the owner's clients (MeshChat)
         if _member and _target_is_stack:
             items = [(s, c) for s, c in items if c.id == _ri.NODE_ID or life.owned_records(c.id, rid=_rid)]
@@ -258,9 +258,9 @@ class StopOpsMixin:
                                                             inst, exclude=_deps_rel)   # N1: the apply's own calculation
                 for _b in _rel:
                     details.append(f"  [also stops] {_dsid} {_b} MHz: no other stack needs it")
-            _mem = _rm.owner_members(self, getattr(inst, "rid", "") or "") if self.stack_of(target) == _ri.STACK_ID else []
+            _mem = _rm.owner_members(self, _rid) if _owner else []
             details += [f"  [also disconnects] {_ri.STACK_ID}@{m}: a radio of this node" for m in _mem]      # B6 C4
-            if _member:                                     # B6 C3: what a member's Stop does
+            if _member and any(c.id == _ri.NODE_ID for _, c in items):   # B6 C3: what a member's Stop of rns does
                 details.append(f"  [{'disconnects' if _rm.member_record(self, _rid) else 'removes'}] {_rid} from the "
                                f"Reticulum node (it keeps running)")
             return ActionResult(True, f"Stop plan for '{target}': {len(items)} component(s).", details=details,

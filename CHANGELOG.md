@@ -28,6 +28,8 @@
   (`lhpc config reticulum@<rid>`) keeps the direct driver on an SPI radio.
 - Reticulum on the daemon: its radio values are on the radio's Daemon radio parameters panel (Reticulum's defaults);
   re-enter yours there (the Config page keeps frequency, SF, BW, CR and power for `backend = spi` only).
+- Stopping or restarting MeshChat no longer disconnects the node's other radios, and starting a client on the
+  node's own radio is no longer refused while another radio is connected.
 - MeshChat announces itself once at every start, so a box is discoverable on the air; a failed announce is logged and
   the start stands.
 - MeshChat is selected to start with Reticulum by default (saved choices stay; untick it on Settings). If it is not built
