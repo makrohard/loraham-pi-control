@@ -40,12 +40,20 @@ def _box(tmp_path, own=None, spi=()):
     for rid, power in (own or {}).items():
         f = stacks / f"reticulum@{rid}.toml"
         f.write_text((f.read_text() if f.exists() else "") + f'dp_POWER = "{power}"\n')
+    box_venv(root)
+    return root
+
+
+def box_venv(root):
+    """The box's venv/lhpc/bin (python, lhpc) on `root`: wrappers that exec this test's own interpreter. Never a symlink to
+    it: a venv's python run through a link elsewhere finds no pyvenv.cfg beside the link and starts as the base python,
+    without the venv's packages (the product's cryptography, say)."""
     bin_ = root / "venv" / "lhpc" / "bin"
     bin_.mkdir(parents=True)
-    (bin_ / "python").symlink_to(sys.executable)
+    (bin_ / "python").write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
     (bin_ / "lhpc").write_text(f'#!/bin/sh\nexec "{sys.executable}" -m lhpc.adapters.cli.main "$@"\n')
-    (bin_ / "lhpc").chmod(0o755)
-    return root
+    for f in ("python", "lhpc"):
+        (bin_ / f).chmod(0o755)
 
 
 def _read(tmp_path, root, row, rid, form="rt_dpget"):
@@ -90,3 +98,13 @@ def test_each_reticulum_row_reads_its_power_with_its_backends_form(tmp_path, row
              'undo_push() { :; }; gstop() { :; }; spower() { echo "SP $2"; }; hpower() { exit 0; }; ')
     r = _sourced(tmp_path, stubs + f"row_{rid} {call}")
     assert r.returncode == 0 and r.stdout.strip() == forms, (r.stdout, r.stderr)
+
+
+def test_the_box_python_runs_in_this_tests_own_environment(tmp_path):
+    # red-before (e8320540, testlab run 45193032073): venv/lhpc/bin/python was a symlink to the venv's python; through it
+    # Python started as the base python (no pyvenv.cfg beside the link), so the forms' imports missed the venv's packages
+    root = tmp_path / "rt"
+    box_venv(root)
+    r = subprocess.run([str(root / "venv" / "lhpc" / "bin" / "python"), "-c", "import sys; print(sys.prefix)"],
+                       stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, check=False)
+    assert r.returncode == 0 and r.stdout.strip() == sys.prefix, (r.stdout, r.stderr)

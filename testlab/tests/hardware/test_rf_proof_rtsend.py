@@ -49,12 +49,9 @@ def _runtime(tmp_path, spi=()):
 
 def _box_run(tmp_path, root, cmd):
     """A rendered box form run on the runtime `root` ({LH} this lhpc, {RT} the runtime)."""
-    bin_ = root / "venv" / "lhpc" / "bin"
-    if not bin_.exists():
-        bin_.mkdir(parents=True)
-        (bin_ / "python").symlink_to(sys.executable)
-        (bin_ / "lhpc").write_text(f'#!/bin/sh\nexec "{sys.executable}" -m lhpc.adapters.cli.main "$@"\n')
-        (bin_ / "lhpc").chmod(0o755)
+    if not (root / "venv" / "lhpc" / "bin").exists():
+        from test_rf_proof_rtpower import box_venv
+        box_venv(root)
     cmd = cmd.replace("{LH}", f"{root}/venv/lhpc/bin/lhpc").replace("{RT}", str(root))
     return subprocess.run(["bash", "-c", cmd], env=_env(tmp_path, LHPC_RUNTIME_ROOT=str(root),
                                                         PYTHONPATH=f"{REPO}:{REPO}/testlab"),
