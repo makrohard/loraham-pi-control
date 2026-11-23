@@ -1,5 +1,6 @@
 """What one dashboard render reads: the radio list and the model table are parsed once per file text, never once
-per read (one render read them ~470 and ~527 times), and a changed file is seen on the very next read."""
+per read (one render read them ~470 and ~527 times), and a changed file is seen on the very next read; /proc is
+scanned for daemon processes once per request (one render scanned it once per radio card and once more)."""
 from __future__ import annotations
 
 import os
@@ -8,7 +9,7 @@ import tomllib
 import pytest
 
 from lhpc.adapters.web.app import create_app
-from lhpc.core import radio_models, radios
+from lhpc.core import radio_models, radio_start, radios
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -89,3 +90,31 @@ def test_the_save_checks_run_with_the_callers_models_on_every_read():
     assert radios.load_text(text).kind == radios.VALID           # the shipped table: the list holds
     assert radios.load_text(text, {}).kind == radios.INVALID      # the same text, no models: it does not
     assert radios.load_text(text).kind == radios.VALID
+
+
+def _scans(monkeypatch) -> list:
+    """Every /proc daemon scan from now on."""
+    seen: list = []
+    real = radio_start._daemon_procs
+
+    def counting(svc):
+        seen.append(1)
+        return real(svc)
+    monkeypatch.setattr(radio_start, "_daemon_procs", counting)
+    return seen
+
+
+def test_one_dashboard_render_scans_proc_for_daemons_once(dash, monkeypatch):
+    client, _listed = dash
+    seen = _scans(monkeypatch)
+    page = client.get("/").get_data(as_text=True)
+    assert "(r1, 433 MHz)" in page and "(r3, 868 MHz)" in page          # two radio cards and the hardware list
+    assert len(seen) == 1, f"{len(seen)} /proc scans in one render"
+
+
+def test_every_request_scans_proc_afresh(dash, monkeypatch):
+    client, _listed = dash
+    seen = _scans(monkeypatch)
+    for _ in range(2):
+        assert client.get("/").status_code == 200
+    assert len(seen) == 2, f"{len(seen)} /proc scans in two renders"

@@ -188,6 +188,13 @@ def doctor_usb(svc) -> list:
     return usb_flow.doctor_usb_lines(state.radios, models, probes)
 
 
+def _daemon_procs_once(svc) -> tuple:
+    """`_daemon_procs` once per request, for the pages that only show it (every radio card and the hardware list read
+    it in one dashboard render). The memo is dropped at every request and around every mutating entry; a start, save
+    or bind rule reads /proc itself."""
+    return svc._request_memo(("daemon-procs",), lambda: tuple(_daemon_procs(svc)))
+
+
 def _daemon_procs(svc) -> list:
     """Every process in /proc that is, or cannot be told from, the daemon, as radio_daemon reads it (id / no-id /
     unknown). G2-0.14.0-1 item 2: every pid is judged (the command lines and the /proc listing) from all three sources
@@ -439,7 +446,7 @@ def hardware_view(svc) -> dict:
     state = radios.load(svc._paths)
     models = radio_models.load()
     found = usb_access.scan()                       # the sticks to bind, and (B) to add as new USB radios
-    procs = _daemon_procs(svc)                      # one /proc read for every card's Remove (DEC-W39)
+    procs = _daemon_procs_once(svc)                 # one /proc read for every card's Remove (DEC-W39)
     rows = []
     for r in state.radios:
         m = models.get(r.model)
@@ -1541,7 +1548,7 @@ def overview_entry(svc, row, e: dict) -> dict:
     interactive = [x for x in e["interactive"] if rid in x.get("on_rids", ()) or "" in x.get("on_rids", ())    # G1-K8D3 N1
                    or (not x.get("on_rids") and rid in instances.eligible(svc.stack(x["id"]), svc,
                                                                           instances.radios_able(svc, x["id"])))]
-    up, procs = dv.reachable, _daemon_procs(svc)
+    up, procs = dv.reachable, _daemon_procs_once(svc)
     own = any(p.rid == rid for p in procs)                                # G1-K8D3 B1: this radio's own process
     told = all(p.kind == "id" for p in procs)
     return {"rid": rid, "name": row.name, "band": band, "model": row.model, "stray": False, "shared_with": [],
