@@ -141,6 +141,10 @@ MeshChat reads the interface list **once, at startup**: after an interface chang
 (`lhpc stack restart meshchat`), or its Interfaces page shows the old list next to live counters
 (e.g. `Disabled` with `Connected`).
 
+A member radio (connected live to the node) shows `Disabled` next to `Connected` in MeshChat: it is
+attached live and kept disabled in the config on purpose; connect or disconnect it on its LHPC card,
+not in MeshChat.
+
 *Interfaces and transport stay LHPC-owned* (rendered from `bases/reticulum.conf` on every start).
 The `0400` config refuses a MeshChat edit, and the proxy refuses (404) the seven routes that
 attempt it — the component's `proxy_deny_paths`; re-audit that list at every version bump.
@@ -185,8 +189,13 @@ From the CLI ([config](../cli.md#config)) set the endpoint before enabling it:
 lhpc config reticulum internet_host <host>
 lhpc config reticulum internet_port <port>
 lhpc config reticulum internet_enabled yes
-lhpc stack restart rns --yes
+lhpc stack restart reticulum --yes
 ```
+
+The stack restart restarts the node and a MeshChat that was running or is selected, so MeshChat
+shows the new state after its own restart. It does not bring MeshChat up where it is unticked (and
+was not running), on a radio that joins another radio's node, or when it is `[blocked]` (not built);
+then start it with `lhpc stack start meshchat` or its card, after the printed remedy if blocked.
 
 Enabling it without a complete endpoint is refused on save (an unreachable target is tolerated,
 `panic_on_interface_error = No`). Once connected, your announces reach the internet-side mesh and
