@@ -163,7 +163,7 @@ def test_the_zeros_channel_is_set_and_its_rendered_frequency_restored(tmp_path):
 # ---- the bounded send ---------------------------------------------------------------------------------------------------
 
 class _MeshChat(http.server.BaseHTTPRequestHandler):
-    send_delay, cancel_delay, seen = 0.0, 0.0, []
+    send_delay, cancel_delay, body_delay, seen = 0.0, 0.0, 0.0, []
 
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
@@ -175,6 +175,8 @@ class _MeshChat(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
+            if self.path.endswith("/send"):
+                time.sleep(self.body_delay)  # wallclock: the send's headers in time, its body late
             self.wfile.write(data)
         except OSError:
             pass
@@ -193,7 +195,7 @@ def meshchat():
     srv.shutdown()
 
 
-def _send(tmp_path, srv, path=True, send_delay=0.0, cancel_delay=0.0, patch=()):
+def _send(tmp_path, srv, path=True, send_delay=0.0, cancel_delay=0.0, patch=(), body_delay=0.0):
     """RTSEND_PY as the kit holds it (its port the stub's; `patch`: (old, new) edits), its node's rnpath a stub: the
     python's (returncode, stdout, seconds) and the stub's requests."""
     root = _runtime(tmp_path)
@@ -210,7 +212,7 @@ def _send(tmp_path, srv, path=True, send_delay=0.0, cancel_delay=0.0, patch=()):
     for old, new in patch:
         assert code.count(old) == 1, old
         code = code.replace(old, new)
-    _MeshChat.send_delay, _MeshChat.cancel_delay = send_delay, cancel_delay
+    _MeshChat.send_delay, _MeshChat.cancel_delay, _MeshChat.body_delay = send_delay, cancel_delay, body_delay
     t = time.monotonic()  # wallclock: how long the form ran (its own clock is under test)
     r = subprocess.run([sys.executable, "-c", code, DEST, NONCE], env=_env(tmp_path, LHPC_RUNTIME_ROOT=str(root),
                        PYTHONPATH=f"{REPO}:{REPO}/testlab"), stdin=subprocess.DEVNULL, capture_output=True, text=True,
@@ -237,6 +239,15 @@ def test_a_late_or_unanswered_send_is_late_and_never_cancelled(tmp_path, meshcha
     rc, out, secs, seen = _send(tmp_path, meshchat, send_delay=delay)
     assert rc == 5 and out.startswith("LATE: no send answer within 5 s") and [p for _, p, _ in seen] == [
         "/api/v1/lxmf-messages/send"] and secs < 7
+
+
+@pytest.mark.slow
+@pytest.mark.wallclock("a send whose headers come at 3 s and its body at 6 s: each read within the 5 s socket timeout")
+def test_a_send_answered_after_5_s_in_parts_is_late_and_never_cancelled(tmp_path, meshchat):
+    # red-before (d7f86ac8, G2 row 240 B2): no clock read after the send: SENT, CANCEL 8.0 cancelled, exit 0
+    rc, out, secs, seen = _send(tmp_path, meshchat, send_delay=3.0, body_delay=3.0)
+    assert rc == 5 and out.startswith("LATE: the send answered after 6.") and "SENT" not in out, (rc, out)
+    assert [p for _, p, _ in seen] == ["/api/v1/lxmf-messages/send"] and secs < 7.5
 
 
 @pytest.mark.slow
@@ -283,3 +294,39 @@ def test_every_other_end_of_the_send_stops_its_node_first(tmp_path, rc):
 def test_sent_and_no_path_leave_the_node_running(tmp_path, rc, want):
     r = _sourced(tmp_path, STUBS + f'RC={rc}; rtsend 13-member-send H r2 {DEST} "{NONCE}" R13-H-r2 R13-H-r5; echo "rc=$?"')
     assert r.stdout.splitlines() == ["X H 13-member-send.txt", f"rc={want}"], r.stdout
+
+
+# ---- each direction's own outcome: a NO-PATH direction is NOT RUN, never a PASS ------------------------------------------
+
+def _leg(r, row, direction):
+    return [ln for ln in r.stdout.splitlines() if ln.startswith(f"REPORT | {row} | ") and f" | {direction} | " in ln]
+
+
+@pytest.mark.parametrize("nopath, want", [
+    ("", None),
+    ("13-member-send", "NOT RUN: H -> Zero: H's node had no path to the Zero, nothing sent; Zero -> H delivered and stored"),
+    ("13-zero-send", "NOT RUN: Zero -> H: the Zero's node had no path to H, nothing sent; H -> Zero delivered and stored"),
+    ("13-member-send 13-zero-send", "NOT RUN: H -> Zero: H's node had no path to the Zero, nothing sent; Zero -> H: the "
+                                    "Zero's node had no path to H, nothing sent")])
+def test_row_13s_member_leg_passes_only_with_both_directions_delivered(tmp_path, nopath, want):
+    # red-before (d7f86ac8, G2 row 240 B1): a NO-PATH direction still gave the leg's PASS, "both directions ... stored on
+    # each side", with the NOT RUN note appended
+    from test_rf_proof_guards import dry
+    r = dry(tmp_path, LANE="rns", DRY_NOPATH=nopath)
+    assert r.returncode == 0, r.stderr[-1500:]
+    (leg,) = _leg(r, 13, "member both ways")
+    if want is None:
+        assert leg.endswith(" | DRY-PASS") and "NOT RUN" not in leg, leg
+    else:
+        assert leg.endswith(" | " + want) and "stored on each side" not in leg, leg
+        assert f"NOT RUN: row 13 reticulum: two radios, one node member both ways: {want[9:]}" in r.stdout.splitlines()
+
+
+def test_a_no_path_box_send_is_not_run_for_that_reason(tmp_path):
+    # red-before (d7f86ac8): row 12's NO-PATH box -> peer was NOT RUN as "form not confirmed: rt_send"
+    from test_rf_proof_guards import dry
+    r = dry(tmp_path, LANE="full", DRY_NOPATH="12-box-send")
+    assert r.returncode == 0, r.stderr[-1500:]
+    (leg,) = _leg(r, 12, "box -> peer")
+    assert leg.endswith(" | NOT RUN: the node had no path to the PC, nothing sent"), leg
+    assert _leg(r, 5, "box -> peer")[0].endswith(" | DRY-PASS")
