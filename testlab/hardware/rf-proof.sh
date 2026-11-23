@@ -6,6 +6,8 @@
 # RUN:    LANE=fast|full|rns bash rf-proof.sh dry                      (first; no box, no peer, no TX)
 #         printf '%s\n' "$PW_H" "$PW_Z" ["$PIN"] | LANE=... INTHEAD=... INTCI=... FORMS_OK=... FORMS_HEAD=... \
 #           bash rf-proof.sh live 2>&1 | tee <log under /home>
+#         A Ctrl-C that also ends tee does not cut the recovery (the script ignores SIGPIPE): the evidence directory (undo
+#         journal, RESULT.md, UNRESOLVED.txt) is the record.
 # A live run needs the transmit and lab permission and the GO for that run, with the hardware connected and set up.
 #
 # INPUTS (env): LANE (fast|full|rns, default fast); ROWS_ONLY (row ids, overrides the lane); LAB_ENV (the lab file); INTHEAD (the
@@ -600,7 +602,8 @@ undo_to() {   # undo_to <mark>: run and remove every undo above <mark>, newest f
     sed -i "${n}d" "$EVD/undo.list" || { echo "undo journal: line $n ($id) not removed: $w: $c" >&2; rec "undo journal: line $n ($id) not removed: $w: $c" || true; rc=1; }
     n=$((n - 1)); done; return $rc; }
 ctxclear() { local i; for i in 1 2 3 4; do unset PCTX TXCTX PAUTH; done; }   # every scope's flag: an exit inside pset/pread/tx keeps its local
-recover() { trap - EXIT INT TERM; ctxclear; [ "$MODE" = live ] && [ -d "$EVD" ] || return 0; RECOVERING=1; local lost=0
+recover() { trap - EXIT INT TERM; trap '' HUP QUIT; ctxclear; [ "$MODE" = live ] && [ -d "$EVD" ] || return 0; RECOVERING=1; local lost=0
+  ! hask BOXES || BOXES=$(getk BOXES)   # R0 narrowed it in the worker (supervise): the journal has the value
   ( bgend ) || rec "recover: a background peer job does not end: an undo through the peer lock may be refused" || lost=1
   if [ -f "$EVD/undo.list" ]; then echo "== RECOVERY: undoing every recorded change, newest first"; ( undo_to 0 ) || lost=1; XNOSTOP=1 verify_set || true; fi
   ( secret_scan ) || rec "recover: the evidence scan found a secret or failed: do not publish $EVD" || lost=1
@@ -1514,6 +1517,35 @@ labcheck() { local k v w g fd='(-|[A-Za-z0-9._/@:+=][A-Za-z0-9._/@:+=-]*)'
       *) w="fields (or empty)"; g="^($fd( $fd)*)?\$";; esac   # RADIO_*, PEER_*, and each line of a DRY_* value
     while IFS= read -r v; do [[ $v =~ $g ]] || stop "$k: $(printf %q "${!k}") is not $w: a lab value is [A-Za-z0-9._/@:+=-] words only"
     done < <(if [[ $k == DRY_* ]]; then printf '%s\n' "$v"; else printf '%s' "$v" | tr '\n' '\r'; echo; fi); done; }
+# ---- the run's supervision: the main shell only waits; the run's work runs in ONE worker --------------------------------
+# bash 5.2 loses a signal that lands while the shell expands a $(...): its trap fails to parse ("trap: line 2: unexpected
+# EOF"), the trap never runs and the run goes on (fixed in bash 5.3). So the shell that traps INT/TERM/HUP/QUIT does nothing
+# but `wait` (and its own paths below run no $(...)): the work runs in a worker in its own process group with every signal
+# at its default, and on a signal the main shell ends that whole group BEFORE the recovery runs (no command of the run
+# overlaps it). The main shell ignores SIGPIPE: a console that went away (a Ctrl-C that also ended `tee`) cannot end it
+# before or during the recovery, whose record is the journal on disk; the worker gives the rows the default back.
+runtraps() { trap 'rc=$?; trap "" HUP QUIT; [ "$rc" = 0 ] || recover; rm -rf "$SCRATCH"; exit $rc' EXIT; trap onsig INT TERM HUP QUIT; trap '' PIPE; }
+supervise() {   # supervise <fn>: run <fn> as the worker, wait; its rc 1 (a FAIL) and 2 (a STOP) are the run's, as before
+  set -m; ( set +m; trap - INT TERM HUP QUIT PIPE; "$1"; exit $? ) & WORKER=$!; set +m
+  wait "$WORKER"; local wrc=$?; [ "$wrc" = 0 ] && return 0
+  workerend   # any other end too: its whole group has ended before the recovery
+  case $wrc in 1|2) exit "$wrc";; *) stop "the run's worker ended rc $wrc";; esac; }
+onsig() { trap '' INT TERM HUP QUIT; [ -z "${WORKER:-}" ] || workerend; stop "interrupted (signal): the recovery runs"; }
+workerend() {   # TERM to the worker's process group, reap the worker, then until the group is empty: KILL at 5 s, 10 s at most
+  local t; kill -TERM -- -"$WORKER" 2>/dev/null; wait "$WORKER" 2>/dev/null
+  for ((t = 1; t <= 20; t++)); do grpleft "$WORKER" || return 0; [ "$t" != 11 ] || kill -KILL -- -"$WORKER" 2>/dev/null; sleep 0.5; done
+  rec "a process of the interrupted run did not end (process group $WORKER)" || true; }
+grpleft() {   # grpleft <pgid>: a process of that group still runs; a zombie does not (an init that never reaps keeps
+  # one, and `kill -0` counts it). Read from /proc with no $(...): it runs while the signals are trapped
+  local g=$1 f s; for f in /proc/[0-9]*/stat; do { read -r s < "$f"; } 2>/dev/null || continue; s=${s##*) }
+    set -- $s; [ "$3" = "$g" ] && [ "$1" != Z ] && return 0; done; return 1; }
+rowgate() { [ -n "$(pst "$$")" ] || exit 2; }   # in the worker, $$ is the main shell: a KILLed one (gone or a zombie) ends the run here
+runall() {   # the run's rows, in the worker
+  local r; for r in R0 R1 M; do rowgate; echo "== ROW $r"; "row_$r"; done
+  for r in $RUN; do rowgate; echo "== ROW $r"; runrow "$r"; done
+  rowgate; echo "== ROW RS"; row_RS; coverage; echo "== RESULT"; restable || stop "RESULT.md: not written"; echo "== ROW RE"; row_RE
+  [ "$MODE" = live ] || selfcheck; }
+
 # The guard's two context flags come only from tx (TXCTX) and the one setter/reader (PCTX), each local to its one call.
 # One inherited from the environment would open the guard: STOP (also before the test-only return below).
 [ -z "${PCTX:-}${TXCTX:-}" ] || stop "PCTX/TXCTX are set in the environment: the guard's context comes only from tx, pset and pread"
@@ -1578,13 +1610,10 @@ else FORMS_OK=${FORMS_OK:-}; FORMS_HEAD=${FORMS_HEAD:-}; [ -n "$FORMS_OK" ] || s
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/rf-proof.XXXXXX") || stop "mktemp"; DRYLOG=$SCRATCH/commands.log; : > "$DRYLOG"
 if [ "$MODE" = dry ]; then OUT=$SCRATCH/out; EVD=$EVDROOT/rf-proof-dry; mkdir -p "$OUT" || stop "scratch"
 else EVD=$EVDROOT/rf-proof-$(date -u +%Y%m%dT%H%M%SZ)-$LANE; OUT=$EVD; fi
-trap 'rc=$?; [ "$rc" = 0 ] || recover; rm -rf "$SCRATCH"; exit $rc' EXIT; trap 'stop "interrupted (signal): the recovery runs"' INT TERM
+runtraps
 
 [ "$MODE" = dry ] || echo "LIVE: this run transmits. It needs the transmit and lab permission and the GO for this run, with the hardware connected, reachable and set up."
-for r in R0 R1 M; do echo "== ROW $r"; "row_$r"; done
-for r in $RUN; do echo "== ROW $r"; runrow "$r"; done
-echo "== ROW RS"; row_RS; coverage; echo "== RESULT"; restable || stop "RESULT.md: not written"; echo "== ROW RE"; row_RE
-[ "$MODE" = live ] || selfcheck
+supervise runall
 trap - EXIT; rm -rf "$SCRATCH"
 if [ "$MODE" = live ] && [ -s "$EVD/FAILED.txt" ]; then echo "FAIL rows, for the coordinator: $(tr '\n' '|' < "$EVD/FAILED.txt")" >&2; exit 1; fi
 echo "DONE ($MODE)"

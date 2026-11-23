@@ -562,6 +562,216 @@ def test_an_interrupt_is_a_stop(tmp_path):
     assert p.returncode == 2 and "STOP: interrupted (signal): the recovery runs" in err, err
 
 
+# ---- the run's supervision: the main shell only waits; a signal ends the worker's whole group before the recovery -------
+# bash 5.2 loses a signal that lands while the shell expands a $(...) (CI testlab 45082540356: "trap: line 2: unexpected EOF",
+# rc 0): the rows run in a worker in its own process group, and the shell that traps the signals only waits.
+
+SUP = ('OPERATOR_CALL=N0CALL; RUN=; BOXES=; export EVD; SCRATCH=$EVD/scratch; mkdir -p "$SCRATCH"; '
+       # stop as the product's, plus which of the run's processes (pids, one per line) are still alive at that moment
+       'stop() { local p; while read -r p; do kill -0 "$p" 2>/dev/null && echo "ALIVE $p" >&2; done < "$EVD/pids"; '
+       'echo "STOP: $*" >&2; exit 2; }; : > "$EVD/pids"; runtraps\n')
+
+
+def supervised(tmp_path, script, name="evd", **popen):
+    """`script` after sourcing rf-proof.sh (as source_only does) and the run's traps (runtraps), as a running process."""
+    evd = tmp_path / name
+    evd.mkdir()
+    prelude = (f'RFPROOF_SOURCE_ONLY=1 . "{HW}/rf-proof.sh"; EVD="{evd}"; OUT=$EVD; MODE=live; : > "$EVD/state.env"; '
+               'export RAN="$EVD/ran"\n')
+    popen.setdefault("stdout", subprocess.PIPE)
+    popen.setdefault("stderr", subprocess.PIPE)
+    p = subprocess.Popen(["bash", "-c", prelude + SUP + script], env=_env(tmp_path), stdin=subprocess.DEVNULL, cwd=evd,
+                         text=True, **popen)
+    return p, evd
+
+
+def until(cond, what, timeout=60.0):
+    """An event: `cond()` turns true (a file the process writes), bounded."""
+    deadline = time.monotonic() + timeout  # wallclock: the bound of a wait for a file the process writes (an event)
+    while not cond():
+        assert time.monotonic() < deadline, f"never happened: {what}"  # wallclock: that bound, never a sync by time
+        time.sleep(0.02)  # wallclock: the poll interval of that event wait
+
+
+def lines_of(path, n):
+    return lambda: path.exists() and len(path.read_text().split()) >= n
+
+
+def cleanup(p, evd):
+    """After an assertion failed too: the process and every child it listed end, so none outlives the test."""
+    if p.poll() is None:
+        p.kill()
+        p.wait(timeout=30)
+    for f in ("pids", "wpid"):
+        for x in ((evd / f).read_text().split() if (evd / f).exists() else ()):
+            if alive(int(x)):
+                os.kill(int(x), 9)
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+# the worker: one background and one FOREGROUND child (each lives until killed), their pids in $EVD/pids
+TWO_CHILDREN = ('w() { tail -f /dev/null & echo $! >> "$EVD/pids"; sh -c \'echo $$ >> "$EVD/pids"; exec tail -f /dev/null\'; }; supervise w\n')
+
+
+def test_the_rows_run_in_their_own_process_group(tmp_path):
+    # red-before (ff8712b5): the rows ran in the main shell itself, the shell whose INT/TERM trap bash 5.2 can lose
+    p = subprocess.Popen(["bash", str(HW / "rf-proof.sh"), "dry"], env=_env(tmp_path), stdin=subprocess.DEVNULL, cwd=tmp_path,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    for line in p.stdout:
+        if line.startswith("== ROW R1"):
+            break
+    leaders = []
+    for d in Path("/proc").iterdir():
+        try:
+            f = (d / "stat").read_text().rsplit(")", 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        if d.name.isdigit() and int(f[1]) == p.pid and int(f[2]) == int(d.name):   # a child of the main shell leading its group
+            leaders.append(int(d.name))
+    p.terminate()
+    _, err = p.communicate(timeout=120)
+    assert leaders, "no child of the main shell leads its own process group: the rows run in the main shell"
+    assert p.returncode == 2 and "STOP: interrupted (signal): the recovery runs" in err, err
+
+
+@pytest.mark.parametrize("how", ["TERM", "INT to the group", "HUP", "QUIT"])
+def test_a_signal_ends_the_workers_whole_group_before_the_stop(tmp_path, how):
+    """TERM (a kill), a terminal's Ctrl-C (SIGINT to the main shell's process group), a hangup (a dropped ssh connection) and a
+    Ctrl-\\ are each a STOP, and the run's foreground and background commands have ended BEFORE it (and its recovery)."""
+    p, evd = supervised(tmp_path, TWO_CHILDREN, start_new_session=True)
+    try:
+        until(lines_of(evd / "pids", 2), "the worker's two children")
+        if how == "INT to the group":
+            os.killpg(p.pid, 2)
+        else:
+            p.send_signal({"TERM": 15, "HUP": 1, "QUIT": 3}[how])
+        _, err = p.communicate(timeout=120)
+    finally:
+        cleanup(p, evd)
+    assert p.returncode == 2 and "STOP: interrupted (signal): the recovery runs" in err, err
+    assert "ALIVE" not in err, err
+
+
+def test_a_command_that_ignores_term_is_killed_before_the_stop(tmp_path):
+    p, evd = supervised(tmp_path, 'w() { bash -c \'trap "" TERM; echo $$ >> "$EVD/pids"; exec tail -f /dev/null\'; }; supervise w\n')
+    try:
+        until(lines_of(evd / "pids", 1), "the worker's child")
+        p.terminate()
+        _, err = p.communicate(timeout=120)
+    finally:
+        cleanup(p, evd)
+    assert p.returncode == 2 and "STOP: interrupted (signal): the recovery runs" in err and "ALIVE" not in err, err
+
+
+JOURNAL = ': > "$EVD/undo.done"; printf "u1\\tPC\\ttouch \\"\\$RAN\\"\\n" > "$EVD/undo.list"; echo 1 > "$EVD/undo.seq"; '
+
+
+def test_a_fail_in_the_worker_is_the_runs_fail_and_the_recovery_runs(tmp_path):
+    # G1 row 214 F1: R0, M, RS and RE call fail()/eq() in the run itself; that is exit 1 + the recovery, never a STOP
+    p, evd = supervised(tmp_path, JOURNAL + 'w() { fail "a row-level FAIL"; }; supervise w\n')
+    _, err = p.communicate(timeout=120)
+    assert p.returncode == 1 and "FAIL: a row-level FAIL" in err and "STOP:" not in err, err
+    assert (evd / "ran").exists() and (evd / "undo.done").read_text() == "u1\n", err
+    assert (evd / "RESULT.md").exists(), err
+
+
+def test_a_worker_killed_alone_leaves_no_command_running_into_the_recovery(tmp_path):
+    # G1 row 214 F2: the worker's foreground child outlives a kill of the worker alone
+    p, evd = supervised(tmp_path, 'w() { echo $BASHPID > "$EVD/wpid"; sh -c \'echo $$ >> "$EVD/pids"; exec tail -f /dev/null\'; }; supervise w\n')
+    try:
+        until(lines_of(evd / "pids", 1), "the worker's foreground child")
+        os.kill(int((evd / "wpid").read_text()), 15)
+        _, err = p.communicate(timeout=120)
+    finally:
+        cleanup(p, evd)
+    assert p.returncode == 2 and "STOP: the run's worker ended rc 143" in err and "ALIVE" not in err, err
+
+
+def test_the_workers_end_is_the_runs(tmp_path):
+    p, evd = supervised(tmp_path, 'w() { tail -f /dev/null & echo $! >> "$EVD/pids"; exit 2; }; supervise w\n')
+    try:
+        _, err = p.communicate(timeout=120)
+        left = [int(x) for x in (evd / "pids").read_text().split()]
+    finally:
+        cleanup(p, evd)
+    assert p.returncode == 2 and "STOP:" not in err and not [x for x in left if alive(x)], err   # its group ended (n1)
+    p, _ = supervised(tmp_path, 'w() { return 0; }; supervise w; echo AFTER\n', name="ok")
+    out, err = p.communicate(timeout=120)
+    assert p.returncode == 0 and out.strip().endswith("AFTER"), err
+    p, _ = supervised(tmp_path, 'w() { exit 3; }; supervise w\n', name="rc3")
+    _, err = p.communicate(timeout=120)
+    assert p.returncode == 2 and "STOP: the run's worker ended rc 3" in err, err
+
+
+@pytest.mark.wallclock("the worker's rows are paced (0.1 s) so the KILL lands between two rowgates; its end is its pid")
+def test_a_killed_main_shell_ends_the_worker_at_its_next_row(tmp_path):
+    # a KILL of the main shell (no trap, no recovery): today the row in flight ended and nothing started after it
+    p, evd = supervised(tmp_path, 'w() { local i; for ((i = 0; i < 600; i++)); do rowgate; echo $BASHPID > "$EVD/wpid"; '
+                                  'sleep 0.1; done; }; supervise w\n')
+    try:
+        until(lines_of(evd / "wpid", 1), "the worker's first row")
+        worker = int((evd / "wpid").read_text())
+        p.kill()                       # not reaped yet: a zombie main shell is a gone one too
+        until(lambda: not alive(worker), "the worker ending at its next rowgate", timeout=20)
+    finally:
+        cleanup(p, evd)
+
+
+def test_the_recovery_reads_the_boxes_r0_kept(tmp_path):
+    r, _ = source_only(tmp_path, 'OPERATOR_CALL=N0CALL; RUN=; keep BOXES H; BOXES="H Z"; : > "$EVD/undo.list"; '
+                                 'verify_set() { echo "VERIFY $BOXES"; }; recover')
+    assert "VERIFY H" in r.stdout and "VERIFY H Z" not in r.stdout, r.stdout + r.stderr
+
+
+def test_the_recovery_runs_to_its_end_on_a_console_that_went_away(tmp_path):
+    # OPEN-1: `... 2>&1 | tee <log>` and a Ctrl-C that also ends tee: the next write raised SIGPIPE and ended the shell
+    # before its recovery (rc 141 through rf-proof.sh dry on ff8712b5); stdout AND stderr here are a pipe nobody reads
+    r_fd, w_fd = os.pipe()
+    os.close(r_fd)
+    try:
+        p, evd = supervised(tmp_path, JOURNAL + 'w() { exit 2; }; supervise w\n', stdout=w_fd, stderr=w_fd)
+    finally:
+        os.close(w_fd)
+    p.wait(timeout=120)
+    assert p.returncode == 2
+    assert (evd / "ran").exists() and (evd / "undo.done").read_text() == "u1\n" and (evd / "RESULT.md").exists()
+
+
+def test_the_rows_keep_the_default_sigpipe(tmp_path):
+    p, _ = supervised(tmp_path, 'w() { yes | head -n 1 >/dev/null; echo "YES-RC ${PIPESTATUS[0]}"; }; supervise w\n')
+    out, err = p.communicate(timeout=120)
+    assert "YES-RC 141" in out, out + err
+
+
+@pytest.mark.wallclock("the recovery's first undo polls (0.1 s) for the release file the test writes after the signals")
+@pytest.mark.parametrize("end, rc", [("exit 2", 2), ("exit 1", 1)], ids=["after-a-stop", "after-a-fail"])
+def test_a_hangup_or_ctrl_backslash_does_not_cut_a_started_recovery(tmp_path, end, rc):
+    # G1 row 215 F3: HUP/QUIT stayed caught during the recovery: an ssh drop there skipped the remaining undos and RESULT.md
+    journal = (': > "$EVD/undo.done"; echo 2 > "$EVD/undo.seq"; '
+               'printf "u1\\tPC\\ttouch \\"\\$RAN.done\\"\\n" > "$EVD/undo.list"; '
+               'printf "u2\\tPC\\ttouch \\"\\$RAN.started\\"; i=0; until [ -e \\"\\$RAN.release\\" ] || [ \\$i -ge 600 ]; '
+               'do sleep 0.1; i=\\$((i + 1)); done\\n" >> "$EVD/undo.list"; ')
+    p, evd = supervised(tmp_path, journal + f'w() {{ {end}; }}; supervise w\n')
+    try:
+        until((evd / "ran.started").exists, "the recovery's first undo")   # the recovery has started ...
+        p.send_signal(1)                                                    # ... then the hangup and the Ctrl-\
+        p.send_signal(3)
+        (evd / "ran.release").touch()                                       # ... then its undo may finish
+        _, err = p.communicate(timeout=120)
+    finally:
+        (evd / "ran.release").touch()                                       # never leave the undo waiting
+        cleanup(p, evd)
+    assert p.returncode == rc, err
+    assert (evd / "ran.done").exists() and sorted((evd / "undo.done").read_text().split()) == ["u1", "u2"], err
+    assert (evd / "RESULT.md").exists(), err
+
 def test_the_dry_gate_check_flags_a_tx_without_its_command_at_the_end(tmp_path):
     # red-before (cd825a69): a TX as the last log line passed "every-send-gated" (no END check)
     r, _ = source_only(tmp_path, f'. "{HW}/zstatus.sh"; MODE=dry; SCRATCH=$EVD; DRYLOG=$EVD/drylog; OPERATOR_CALL=N0CALL; '
