@@ -3,7 +3,9 @@
 One node per box, owned by the radio it was started on; each further radio is a member: its saved `member_of` (the one
 durable intent), its `[[LoRa <rid>]]` section in the node's config (B3), attached live through the node's own RPC
 (`rnstatus --attach/--detach/--reload`) and verified in `rnstatus -j`, then its ownership record on the owner's process
-(`member_of` in the record; never signalled, lifecycle.py). Every write of the node file and every rnstatus call runs
+(`member_of` in the record, written before the attach; never signalled, lifecycle.py). Every way out of the node — a
+Stop, a failed attach, a twice-refused reload, a failed Connect — is `teardown`, which removes the block and the record
+only once the node no longer lists the interface (or the node is gone). Every write of the node file and every rnstatus call runs
 under the node lock (NODE_LOCK, the key every owner start and stop holds), so one member's block never interleaves
 with an owner start's whole-file render.
 """
@@ -125,8 +127,8 @@ def _save_intent(svc, rid: str, owner: str) -> None:
 
 def attach(svc, owner: str, rid: str) -> str:
     """Bring `rid` up as a member of the running node on `owner` (its intent already saved): render its block, check it,
-    write it, `--attach`, verify in `-j`, then its member record. "" = connected, else why — and nothing is left behind
-    but the intent (the block removed, no record)."""
+    write it, its member record, `--attach`, verify in `-j`. "" = connected, else why — the block and the record go
+    through `teardown` (kept, the card "Not connected", while the node cannot confirm the interface is gone)."""
     own = owner_record(svc)
     if own is None or own.get("rid") != owner:
         return f"the Reticulum node on {owner} is not running"
@@ -138,19 +140,37 @@ def attach(svc, owner: str, rid: str) -> str:
     if why:
         return why
     _write_block(svc, rid, block)
+    if not _one_record(svc, own, owner, rid):
+        return _left("the member's ownership record could not be written", teardown(svc, rid, clear_intent=False))
     res = rnstatus(svc, "--attach", reticulum_node.name(rid))
-    if res.returncode != 0 or rid not in (listed(svc) or set()):
-        _write_block(svc, rid, "")
-        return f"the node did not attach {reticulum_node.name(rid)}: {(res.stdout or res.stderr or '').strip()}".rstrip(": ")
+    if res.returncode == 0 and rid in (listed(svc) or set()):
+        return ""
+    why = f"the node did not attach {reticulum_node.name(rid)}: {(res.stdout or res.stderr or '').strip()}".rstrip(": ")
+    return _left(why, teardown(svc, rid, clear_intent=False))
+
+
+def _one_record(svc, own, owner: str, rid: str) -> bool:
+    """`rid`'s one member record on the running owner's process (plan v25 §9.2): one of that process (pid + starttime) is
+    kept, one of any other process removed first, one written only when none is left. False = it could not be written."""
+    life = svc._lifecycle()
+    mine = False
+    for rec in [r for r in life.owned_records(NODE_ID, role=None, rid=rid) if r.get(instances.MEMBER_OF)]:
+        if (rec.get("pid"), rec.get("starttime")) == (own.get("pid"), own.get("starttime")):
+            mine = True
+        else:
+            life._remove_record(rec)
+    if mine:
+        return True
     band = next((r.band for r in instances.radios.load(svc._paths).radios if r.id == rid), "")
     ident = procident.proc_identity(own["pid"])
-    stk = svc.stack(STACK_ID)
-    if ident is None or ident.get("starttime") != own.get("starttime") or not svc._lifecycle().record_launch(
-            stk, _comp(svc), own["pid"], band=band, ident=ident, extra={"rid": rid, instances.MEMBER_OF: owner}):
-        rnstatus(svc, "--detach", reticulum_node.name(rid))
-        _write_block(svc, rid, "")
-        return "the member's ownership record could not be written"
-    return ""
+    return ident is not None and ident.get("starttime") == own.get("starttime") and life.record_launch(
+        svc.stack(STACK_ID), _comp(svc), own["pid"], band=band, ident=ident,
+        extra={"rid": rid, instances.MEMBER_OF: owner})
+
+
+def _left(why: str, kept: str) -> str:
+    """A failure's text, with why its block and record stay (`teardown`'s refusal) when they do."""
+    return f"{why}; {kept} — it stays tracked" if kept else why
 
 
 def reconcile(svc, owner: str, deadline: float) -> list[tuple[str, str]]:
@@ -241,7 +261,8 @@ def panel_refusal(svc, rid: str, section: dict) -> tuple[str, bool]:
 
 def reload(svc, rid: str) -> str:
     """After a member's saved settings: its section re-rendered and reloaded (`--reload`, verified in `-j`); refused ->
-    the previous section back and reloaded; that fails too -> its record removed (not connected). "" = reloaded, else
+    the previous section back and reloaded; that fails too -> `teardown` (not connected; block and record stay while
+    the node cannot confirm the interface is gone). "" = reloaded, else
     what happened (the saved settings stand: they passed the check, a failure here is the node's)."""
     owner = instances.member_of(svc, STACK_ID, rid)
     old = reticulum_node.section_text(_node_file(svc).read_text(), rid)
@@ -258,9 +279,9 @@ def reload(svc, rid: str) -> str:
         return ""
     if not (second := _round(old)):
         return f"the node refused the new settings ({first}); the previous section is back and attached"
-    if (rec := member_record(svc, rid)) is not None:
-        svc._lifecycle()._remove_record(rec)
-    return f"not connected: the node refused the new settings ({first}), and the previous ones too ({second})"
+    why = f"not connected: the node refused the new settings ({first}), and the previous ones too ({second})"
+    kept = teardown(svc, rid, clear_intent=False)
+    return _left(why, kept) if kept else f"{why}; {reticulum_node.name(rid)} detached"
 
 
 def after_save(svc, target: str, inst) -> list[str]:

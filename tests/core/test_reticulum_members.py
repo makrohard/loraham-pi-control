@@ -229,6 +229,8 @@ def test_a_live_members_settings_are_checked_first_and_reloaded_live(box):
     box.node.refuse_reload = {"LoRa r1"}
     res = box.svc.save_config("reticulum", {"file_frequency": "434100000"}, inst=r1)
     assert res.ok and "not connected: the node refused the new settings" in "\n".join(res.details)
+    # red-before (ea51424b): only the record goes, the refused interface is never detached (plan v25 §9.2)
+    assert ("--detach", "LoRa r1") in box.node.calls and "LoRa r1 detached" in "\n".join(res.details)
     assert _member(box, "r1") == [] and _intent(box, "r1") == "r2"
 
 
@@ -430,3 +432,31 @@ def test_a_member_of_a_node_that_is_gone_is_removed_without_asking_it(box):
     # red-before (ea51424b): the dead node is asked (`-j`, `--detach`) for a member it can no longer hold
     assert res.ok and box.node.calls[calls:] == []
     assert (_member(box, "r1"), _intent(box, "r1")) == ([], "")
+
+
+def test_an_attach_the_node_does_not_confirm_is_detached_and_stays_tracked(box, capsys):
+    _owner_up(box)
+    box.node.j_down_after = {"--attach"}                            # attached (rc 0), then `-j` no longer answers
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 1
+    out = capsys.readouterr().out
+    # red-before (ea51424b): the block removed without a --detach, no record, the intent dropped: r1 abandoned live
+    assert "did not attach LoRa r1" in out and "it stays tracked" in out, out
+    assert ("--detach", "LoRa r1") in box.node.calls
+    assert (_sections(box), len(_member(box, "r1")), _intent(box, "r1")) == (["[[LoRa r2]]", "[[LoRa r1]]"], 1, "r2")
+    box.node.j_down, box.node.j_down_after = False, set()           # the node answers again: its [Connect] ...
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0, capsys.readouterr()
+    assert len(_member(box, "r1")) == 1                             # ... keeps the one record (plan v25 §9.2)
+    assert box.svc.stop("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r1")[0]).ok   # Remove
+    assert (_sections(box), _member(box, "r1"), _intent(box, "r1")) == (["[[LoRa r2]]"], [], "")
+
+
+def test_a_reload_the_node_does_not_confirm_keeps_the_member_record(box):
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    r1 = instances.copy_of(box.svc, "reticulum", "r1")[0]
+    box.node.j_down = True                                          # both reloads rc 0, neither confirmed
+    res = box.svc.save_config("reticulum", {"file_frequency": "434100000"}, inst=r1)
+    text = "\n".join(res.details)
+    # red-before (ea51424b): the record removed although the interface may run (both reloads succeeded)
+    assert res.ok and "not connected: the node refused the new settings" in text and "it stays tracked" in text, text
+    assert len(_member(box, "r1")) == 1 and _intent(box, "r1") == "r2"
