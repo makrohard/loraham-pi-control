@@ -1,5 +1,5 @@
-# MeshChat's Python dependencies — EVERY transitive package, frozen from the exact venv proven in
-# the LHPC integration run (aarch64, Python 3.13.5). Pinning only the five direct requirements
+# MeshChat's Python dependencies — EVERY transitive package but rns (see below), frozen from the
+# exact venv proven in the LHPC integration run (aarch64, Python 3.13.5). Pinning only the five direct requirements
 # left 13 packages — cryptography, pyserial, multidict, yarl, cffi and the rest — free to move,
 # so a rebuild six months from now would not reproduce what was measured. `cx_freeze` is
 # deliberately absent: upstream needs it only to build desktop binaries.
@@ -9,10 +9,10 @@
 # upstream's own REQUIREMENT STRINGS, not bare package names: `peewee` bare resolves to 4.x while
 # MeshChat declares `peewee>=3.18.1,<4.0.0`.
 #
-# rns matches the `rns` component's pin (Reticulum 1.5.5), which OWNS the shared instance this
-# client attaches to: the build installs the node's own wheel first and holds pip to it
-# (.venv/lhpc-rns-constraint.txt), so rns never comes from an index. This line must name that
-# wheel's version, or the build fails; re-check it at every bump of the node.
+# rns is not listed: the `rns` component OWNS the shared instance this client attaches to, and the
+# build installs the node's own wheel first and holds pip to it (.venv/lhpc-rns-constraint.txt,
+# written by rns-wheel.sh from the rns pin), so rns never comes from an index. A version line here
+# could only go stale when that pin moves.
 aiohappyeyeballs==2.7.1
 aiohttp==3.14.3
 aiosignal==1.4.0
@@ -27,6 +27,5 @@ peewee==3.19.0
 propcache==0.5.2
 pycparser==3.0
 pyserial==3.5
-rns==1.5.5
 websockets==17.1
 yarl==1.24.5
