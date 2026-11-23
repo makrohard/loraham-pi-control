@@ -603,18 +603,11 @@ def test_a_member_stop_with_the_owners_meshchat_up_detaches_and_checks_no_client
     assert not [d for d in res.details if "[kept]" in d] and _member(box, "r1") == []
 
 
-@pytest.mark.parametrize("other, want", [(None, [("868", "r4")]), ("kiss", [])])
-def test_a_member_stop_releases_its_daemon_band_unless_another_stack_needs_it(box, monkeypatch, other, want):
-    # red-before (e14cf5be): own_ok False (the owner's MeshChat on 8790), so the release was never asked: daemon@r4 stayed
-    # up (R-P6, by ps). G1 row 242: a stack still on r4's daemon keeps it. The daemon's own stop is recorded, not run.
+def _release_spy(monkeypatch, other=None):
+    """The daemon's own stop recorded, not run: [(band, rid)]; the daemon reachable, `other` a stack on r4's daemon."""
     import types
 
-    from lhpc.core import reticulum_members
     from lhpc.core.service_base import ActionResult
-    _owner_up(box)
-    reticulum_members._save_intent(box.svc, "r4", "r2")
-    assert reticulum_members.attach(box.svc, "r2", "r4") == ""
-    _owners_meshchat_up(box)
     released, real_stop, real_insts = [], ControllerService.stop, instances.running_insts
 
     def stop(self, target, apply=False, *a, **kw):
@@ -627,18 +620,87 @@ def test_a_member_stop_releases_its_daemon_band_unless_another_stack_needs_it(bo
     monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, sid, bands=None: [other] if other else [])
     monkeypatch.setattr(instances, "running_insts", lambda svc, d: [types.SimpleNamespace(rid="r4")] if d == other
                         else real_insts(svc, d))
-    real_live = instances.live                     # the node runs on the daemon backend, as R-P6's did (this box's owner is spi)
-    monkeypatch.setattr(instances, "live", lambda svc, stack, comp: {"daemon"} if stack.id == "reticulum"
-                        else real_live(svc, stack, comp))
+    return released
+
+
+@pytest.mark.parametrize("other, want", [(None, [("868", "r4")]), ("kiss", [])])
+def test_a_daemon_member_of_an_spi_node_releases_its_daemon_band_unless_another_stack_needs_it(box, monkeypatch, other,
+                                                                                                want):
+    # red-before (e14cf5be): own_ok False (the owner's MeshChat on 8790), the release never asked (R-P6, by ps);
+    # (bcc00c75, GAP-A): the release read the node's running backend, the spi owner's: no daemon dependency, nothing.
+    # G1 row 242: a stack still on r4's daemon keeps it.
+    from lhpc.core import reticulum_members
+    _owner_up(box)
+    reticulum_members._save_intent(box.svc, "r4", "r2")
+    assert reticulum_members.attach(box.svc, "r2", "r4") == ""
+    _owners_meshchat_up(box)
+    released = _release_spy(monkeypatch, other)
     res = _stop(box, "r4")
     assert res.ok, res.summary + "\n".join(res.details)
     assert released == want
 
 
+def test_an_spi_members_stop_releases_no_daemon_band(box, monkeypatch):
+    # Part 3: an instance releases by its own radio's backend; r1 runs spi
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    released = _release_spy(monkeypatch)
+    res = _stop(box, "r1")
+    assert res.ok and released == [], (res.details, released)
+
+
+def _node_bytes(box):
+    return (box.root / "state" / "reticulum" / "config").read_bytes()
+
+
+def test_a_never_joined_radios_stop_while_the_node_runs_elsewhere_leaves_as_a_member(box):
+    # red-before (bcc00c75, GAP-B): the generic path met the owner's MeshChat on 8790: not verified, every time
+    owner = _owner_up(box)
+    _owners_meshchat_up(box)
+    node, calls = _node_bytes(box), len(box.node.calls)
+    res = _stop(box, "r1")
+    assert res.ok, res.summary + "\n".join(res.details)
+    assert [(r.component, r.summary) for r in res.results] == [
+        ("rns", "r1 removed from the Reticulum node (it was not connected)")]
+    assert owner.poll() is None and _node_bytes(box) == node and ("--detach", "LoRa r1") not in box.node.calls[calls:]
+
+
+def test_a_left_radios_stop_again_leaves_as_a_member(box):
+    # red-before (bcc00c75, GAP-B): after its leave r1 is no member: its second Stop took the generic path, not verified
+    owner = _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    _owners_meshchat_up(box)
+    assert _stop(box, "r1").ok
+    res = _stop(box, "r1")
+    assert res.ok and [r.component for r in res.results] == ["rns"] and owner.poll() is None, res.details
+
+
+def test_with_no_node_running_a_radios_stop_is_the_generic_one(box):
+    res = _stop(box, "r1")
+    assert {r.component for r in res.results} == {"rns", "sideband", "meshchat", "lxmd", "nomadnet"}, res.details
+    assert not [r for r in res.results if "Reticulum node" in r.summary]
+
+
+def test_a_radio_with_its_own_stand_alone_node_record_keeps_the_generic_stop(box, monkeypatch):
+    # reti N1 (a25 v4 N1): a non-member rns record under r1 (an earlier node there) is never a silent "removed"
+    _owner_up(box)
+    real = Lifecycle.owned_records
+
+    def records(self, comp_id, band=None, role="", rid=None):
+        if comp_id == "rns" and rid == "r1":
+            return [{"component": "rns", "rid": "r1", "pid": 1}]
+        return real(self, comp_id, band=band, role=role, rid=rid)
+    monkeypatch.setattr(Lifecycle, "owned_records", records)
+    res = _stop(box, "r1", apply=False)
+    assert [d for d in res.details if d.startswith("  [stop] ")] == [
+        "  [stop] rns", "  [stop] sideband", "  [stop] meshchat", "  [stop] lxmd", "  [stop] nomadnet"], res.details
+    assert not [d for d in res.details if "from the Reticulum node" in d], res.details
+
+
 def test_a_failed_leave_retried_never_touches_the_owners_node(box, monkeypatch):
-    # G1 row 242: the leave's teardown succeeds, its other own component (a record under r1) does not verify; r1 is then
-    # no member (record and intent gone), so its retry is an ordinary stop: it signals none of the owner's processes and
-    # leaves the owner's records (its MeshChat endpoint check still reads the owner's 8790, as any non-member's stop does)
+    # G1 row 242: the leave's teardown succeeds, its other own component (a record under r1) does not verify; the retry
+    # (r1 no member any more, the node on r2) leaves as a member: verified, rns alone, none of the owner's processes
+    # signalled, its records kept
     from lhpc.core.outcomes import CompResult
     owner = _owner_up(box)
     assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
@@ -661,8 +723,11 @@ def test_a_failed_leave_retried_never_touches_the_owners_node(box, monkeypatch):
     owners = real_recs(box.svc._lifecycle(), "rns", role=None, rid="r2")
     first = _stop(box, "r1")
     assert not first.ok and [r.component for r in first.results] == ["rns", "meshchat"], first.details
+    again = _stop(box, "r1")                       # the record still there: never abandoned, its stop reports again
+    assert not again.ok and [r.component for r in again.results] == ["rns", "meshchat"], again.details
     stale["on"] = False
-    _stop(box, "r1")
+    retry = _stop(box, "r1")                       # Part 4: a radio outside the running node leaves as a member
+    assert retry.ok and [r.component for r in retry.results] == ["rns"], retry.details
     assert owner.poll() is None and real_recs(box.svc._lifecycle(), "rns", role=None, rid="r2") == owners
 
 

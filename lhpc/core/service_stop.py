@@ -83,12 +83,14 @@ class StopOpsMixin:
         for the daemon stack itself or a non-daemon-dependent stack. A band-switchable client (KISS/
         Voice) thus releases only the band it ran on, never both."""
         daemon_sid = next((s.id for s in self.stacks() if s.main == self.DAEMON_ID), None)
-        stk = instances.stack_as(self, stk, instances.live)          # B1 note C3: the backends it runs with
+        rid = getattr(inst, "rid", "")      # K8f D3 B5: an instance's client releases its radio's daemon, by ITS backend
+        stk = instances.stack_as(self, stk, (lambda s, st, c: {instances.backend_of(s, st.id, c, rid)}) if rid
+                                 else instances.live)                 # B1 note C3: else the backends it runs with
         if stk is None or not daemon_sid or sid == daemon_sid:
             return daemon_sid or "", []
         if not any(self.DAEMON_ID in (c.depends_on or ()) for c in stk.components):
             return daemon_sid, []
-        release, rid = [], getattr(inst, "rid", "")      # K8f D3 B5: an instance's client releases its radio's daemon
+        release = []
         for b in sorted(bb for bb in active_bands if bb in known_bands.ALL):
             others = [d for d in self.stop_dependents(daemon_sid, bands={b}) if d not in exclude and ((d != sid and not rid) or (rid and (
                 (ri := instances.running_insts(self, d)) is None or any(getattr(i, "rid", "") == rid for i in ri if d != sid))))]
@@ -225,8 +227,10 @@ class StopOpsMixin:
         _rid = getattr(inst, "rid", "") or ""
         # B5: a node member's stop detaches it (never a signal: its process is the owner's); the owner's ends the node's
         # memberships after its verified cessation (below)
-        _member = bool(_rid) and self.stack_of(target) == _ri.STACK_ID and bool(
-            instances.member_of(self, _ri.STACK_ID, _rid) or _rm.member_record(self, _rid))
+        _member = bool(_rid) and self.stack_of(target) == _ri.STACK_ID and bool(    # or no node record of its own (the
+            instances.member_of(self, _ri.STACK_ID, _rid) or _rm.member_record(self, _rid)   # owner's, an earlier node's)
+            or (_rm.owner_record(self) is not None and not [                  # while the node runs on another radio
+                r for r in life.owned_records(_ri.NODE_ID, role=None, rid=_rid) if not r.get(instances.MEMBER_OF)]))
         _owner = not _member and self.stack_of(target) == _ri.STACK_ID and (_o := _rm.owner_record(self)) is not None \
             and _o.get("rid") == _rid
         # a member's whole-stack Stop: what its start ran (rns) + its own records, never the owner's clients (MeshChat)
