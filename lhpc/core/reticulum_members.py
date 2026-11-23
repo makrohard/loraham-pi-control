@@ -221,8 +221,9 @@ def end_node(svc, owner: str, intents: bool = True) -> None:
         life._remove_record(rec)
     if not intents:
         return
-    for m in instances.node_members(svc, STACK_ID, owner):
-        update_stack_config(svc._paths, STACK_ID, {instances.MEMBER_OF: ""}, inst=commands.Instance(m.rid))
+    for r in instances.radios.load(svc._paths).radios:          # every radio, not only the ones eligible now (G2 F3)
+        if r.id != owner and instances.member_of(svc, STACK_ID, r.id) == owner:
+            update_stack_config(svc._paths, STACK_ID, {instances.MEMBER_OF: ""}, inst=commands.Instance(r.id))
     svc._invalidate_config()
 
 

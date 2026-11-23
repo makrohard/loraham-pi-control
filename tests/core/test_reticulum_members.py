@@ -5,6 +5,7 @@ signals; the owner's Stop ends the memberships; every owner start reconciles the
 settings are checked first and reloaded live. The node's RPC is a fake (`Node`); its processes are real sleeps."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 import os
@@ -460,3 +461,13 @@ def test_a_reload_the_node_does_not_confirm_keeps_the_member_record(box):
     # red-before (ea51424b): the record removed although the interface may run (both reloads succeeded)
     assert res.ok and "not connected: the node refused the new settings" in text and "it stays tracked" in text, text
     assert len(_member(box, "r1")) == 1 and _intent(box, "r1") == "r2"
+
+
+def test_the_owners_stop_clears_the_intent_of_a_radio_that_may_not_start_now(box):
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    radios_fixture.write(box.root, tuple(dataclasses.replace(r, enabled=False) if r.id == "r1" else r
+                                         for r in (*radios_fixture.RADIOS, PINE)))   # r1 disabled after its Connect
+    res = box.svc.stop("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r2")[0])
+    # red-before (ea51424b): r1 keeps member_of = "r2" (not eligible, not cleared): its own start refused for good
+    assert res.ok and _intent(box, "r1") == ""
