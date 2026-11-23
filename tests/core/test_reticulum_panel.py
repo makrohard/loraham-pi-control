@@ -185,36 +185,35 @@ def test_the_owners_panel_save_is_checked_first_and_marks_the_node_restart_requi
 # ---- the radio's POWER (plan RETI-POWER v2) ---------------------------------------------------------------------------
 
 def test_the_radios_power_reaches_reticulums_panel_and_section_at_most_its_band_cap(tmp_path):
-    svc = _svc(tmp_path, _row_dp("r3", POWER="2"))
-    # red-before (93419bfe): 10 in both — the profile's band value over the radio's POWER 2 (live proof R-P1, r3)
-    assert (_rows(svc, "r3")["POWER"]["value"], _section(tmp_path, svc, "r3")["txpower"]) == ("2", "2")
-    svc = _svc(tmp_path, _row_dp("r1", POWER="14"))
-    assert (_rows(svc, "r1")["POWER"]["value"], _section(tmp_path, svc, "r1")["txpower"]) == ("10", "10")
+    svc = _svc(tmp_path, _row_dp("r4", POWER="2"))
+    # red-before (93419bfe): 14 in both — the profile's band value over the radio's POWER 2 (live proof R-P1 case,
+    # on 868: Reticulum runs on 868 only)
+    assert (_rows(svc, "r4")["POWER"]["value"], _section(tmp_path, svc, "r4")["txpower"]) == ("2", "2")
     svc = _svc(tmp_path, _row_dp("r2", POWER="17"))
     assert (_rows(svc, "r2")["POWER"]["value"], _section(tmp_path, svc, "r2")["txpower"]) == ("14", "14")
-    svc = _svc(tmp_path, _row_dp("r3", POWER="2"))
-    assert svc.save_daemon_params("reticulum", {"POWER": "5"}, rid="r3").ok          # its own set wins over the row
-    assert (_rows(svc, "r3")["POWER"]["value"], _section(tmp_path, svc, "r3")["txpower"]) == ("5", "5")
+    svc = _svc(tmp_path, _row_dp("r4", POWER="2"))
+    assert svc.save_daemon_params("reticulum", {"POWER": "5"}, rid="r4").ok          # its own set wins over the row
+    assert (_rows(svc, "r4")["POWER"]["value"], _section(tmp_path, svc, "r4")["txpower"]) == ("5", "5")
 
 
 def test_saving_the_radios_power_stores_none_so_reticulum_follows_the_radio(tmp_path):
-    svc = _svc(tmp_path, _row_dp("r3", POWER="2"))
-    assert svc.save_daemon_params("reticulum", {"POWER": "2", "SF": "9"}, rid="r3").ok
-    assert "POWER" not in radio_start.instance_dp(svc, "reticulum", "r3")
-    radios_fixture.write(tmp_path, _row_dp("r3", POWER="5"))
-    assert (_rows(svc, "r3")["POWER"]["value"], _section(tmp_path, svc, "r3")["txpower"]) == ("5", "5")
+    svc = _svc(tmp_path, _row_dp("r4", POWER="2"))
+    assert svc.save_daemon_params("reticulum", {"POWER": "2", "SF": "9"}, rid="r4").ok
+    assert "POWER" not in radio_start.instance_dp(svc, "reticulum", "r4")
+    radios_fixture.write(tmp_path, _row_dp("r4", POWER="5"))
+    assert (_rows(svc, "r4")["POWER"]["value"], _section(tmp_path, svc, "r4")["txpower"]) == ("5", "5")
 
 
 def test_a_save_while_the_node_runs_compares_the_section_it_renders(tmp_path, monkeypatch):
     from lhpc.core import reticulum_members
-    svc, seen = _svc(tmp_path, _row_dp("r3", POWER="2")), []
+    svc, seen = _svc(tmp_path, _row_dp("r4", POWER="2")), []
     monkeypatch.setattr(reticulum_members, "check", lambda s, rid, block: seen.append(block) or "")
-    monkeypatch.setattr(reticulum_members, "owner_record", lambda s: {"rid": "r3", "node_owner": True})
-    assert svc.save_daemon_params("reticulum", {"SF": "8", "POWER": "2"}, rid="r3").ok          # = what it renders
-    assert seen == [] and svc.restart_required("reticulum@r3") is None
-    assert svc.save_daemon_params("reticulum", {"SF": "9"}, rid="r3").ok
-    # red-before (inherited POWER without the would-be merge): dp_POWER too, the checked section at 10
-    assert svc.restart_required("reticulum@r3")["params"] == ["dp_SF"]
+    monkeypatch.setattr(reticulum_members, "owner_record", lambda s: {"rid": "r4", "node_owner": True})
+    assert svc.save_daemon_params("reticulum", {"SF": "8", "POWER": "2"}, rid="r4").ok          # = what it renders
+    assert seen == [] and svc.restart_required("reticulum@r4") is None
+    assert svc.save_daemon_params("reticulum", {"SF": "9"}, rid="r4").ok
+    # red-before (inherited POWER without the would-be merge): dp_POWER too, the checked section at 14
+    assert svc.restart_required("reticulum@r4")["params"] == ["dp_SF"]
     assert len(seen) == 1 and re.search(r"^\s*txpower = 2$", seen[0], re.M)
 
 
