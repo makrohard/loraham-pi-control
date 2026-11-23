@@ -262,6 +262,28 @@ def test_graywolf_reports_the_fetched_version_with_or_without_a_v():
     assert not check({"commit": "b589e68"})
 
 
+# graywolf: its page, not only its version API (a 200 with the right /api/version proves the API server alone)
+GRAYWOLF_SHELL = b'<!doctype html><html lang="en"><head><title>graywolf</title></head><body><div id="app"></div></body></html>'
+VERSION = json.dumps({"version": "0.14.14", "commit": "b589e68"}).encode()
+
+
+def test_graywolf_with_its_own_page_and_the_fetched_version_passes(lab, served):
+    url, log = served({"/": [(200, GRAYWOLF_SHELL)], "/api/version": [(200, VERSION)]})
+    rel.assert_graywolf_web_ui(lab["env"], url, "0.14.14", timeout=0)
+    assert log == ["/", "/api/version"]
+
+
+@pytest.mark.parametrize("page", [b"", b"<html><head><title>Sign in</title></head><body><form></form></body></html>",
+                                  b"<html><head><title>Welcome to nginx!</title></head></html>"],
+                         ids=["empty", "sign-in", "unrelated"])
+def test_graywolf_with_the_right_version_but_not_its_page_fails(lab, served, page):
+    # red-before (ca275287): the graywolf call passed no page, so each of these passed on its /api/version alone
+    url, _log = served({"/": [(200, page)], "/api/version": [(200, VERSION)]})
+    with pytest.raises(AssertionError) as exc:
+        rel.assert_graywolf_web_ui(lab["env"], url, "0.14.14", timeout=0)
+    assert "served a page without '<title>graywolf</title>'" in str(exc.value), exc.value
+
+
 # --- the constants come from the files the lane serves or fetches -------------------------------------------
 
 

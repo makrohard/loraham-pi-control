@@ -24,6 +24,7 @@ from lhpc_testlab.release import (
     REPEATER_DASHBOARD,
     REPEATER_DASHBOARD_TITLE,
     alive,
+    assert_graywolf_web_ui,
     assert_plugin_manager_running,
     assert_web_ui,
     binaries_at_the_pins,
@@ -46,7 +47,6 @@ from lhpc_testlab.release import (
     stack_regression,
     start_component,
     stop,
-    version_is,
     wait_for,
     wait_tcp,
 )
@@ -184,8 +184,7 @@ def test_release_graywolf(env, svc):
     install_build(env, svc, "graywolf")
     _start(env, "graywolf", timeout=900)
     _owner, argv = fetch_argv("graywolf-fetch.sh")
-    assert_web_ui(env, "graywolf", "graywolf", f"http://127.0.0.1:{port_of(env, 'graywolf', GRAYWOLF_UI)}/",
-                  timeout=120, api=("/api/version", version_is(argv[3])))
+    assert_graywolf_web_ui(env, f"http://127.0.0.1:{port_of(env, 'graywolf', GRAYWOLF_UI)}/", argv[3], timeout=120)
     assert alive(env, "graywolf"), readiness_failed(
         env, "graywolf", "graywolf", "LHPC does not report graywolf running")
     stop(env, "graywolf")

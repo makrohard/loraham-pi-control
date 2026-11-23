@@ -1077,6 +1077,9 @@ def assert_web_ui(env: dict, stack: str, component: str, url: str, *, timeout: f
 MESHCORE_WEBUI_TITLE = "<title>MeshCore</title>"
 MESHCHAT_TITLE = "<title>Reticulum MeshChat</title>"
 REPEATER_DASHBOARD_TITLE = "<title>Repeater Dashboard</title>"
+# graywolf's SPA shell (web/index.html at the fetched pin v0.14.14, embedded in the release binary; served at "/"
+# without a login: pkg/app/wiring.go:1621,1633-1659).
+GRAYWOLF_TITLE = "<title>graywolf</title>"
 
 
 def meshcore_webui_healthy(doc: dict) -> bool:
@@ -1099,6 +1102,13 @@ def version_is(want: str):
     """A predicate for graywolf's public `/api/version`: the version the manifest fetched (an
     upstream release build may report it with a leading `v`)."""
     return lambda doc: str(doc.get("version", "")).removeprefix("v") == want
+
+
+def assert_graywolf_web_ui(env: dict, url: str, version: str, *, timeout: float) -> None:
+    """graywolf's web UI runs: its own page at `url` and its public `/api/version` reporting `version`
+    (the right version alone proves the API server, not the page)."""
+    assert_web_ui(env, "graywolf", "graywolf", url, timeout=timeout, page=GRAYWOLF_TITLE,
+                  api=("/api/version", version_is(version)))
 
 
 def fetch_argv(script: str) -> tuple:
