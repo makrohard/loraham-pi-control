@@ -162,7 +162,7 @@ def attach(svc, owner: str, rid: str) -> str:
     else:
         why = f"the node attached {name} but does not list it"
     kept = teardown(svc, rid, clear_intent=False)
-    return _left(why, kept) if kept or now is not None else f"{why}; {name} detached again"
+    return _left(why, kept) if kept or now is not None else f"{why}; {name} is gone from the node"
 
 
 def _one_record(svc, own, owner: str, rid: str) -> bool:

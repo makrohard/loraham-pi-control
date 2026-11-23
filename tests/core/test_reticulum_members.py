@@ -505,12 +505,24 @@ def test_a_remove_takes_every_member_record_of_the_radio(box):
     assert _member(box, "r1") == []
 
 
-def test_an_attach_the_node_confirms_only_after_its_teardown_says_detached_again(box, capsys):
+def test_an_attach_the_node_confirms_only_after_its_teardown_says_it_is_gone(box, capsys):
     _owner_up(box)
     box.node.j_miss_after = {"--attach": 1}                        # attached (rc 0), the verifying `-j` unanswered once
     assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 1
     out = capsys.readouterr().out
     # red-before (a8c5bd67): "did not attach" although the attach succeeded (row 220 B1)
-    assert "not connected: the node attached LoRa r1 but does not answer whether it runs; LoRa r1 detached again" in out
+    # a25 F220 N1: "is gone from the node" (the teardown's own `-j` may answer without it: no --detach needed)
+    assert "not connected: the node attached LoRa r1 but does not answer whether it runs; LoRa r1 is gone from the node" in out
     assert ("--detach", "LoRa r1") in box.node.calls
     assert (_sections(box), _member(box, "r1"), _intent(box, "r1")) == (["[[LoRa r2]]"], [], "")
+
+
+def test_an_owner_starts_reconcile_says_not_verified_while_its_member_stays_tracked(box, tmp_path):
+    radios_fixture.reticulum_backend(tmp_path, [])                  # (the dir)
+    (tmp_path / "config" / "stacks" / "reticulum@r1.toml").write_text('backend = "spi"\nmember_of = "r2"\n')
+    box.node.j_down_after = {"--attach"}                            # the reconcile's attach: rc 0, then `-j` unanswered
+    res = _start(box, "r2")
+    text = "\n".join(res.details)
+    # a25 F220 N2: the reconcile line follows the facts (record kept -> "not verified"), never a fixed "not connected"
+    assert res.ok and "[member] r1: not verified — the node attached LoRa r1 but does not answer whether it runs" in text, text
+    assert len(_member(box, "r1")) == 1 and _intent(box, "r1") == "r2"
