@@ -4028,7 +4028,9 @@ note = "Sideband is provisioned into its own in-root venv by the build. It needs
   purpose = "Browser client for the Reticulum node (LXMF messaging) — a phone or laptop uses the node through it. Client only: it never owns the radio."
   tx_capable = true
   depends_on = ["rns"]
-  # MeshChat keeps its own PyPI set (meshchat-constraints.txt): `status --versions` shows it.
+  build_requires = ["rns"]
+  # MeshChat runs the node's Reticulum wheel, like nomadnet, lxmd and Sideband; its other packages are its own
+  # PyPI set (meshchat-constraints.txt). `status --versions` shows both.
   venv_packages = ["rns", "lxmf"]
   start_order = 2
   show_config_link = true
@@ -4083,8 +4085,19 @@ note = "Sideband is provisioned into its own in-root venv by the build. It needs
   [[stack.component.build_steps]]
   argv = ["python3", "-m", "venv", ".venv"]
   [[stack.component.build_steps]]
-  argv = [".venv/bin/pip", "install", "--disable-pip-version-check", "-c", "{asset}/meshchat-constraints.txt", "aiohttp", "lxmf", "peewee", "rns", "websockets"]
+  # RNS from the node's wheel, as for nomadnet/lxmd/Sideband: no index offers rns here. A Pi's pip.conf adds
+  # piwheels, whose page listed an rns-1.5.5 wheel it served neither as file nor as metadata (404), and pip does not
+  # fall back to PyPI: the MeshChat build failed on every such box.
+  argv = ["bash", "{asset}/scripts/rns-wheel.sh", "install", "{runtime}/src/reticulum/.venv/lhpc-wheel"]
+  announce = "[install] Reticulum from the node's wheel into {source}/.venv"
+  [[stack.component.build_steps]]
+  argv = [".venv/bin/pip", "install", "-c", ".venv/lhpc-rns-constraint.txt", "--disable-pip-version-check", "-c", "{asset}/meshchat-constraints.txt", "aiohttp", "lxmf", "peewee", "rns", "websockets"]
   announce = "[install] MeshChat's dependencies into {source}/.venv — exact pinned versions; pip is quiet off-TTY"
+  [[stack.component.build_steps]]
+  # The -c steps still read pip's configuration, which can move WHERE they install: the venv must still run the
+  # node's wheel, from the venv (rns-wheel.sh check), or the build fails here.
+  argv = ["bash", "{asset}/scripts/rns-wheel.sh", "check", "{runtime}/src/reticulum/.venv/lhpc-wheel"]
+  announce = "[check] {source}/.venv runs the node's Reticulum wheel"
   [[stack.component.build_steps]]
   argv = ["bash", "{asset}/scripts/meshchat-assets.sh", "{asset}/meshchat-dist", "public"]
   announce = "[install] MeshChat's prebuilt browser UI (upstream gitignores it; no npm on the box)"

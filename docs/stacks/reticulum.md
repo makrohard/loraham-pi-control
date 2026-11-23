@@ -140,17 +140,18 @@ attempt it — the component's `proxy_deny_paths`; re-audit that list at every v
 Reading works: the Interfaces page lists what lhpc configured.
 
 The frontend is **shipped prebuilt** as package data (no npm on the box); the backend is installed
-from `meshchat-constraints.txt`, an exact closure re-checked at each bump. Its `rns` and `lxmf` are
-MeshChat's own pins in its own venv (RNS 1.5.4 while the node runs 1.5.5), re-checked against the node's
-shared instance at each bump.
+from `meshchat-constraints.txt`, an exact closure re-checked at each bump. Its `rns` is the node's
+wheel (below); its `lxmf` is MeshChat's own pin in its own venv, re-checked against the node's shared
+instance at each bump.
 
-**Versions.** lxmd, nomadnet and Sideband install RNS from the `src/reticulum` checkout, so they run
+**Versions.** lxmd, nomadnet, Sideband and MeshChat install RNS from the `src/reticulum` checkout, so they run
 the node's Reticulum; a moved pin marks them for a rebuild. They install the wheel the node
 builds from its checkout, and their own installs (and the node's later one) are held to that wheel
 file (a pip configuration may still move where pip installs; the build then fails at the step after
 its final pip install, which checks that the venv runs that wheel from the venv): nomadnet and Sideband take LXMF 1.2.0 from PyPI (1.2.1 needs a newer RNS), and lxmd runs the
 `src/lxmf` checkout (1.2.0).
-MeshChat installs its own pinned LXMF and RNS from `meshchat-constraints.txt`.
+MeshChat installs its own pinned LXMF from `meshchat-constraints.txt` (no index offers it RNS: a Pi's piwheels
+listed an RNS it could not serve, and the build failed).
 `lhpc status --versions` shows each client's `rns`/`lxmf` and names a package that differs.
 
 MeshChat's own **propagation-node** switch (off by default) lives in its SQLite settings and is

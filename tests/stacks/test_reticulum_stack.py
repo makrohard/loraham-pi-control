@@ -47,9 +47,16 @@ def test_only_rns_and_the_driver_are_mandatory():
 
 
 def test_clients_depend_on_the_node_so_they_cannot_own_the_radio():
-    for cid in ("nomadnet", "lxmd", "sideband"):
+    for cid in ("nomadnet", "lxmd", "sideband", "meshchat"):
         assert _comp(cid).depends_on == ("rns",), f"{cid} must depend on rns"
         assert _comp(cid).optional
+
+
+def test_every_client_of_the_node_wheel_builds_after_the_node():
+    # the node's wheel (rns-wheel.sh build) must exist before a client installs it: build_requires orders and locks it
+    for cid in ("nomadnet", "lxmd", "meshchat"):
+        assert _comp(cid).build_requires == ("rns",), cid
+    assert "rns" in _comp("sideband").build_requires
 
 
 def test_radio_is_exclusive_but_the_spi_bus_is_cooperative():
@@ -781,25 +788,26 @@ def test_a_component_without_requires_names_its_own_revision(tmp_path, monkeypat
     svc, built_with = _marker_service(tmp_path)
     # Stubs the collaborator, git: the checkout's HEAD.
     monkeypatch.setattr(svc, "_git_out", lambda argv: (0, "a" * 40 + "\n"))
-    meshchat = _comp("meshchat")
-    sidecar = svc.build_inputs_path(meshchat)
+    comps = {c.id: c for st in load_manifest() for c in st.components}
+    cli = comps["meshcore-cli"]      # its own checkout, no build_requires (MeshChat builds on the node: the client rows below)
+    sidecar = svc.build_inputs_path(cli)
     sidecar.parent.mkdir(parents=True, exist_ok=True)
-    sidecar.write_text(svc.build_inputs_text(meshchat))
-    assert not built_with(meshchat, BUILD_MARKER_TEXT)
-    receipt = svc._consumed_source_lines(meshchat)
-    assert receipt == f"consumed meshchat {'a' * 40}\n"
-    assert built_with(meshchat, BUILD_MARKER_TEXT + receipt)
+    sidecar.write_text(svc.build_inputs_text(cli))
+    assert not built_with(cli, BUILD_MARKER_TEXT)
+    receipt = svc._consumed_source_lines(cli)
+    assert receipt == f"consumed meshcore-cli {'a' * 40}\n"
+    assert built_with(cli, BUILD_MARKER_TEXT + receipt)
     monkeypatch.setattr(svc, "_git_out", lambda argv: (0, "b" * 40 + "\n"))   # it moved
     svc.invalidate_snapshot()
-    assert not svc.is_built(meshchat)
-    comps = {c.id: c for st in load_manifest() for c in st.components}
+    assert not svc.is_built(cli)
     assert svc._consumed_source_lines(comps["graywolf"]) == ""
     assert svc._consumed_source_lines(comps["meshtastic"]) == ""
 
 
 @pytest.mark.parametrize("cid, consumed", [("lxmd", ("lxmd", "rns", "rns-lora-interface")),
                                            ("nomadnet", ("nomadnet", "rns", "rns-lora-interface")),
-                                           ("sideband", ("sideband", "rns-lora-interface", "rns"))])
+                                           ("sideband", ("sideband", "rns-lora-interface", "rns")),
+                                           ("meshchat", ("meshchat", "rns", "rns-lora-interface"))])
 def test_a_client_is_built_only_with_the_receipt_over_its_sources(tmp_path, cid, consumed):
     """The clients install RNS from the rns checkout, and with it the driver rns requires
     (sideband also copies the driver's plugin): the static text alone reads NOT built, the

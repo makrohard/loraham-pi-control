@@ -344,7 +344,7 @@ def _moving_conf(venv_root: Path, index: Path, prefix: Path) -> None:
 
 
 @pytest.mark.slow                # real venvs (ensurepip) and real pip runs
-@pytest.mark.parametrize("comp_id", ["nomadnet", "lxmd", "sideband"])
+@pytest.mark.parametrize("comp_id", ["nomadnet", "lxmd", "sideband", "meshchat"])
 @pytest.mark.parametrize("moved", [True, False], ids=["prefix-moves-the-install", "plain"])
 def test_a_client_whose_venv_no_longer_runs_the_node_wheel_fails_its_build(tmp_path, comp_id, moved):
     """The client's whole sequence as the manifest runs it: the wheel install, the client's own install with `-c` (a
@@ -439,7 +439,8 @@ def _wheel_step(argv: list, mode: str) -> bool:
 
 
 @pytest.mark.parametrize("comp_id, first, wheel", [("rns", "build", NODE_WHEEL), ("nomadnet", "install", CLIENT_WHEEL),
-                                                   ("lxmd", "install", CLIENT_WHEEL), ("sideband", "install", CLIENT_WHEEL)])
+                                                   ("lxmd", "install", CLIENT_WHEEL), ("sideband", "install", CLIENT_WHEEL),
+                                                   ("meshchat", "install", CLIENT_WHEEL)])
 def test_each_component_checks_its_wheel_once_after_its_final_pip_install(comp_id, first, wheel):
     """The whole recipe, not the filtered rns-wheel.sh steps: exactly one `check`, on the same wheel directory the
     component's `build`/`install` step used, placed RIGHT AFTER the last pip install of the component (or that wheel
@@ -453,3 +454,42 @@ def test_each_component_checks_its_wheel_once_after_its_final_pip_install(comp_i
     assert steps[checks[0]][3] == steps[firsts[0]][3] == wheel, steps
     assert checks[0] == max(pips + firsts) + 1, steps
     assert all(_constrained(a) for i, a in enumerate(steps) if _is_pip_install(a) and i > firsts[0]), steps
+
+
+# ---- MESHCHAT-PIWHEELS: an index that lists an rns it cannot serve -------------------------------------------------
+
+def _offers_a_dead_rns(venv_root: Path, index: Path, dead: Path) -> None:
+    """The venv's own pip.conf finds links in `index` and in `dead`, which holds an rns-1.5.5 wheel that is no wheel: a
+    Pi's piwheels listed rns-1.5.5 and answered 404 for the file and its metadata, and pip does not fall back to another
+    index. Both directories come from the configuration (a command-line --find-links would replace it)."""
+    dead.mkdir(parents=True, exist_ok=True)
+    (dead / "rns-1.5.5-py3-none-any.whl").write_bytes(b"404 Not Found\n")
+    (venv_root / ".venv" / "pip.conf").write_text(f"[global]\nfind-links =\n    {index}\n    {dead}\n")
+
+
+@pytest.mark.slow                # real venvs (ensurepip) and real pip runs
+def test_meshchat_builds_on_the_node_wheel_when_an_index_offers_an_rns_it_cannot_serve(tmp_path):
+    """MeshChat's own build steps as the manifest lists them (the venv is made by the test, the browser UI copy is not
+    run), its pip step with its own `-c` options and a stand-in for its packages that requires rns. A pip configuration
+    offers an rns of the node wheel's version that cannot be installed: the build must take rns from the node's wheel and
+    pass. Red before the fix (666d3661): no wheel step, so the pip step resolves rns from the configuration and fails."""
+    wheel_dir = _wheel(tmp_path / "node-wheel", "1.5.5", 'NODE = 1\n__version__ = "1.5.5"\n').parent
+    index = tmp_path / "index"
+    _dist(index, "meshchatlike", "1.0", "rns>=1.5.5")
+    client = _client(tmp_path, "meshchat")
+    _offers_a_dead_rns(client, index, tmp_path / "dead-index")
+    ran = []
+    for argv in _steps("meshchat"):
+        if argv[:3] == ["python3", "-m", "venv"] or argv[1:2] == ["{asset}/scripts/meshchat-assets.sh"]:
+            continue
+        if _wheel_step(argv, "install") or _wheel_step(argv, "check"):
+            r = _run(client, argv[2], str(wheel_dir))
+        else:
+            assert _is_pip_install(argv), argv
+            own = [x for i, a in enumerate(argv[:-1]) if a == "-c" and argv[i + 1].startswith(".venv/")
+                   for x in ("-c", argv[i + 1])]          # its own constraints; the asset one names the real packages
+            r = _pip(client, *own, "meshchatlike", "rns")
+        ran.append(r)
+        assert r.returncode == 0, (argv, r.stdout[-400:], r.stderr[-800:])
+    assert len(ran) == 3, ran                      # wheel install, the pip step, the check
+    assert _installed(client) == ("1.5.5", 'NODE = 1\n__version__ = "1.5.5"\n')
