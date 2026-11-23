@@ -22,8 +22,12 @@ def test_two_radios_are_two_left_aligned_484px_columns(flask_page):
 
 def test_one_radio_is_one_484px_column_on_the_wide_page(flask_page, tmp_path):
     page, _posts = flask_page(path="/")
+    # Leave the page before r3 leaves the hardware list: its column polls /api/daemon/r3 every 3 s, and a poll
+    # landing between the rewrite and a reload is a 404 for a radio that no longer exists (a console error).
+    url = page.url
+    page.goto("about:blank")
     (tmp_path / "config" / "radios.toml").write_text(radios.render((radios.Radio("r1", "low", "loraham", "433"),)))
-    page.reload(wait_until="load")
+    page.goto(url, wait_until="load")
     page.set_viewport_size({"width": 1600, "height": 900})
     g = page.evaluate(_GEO)
     assert [c[:2] for c in g["cards"]] == [[0, 484]] and not g["narrow"] and g["grid"][1] > 900, g
