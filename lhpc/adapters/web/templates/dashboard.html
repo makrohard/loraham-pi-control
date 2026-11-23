@@ -65,9 +65,10 @@
                         {{ cmdbox(box, cmd) }}{% endmacro %}
 {# F32: a stack's licence mark (the manifest's `license`), first in its title, with its meaning on hover #}
 {% macro licence_mark(lic) %}{% if lic == 'ham' %}<span class="lic" role="img" aria-label="Ham stack: amateur licence required" title="Ham stack: amateur licence required">📜</span> {% elif lic == 'free' %}<span class="lic" role="img" aria-label="Free stack, uses encryption: respect local frequency and duty-cycle regulations" title="Free stack, uses encryption: respect local frequency and duty-cycle regulations">✅</span> {% endif %}{% endmacro %}
-{# Home's one nav line "All menus · Home", the first thing after the header #}
+{# Home's one nav line "All menus · Home · Apps", the first thing after the header: Apps is a static link to the Apps
+   page, after the "You are here" nav (which ends at Home, the current page), in the line's " · " style #}
 {% block nav %}
-  <div class="crumbline">{% include "_crumbs_all.html" %}<nav class="crumbs" aria-label="You are here"><h2 class="here">Home</h2></nav></div>
+  <div class="crumbline">{% include "_crumbs_all.html" %}<nav class="crumbs" aria-label="You are here"><h2 class="here">Home</h2></nav><span class="crumbs-sep" aria-hidden="true"> · </span><a href="{{ url_for('stacks_overview') }}">Apps</a></div>
 {% endblock %}
 {% block content %}
   {% include "_task_banner.html" %}

@@ -1,6 +1,6 @@
 """In <main> the first element is the page's
 .crumbline, then its optional second line (p.pagebar), then any notice (the disk notice forced on). Home: "All menus ·
-Home" (Home the h2.here, no link), no second line. Apps: "All menus · Home › Apps", no second line. All menus: one line
+Home · Apps" (Home the h2.here, no link; Apps a static link after the nav), no second line. Apps: "All menus · Home › Apps", no second line. All menus: one line
 "Home › Apps › All menus", no second line. Tree pages: their crumbs + "‹ show in Stacks". Hardware Add / a radio: the
 hardware crumbs + "‹ The radios". Pages outside the tree (Remove radio, Dependency Overview, Auto-install, a job log)
 and the pages with no place (confirmations, error, self-update progress, HMAC apply: "All menus · Home › Apps ›
@@ -37,7 +37,7 @@ def _top(doc, main):
 
 
 @pytest.mark.parametrize("path, crumbs, second", [
-    ("/", ["All menus", "Home"], None),
+    ("/", ["All menus", "Home", "Apps"], None),
     ("/stacks", ["All menus", "Home", "Apps"], None),
     ("/stacks/menus", ["Home", "Apps", "All menus"], None),
     ("/hardware", None, "‹ show in Stacks"),
@@ -97,3 +97,16 @@ def test_exactly_the_pages_with_no_place_use_the_default_nav():
     default = {p.name for p in tdir.glob("*.html") if '{% extends "base.html" %}' in p.read_text() and "block nav" not in p.read_text()}
     assert default == {"confirm.html", "confirm_radio.html", "kill_confirm.html", "power_confirm.html", "network_confirm.html",
                        "webserver_replace_confirm.html", "auto_install_confirm.html", "error.html", "updating.html", "hmac_apply.html"}
+
+
+@pytest.mark.parametrize("query", ["", "?radio=r1"])
+def test_home_links_the_apps_page_after_its_nav_and_no_other_page_gains_it(client, query):
+    doc, main = _main(client, "/" + query)
+    line = doc.within(_top(doc, main)[0])
+    assert " ".join(line.text.split()) == "All menus · Home · Apps"
+    assert [(a.text.strip(), a["href"]) for a in line.find("a")] == [("All menus", "/stacks/menus" + query), ("Apps", "/stacks")]
+    [nav] = line.find("nav", class_="crumbs")
+    assert " ".join(doc.within(nav).text.split()) == "Home" and not doc.within(nav).find("a")   # the nav ends at Home
+    for path, text in (("/stacks", "All menus · Home › Apps"), ("/dependencies", "All menus · Home › Apps › Dependency Overview")):
+        d, m = _main(client, path)
+        assert " ".join(d.within(_top(d, m)[0]).text.split()) == text, path                       # unchanged elsewhere

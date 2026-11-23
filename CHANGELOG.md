@@ -20,6 +20,7 @@
   r1 MeshCom (QEMU) DJ0CHE-11"; the daemon alone: "Running on r1 LoRaHAM daemon"); a stack's title no longer shows it.
 - Home: a box opened or closed in one browser tab is no longer reopened or reclosed by another tab's refresh.
 - Home radio cards: "Start a stack on rN" starts collapsed; the box keeps the viewer's last open/closed choice.
+- Home: the nav line links the Apps page: "All menus · Home · Apps".
 - Every stack verb, `lhpc kill` and the console's Kill name the instance; `--band` is gone (`lhpc config kiss@r2 …`,
   `lhpc rflog daemon@r1`).
 - Daemon parameters per radio (`lhpc config daemon@<rid> --daemon-param`) and per instance (`<stack>@<rid>.toml`,
