@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 
 import pytest
-from lhpc_testlab.testing import LabServer
+from lhpc_testlab.testing import LabServer, unexpected_console_errors
 
 
 def _browser_ready() -> str:
@@ -124,11 +124,13 @@ def seeded_rf_logs(lab):
 @pytest.fixture()
 def flask_page(browser, tmp_path, monkeypatch):
     """A factory: a real Chromium page over the console app itself (no lab), for pages the lab cannot set up. Like
-    `page`, it FAILS the test on any JS console error or page error of a page it opened."""
-    errors: list[str] = []
+    `page`, it FAILS the test on any JS console error or page error of a page it opened, named with its URL, except the
+    ones `allowed_errors` names (`(text substring, URL path regex)` pairs: an error the test itself provokes)."""
+    errors: list[tuple[str, str]] = []
+    allowed: list[tuple[str, str]] = []
 
     def make(*, choices=True, activity=False, path="/hardware/radio/r3", unix_replies=None, api=None, cmdlines=None,
-             listeners=()):
+             listeners=(), allowed_errors=()):
         """A real Chromium page over the console app (no lab): every request of the page is answered by a Flask test
         client on a runtime with a USB radio r3. `unix_replies`: the fake daemon sockets' replies (a radio whose daemon
         answers is up); `api`: {path: JSON} answered in place of the app (a live poll's reply); `cmdlines` and
@@ -183,9 +185,12 @@ def flask_page(browser, tmp_path, monkeypatch):
         context = browser.new_context(viewport={"width": 1280, "height": 900})
         context.route("http://127.0.0.1:9/**", handle)
         page = context.new_page()
-        page.on("console", lambda msg: errors.append(msg.text) if msg.type == "error" else None)
-        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        allowed.extend(allowed_errors)
+        page.on("console", lambda msg: errors.append((msg.text, (msg.location or {}).get("url", "")))
+                if msg.type == "error" else None)
+        page.on("pageerror", lambda exc: errors.append((str(exc), "")))
         page.goto("http://127.0.0.1:9" + path, wait_until="load")
         return page, posts
     yield make
-    assert not errors, f"JS console errors: {errors}"
+    bad = unexpected_console_errors(errors, allowed)
+    assert not bad, f"JS console errors: {bad}"

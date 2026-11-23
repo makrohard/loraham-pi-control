@@ -70,7 +70,8 @@
   }
 
   // Resolves to whether the poll succeeded: an HTTP or network error, an unreadable body or a throw
-  // while rendering is a failure, which the caller answers with the slow interval.
+  // while rendering is a failure, which the caller answers with the slow interval. A 404 resolves to "gone": the
+  // radio is no (enabled) radio of the hardware list any more (app.py _api_radio), so it is never asked again.
   // A card's element ids end in its radio's id. A card without a radio (a stray band) is not polled: the daemon
   // views are per radio (/api/daemon/<rid>), and that card shows its server-rendered state.
   function poll(rid) {
@@ -78,21 +79,16 @@
     // only a page that shows the radio's FREQ / PWR / BW / SF line (Home's Monitor) asks for its values (GET RADIO)
     var q = document.getElementById("rd-freq-" + key) ? "?radio=1" : "";
     return fetch("/api/daemon/" + encodeURIComponent(rid) + q)
-      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+      .then(function (r) {
+        if (r.status === 404) throw GONE;
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
       .then(function (d) {
         if (!d) return;
         cache[key] = { up: !!d.reachable, data: d, at: Date.now() };
         document.dispatchEvent(new CustomEvent("lhpc:daemonstate", { detail: { rid: key, up: !!d.reachable, data: d } }));
-        var badges = Array.prototype.filter.call(document.querySelectorAll(".dbadge[data-rid]"),
-                                                 function (b) { return b.getAttribute("data-rid") === key; });
-        ["rd-badge-", "hw-badge-"].forEach(function (prefix) {
-          var b = document.getElementById(prefix + key);
-          if (b) badges.push(b);
-        });
-        badges.forEach(function (badge) {
-          // hidden only in a closed block (not for a hidden tab: a full page's pill keeps the answer)
-          paint(badge, !badge.classList.contains("dbadge") || !badge.closest("details:not([open])") ? d : null);
-        });
+        paintAll(key, d);
         if (!d.reachable) return;
         var rssi = (d.channel && d.channel.LIVERSSI) || "";
         var meter = document.getElementById("rd-rssi-" + key);
@@ -130,7 +126,31 @@
           if (feed.textContent !== next) feed.textContent = next;
         }
       })
-      .then(function () { return true; }, function () { return false; });
+      .then(function () { return true; }, function (e) { return e === GONE ? "gone" : false; });
+  }
+
+  // Every badge of radio `rid` shows `d`: hidden only in a closed block (not for a hidden tab: a full page's pill
+  // keeps the answer).
+  function paintAll(rid, d) {
+    var badges = Array.prototype.filter.call(document.querySelectorAll(".dbadge[data-rid]"),
+                                             function (b) { return b.getAttribute("data-rid") === rid; });
+    ["rd-badge-", "hw-badge-"].forEach(function (prefix) {
+      var b = document.getElementById(prefix + rid);
+      if (b) badges.push(b);
+    });
+    badges.forEach(function (badge) {
+      paint(badge, !badge.classList.contains("dbadge") || !badge.closest("details:not([open])") ? d : null);
+    });
+  }
+  // A radio that left the hardware list (or was disabled) while the page is open: its badges say so (also after a
+  // block is closed and opened again: recheck paints them from GONE), its poller stops, and its daemon blocks pause
+  // (daemoncfg.js takes the state like a stopped daemon). Its cached answer is dropped.
+  var GONE = { label: "removed \u2014 reload the page", ready: false, reachable: false }, gone = {};
+  function goneRadio(rid) {
+    gone[rid] = true;
+    delete cache[rid];
+    paintAll(rid, GONE);
+    document.dispatchEvent(new CustomEvent("lhpc:daemonstate", { detail: { rid: rid, up: false, data: GONE } }));
   }
 
   // The discipline of taskbanner.js, per radio: no timer while the radio is not eligible, never a second request while
@@ -165,11 +185,12 @@
     }
     r.tick = function () {
       clearTimer();
-      if (r.polling || !eligible(rid)) return;
+      if (gone[rid] || r.polling || !eligible(rid)) return;
       r.polling = true;
       poll(rid).then(function (ok) {
         r.polling = false;
-        schedule(ok ? POLL_MS : ERROR_MS);
+        if (ok === "gone") goneRadio(rid);
+        else schedule(ok ? POLL_MS : ERROR_MS);
       });
     };
     r.recheck = function () {
@@ -181,7 +202,7 @@
   function recheck() {
     if (!document.hidden) {                     // a hidden tab shows nothing: its pills keep their text
       Array.prototype.forEach.call(document.querySelectorAll(".dbadge[data-rid]"), function (b) {
-        var c = window.lhpcDaemonState(b.getAttribute("data-rid"));
+        var rid = b.getAttribute("data-rid"), c = gone[rid] ? { data: GONE } : window.lhpcDaemonState(rid);
         if (!window.lhpcShown(b)) paint(b, null);
         else if (c) paint(b, c.data);           // shown again: a fresh answer, else the request that goes out now
       });

@@ -340,3 +340,12 @@ def make_lab_root(tmp_path, monkeypatch) -> Paths:
     (tmp_path / "logs").mkdir(exist_ok=True)
     (tmp_path / "state" / "testlab" / "enabled").write_text("lab\n")
     return paths
+
+
+def unexpected_console_errors(errors, allowed) -> list[str]:
+    """The browser console errors `errors` (`(text, URL)` pairs) a test did not expect, as "text @ URL": an error is
+    expected only when one `(text substring, URL path regex)` of `allowed` matches BOTH its text and its URL's path."""
+    import re
+    from urllib.parse import urlsplit
+    return [f"{text} @ {url}" if url else text for text, url in errors
+            if not any(want in text and url and re.fullmatch(path, urlsplit(url).path) for want, path in allowed)]
