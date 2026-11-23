@@ -52,6 +52,9 @@ must hear (the kit asks for none; the start is counted as that send: 2 frames, M
 on every radio of the node).
 Row 5's prerequisite (an operator step before the run): save `backend = spi` on the Zero's board radio
 (`lhpc config reticulum@<rid> backend spi`); the product's default is `daemon`, and row 5 stops on it.
+The Reticulum rows' prerequisite on each of their boxes: MeshChat started there once (its first start writes
+`state/meshchat/identity`, which the rows read before their own start); R0 reads it and a row whose box has none is NOT
+RUN with that reason.
 Row 13 opens the node on the owner as row 12 does (one exchange; MeshChat starts once and runs to the row's end), then
 joins the member (`lhpc stack start reticulum@<rid> --join`): the node keeps its pid and start time, the member's
 interface is up and MeshChat answers. One exchange over the member follows with the owner at its minimum (restored after),

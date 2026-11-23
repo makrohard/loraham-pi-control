@@ -327,3 +327,43 @@ def test_a_no_path_box_send_is_not_run_for_that_reason(tmp_path):
     (leg,) = _leg(r, 12, "box -> peer")
     assert leg.endswith(" | NOT RUN: the node had no path to the PC, nothing sent"), leg
     assert _leg(r, 5, "box -> peer")[0].endswith(" | DRY-PASS")
+
+
+# ---- R0's prerequisite of the Reticulum rows: MeshChat's identity on each of their boxes ----------------------------------
+
+NOMCID = "MeshChat has no identity yet (no state/meshchat/identity: it never started there); prerequisite: start MeshChat on it"
+
+
+@pytest.mark.parametrize("lane, box, off, on", [("rns", "H", [13], []), ("rns", "Z", [13], []), ("full", "H", [12], [5]),
+                                                ("full", "Z", [5], [12]), ("rns", "", [], [13])])
+def test_r0_marks_a_reticulum_row_not_run_when_its_box_has_no_meshchat_identity(tmp_path, lane, box, off, on):
+    # red-before (e14cf5be, R-P6 run 3): no such read; row 13 read H's identity before MeshChat's start and stopped on
+    # "no identity" where MeshChat had never run
+    from test_rf_proof_guards import dry
+    r = dry(tmp_path, LANE=lane, DRY_NOMCID=box)
+    assert r.returncode == 0, r.stderr[-1500:]
+    lines = r.stdout.splitlines()
+    r0 = r.stdout.split("== ROW R0", 1)[1].split("== ROW R1", 1)[0].splitlines()
+    reads = sorted(ln.split(":")[0].strip() for ln in r0 if "-mcid.txt: " in ln)
+    assert reads == ["[dry] H > R0-H-mcid.txt", "[dry] Z > R0-Z-mcid.txt"], reads  # each Reticulum box once (row 13: H twice)
+    for row in off:
+        legs = [ln for ln in lines if ln.startswith(f"REPORT | {row} | ")]
+        assert legs and all(ln.endswith(f" | NOT RUN: box {box}: {NOMCID} once before the run (the row reads its LXMF "
+                                         "address before its start)") for ln in legs), legs
+        assert not any(f"> {row}-" in ln for ln in lines), row                     # the row ran no box command
+    for row in on:
+        assert any(ln.startswith(f"REPORT | {row} | ") and ln.endswith(" | DRY-PASS") for ln in lines), row
+
+
+def test_the_meshchat_identity_read_needs_a_non_empty_file(tmp_path):
+    root = tmp_path / "rt"
+    mc = root / "state" / "meshchat"
+    mc.mkdir(parents=True)
+    cmd = _sourced(tmp_path, 'printf "%s" "$MCID"').stdout.replace("{RT}", str(root))
+    got = []
+    for content in (None, b"", b"\x01" * 64):
+        if content is not None:
+            (mc / "identity").write_bytes(content)
+        r = subprocess.run(["bash", "-c", cmd], stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30, check=False)
+        got.append((r.returncode, r.stdout))
+    assert got == [(0, "MCID none\n"), (0, "MCID none\n"), (0, "MCID yes\n")]

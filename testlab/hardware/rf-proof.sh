@@ -174,6 +174,9 @@ while not b.endswith(b"\n") and len(b) < 4096:
 print(b.decode().strip())'
 # MCHASH_PY: the LXMF delivery address of the box's MeshChat, read only from its identity file (the manifest runs MeshChat with
 # --storage-dir {runtime}/state/meshchat and no --identity-file: its identity is <storage>/identity); prints the hash only
+# MCID: R0's prerequisite read of the Reticulum rows' boxes (read only): MeshChat's identity exists (it is written at MeshChat's
+# first start; the rows read the address from it before their start, since the PC must hear that start's announce)
+MCID='test -s {RT}/state/meshchat/identity && echo "MCID yes" || echo "MCID none"'
 MCHASH_PY='import sys, RNS; i = RNS.Identity.from_file(sys.argv[1]); assert i, "no identity"; print("LXMF", RNS.Destination.hash(i, "lxmf", "delivery").hex())'
 CPORT_PY='import sys; from lhpc.core import instances; from lhpc.core.services import ControllerService; s = ControllerService(); sid, inst, _b, why = instances.resolve(s, sys.argv[1]); print("WHY", why or "-"); [print("CPORT", e.address.rsplit(":", 1)[1]) for c in (s.stack(sid).components if inst is not None else ()) for t, e in zip(c.endpoints, instances.endpoints_for(c.endpoints, inst)) if t.kind == "tcp" and t.address.endswith(":5000")]; life = s._lifecycle(); [print("OWNED", r.get("pgid")) for r in (life.owned_records("meshcore-node", rid=inst.rid) if inst is not None else []) if life.verify_owned(r)[0]]; [print("OTHER", c) for c in ("meshcore-webui", "meshcore-cli") for r in (life.owned_records(c, rid=inst.rid) if inst is not None else []) if life.verify_owned(r)[0]]'
 RADIOS_PY='from lhpc.core import paths, radios; s = radios.load(paths.resolve_paths()); print("STATE", s.kind); [print("ROW", r.id, r.model, r.band, r.enabled, "serial=" + r.usb_serial, "port=" + r.usb_port, "hp=" + str(r.high_power)) for r in s.radios]'
@@ -603,6 +606,7 @@ dryradios() { local v="DRY_RADIOS_$1"; printf '%s\n' "${!v:-STATE valid}"; }
 dryout() { local w=$1 f=$2 c=$3; : > "$OUT/$f"
   case "$c" in *"$RADIOS_PY"*) dryradios "$w" > "$OUT/$f";; *"$STATUS_PY"*) drystatus "$w" "${c##* }" > "$OUT/$f";;
     *"$CPORT_PY"*) [ -z "${DRY_MC_OTHER:-}" ] || echo "OTHER $DRY_MC_OTHER" > "$OUT/$f";;
+    *'echo "MCID none"'*) case " ${DRY_NOMCID:-} " in *" $w "*) echo "MCID none";; *) echo "MCID yes";; esac > "$OUT/$f";;   # DRY_NOMCID=<box>...
     *"$MCHASH_PY"*) echo "LXMF ${DRY_MCHASH:-00112233445566778899aabbccddeeff}" > "$OUT/$f";; esac; }   # another MeshCore client
 frame() { echo "FRAME | $1 | $2"; drylog "FRAME $1 $2"; }
 dryframes() {   # dryframes <where> <command> <stdin>: the FRAME of a send form, from the command alone (never from a tx)
@@ -889,8 +893,9 @@ row_R0() {
     ord=$(body "R0-$b-status.txt" | ordkeys $keys) || stop "R0 $b: an instance key's stack has no status header ($keys)"
     keep "RUN_$b" "$ord"; data "R0 $b: running instances: '${ord}'"
   done
-  local r e ep k o why devs= rdevs= pr pk bud held wv i w; declare -A SUM=()
+  local r e ep k o why devs= rdevs= pr pk bud held wv i w; declare -A SUM=() MCOK=()
   for r in $RUN; do why=; for ep in $(reps "$r"); do case "$ep" in -) continue;; esac
+      case "$(rowname "$r")" in reticulum*) [ "${ep%%:*}" = peer ] || mcid "${ep%%:*}" || why="${why}box ${ep%%:*}: MeshChat has no identity yet (no state/meshchat/identity: it never started there); prerequisite: start MeshChat on it once before the run (the row reads its LXMF address before its start); ";; esac
       if [ "${ep%%:*}" = peer ]; then peerok "${ep#*:}"; o=$PK; [ -z "$o" ] || why="$why$o; "
         k="PEER_${ep#*:}"; read -r pk pr _ <<< "${!k:-}"; [ -n "$o" ] || [[ "$pr" == *:*:* ]] || devs="$devs $(shq "/dev/serial/by-id/$pr")"
         [ -n "$o" ] || [ "$pk" != rnode ] || rdevs="$rdevs /dev/serial/by-id/$pr "   # the Reticulum rows' RNode: the PC's rnsd holds it (hpower)
@@ -907,6 +912,10 @@ row_R0() {
     ! grep '^HELD ' "$OUT/R0-peer-ports.txt" | grep -q ' rnsd-shared$' || data "R0: the RNode's port is held by rnsd alone (the shared RNode of the Reticulum rows)"; }; }
   for pr in $(printf '%s\n' "${!SUM[@]}" | sort); do say "BUDGET | $pr | ${SUM[$pr]} | $TXMAX"; done
   for pr in "${!SUM[@]}"; do [ "${SUM[$pr]}" -le $TXMAX ] || stop "budget $pr: ${SUM[$pr]} of $TXMAX"; done; }
+mcid() {   # mcid <box>: R0's MCID read of that box, once per box (MCOK, R0's own): rc 0 = MeshChat's identity exists
+  if [ -z "${MCOK[$1]:-}" ]; then must "$1" "R0-$1-mcid.txt" "$MCID"
+    case "$(body "R0-$1-mcid.txt" | tail -n 1)" in "MCID yes") MCOK[$1]=yes;; "MCID none") MCOK[$1]=no;; *) stop "R0 $1: MeshChat's identity check unreadable (R0-$1-mcid.txt)";; esac; fi
+  [ "${MCOK[$1]}" = yes ]; }
 heldports() {   # heldports <PORTS_PY capture> "<the RNode ports, each with a space either side>": the HELD lines that STOP, joined
   # by '|'. The RNode's port held only by this user's rnsd running RNS_CONFIG (rnsd-shared) is the shared setup the Reticulum rows need
   # (hpower then checks that rnsd); any other or extra holder, and any holder of another peer's port, STOPs.
