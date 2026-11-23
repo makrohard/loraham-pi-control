@@ -6,6 +6,8 @@ next claims it. Each case names its own evidence; none of them is a log grep.
 """
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -31,7 +33,9 @@ from lhpc_testlab.release import (
     assert_web_ui,
     binaries_at_the_pins,
     binaries_installed,
+    busy_case_wrong,
     fetch_argv,
+    file_mark,
     gui_startable,
     inherits,
     install_build,
@@ -41,12 +45,14 @@ from lhpc_testlab.release import (
     plugin_manager_markers,
     plugin_manager_pids,
     pty_readiness,
+    read_since,
     readiness_failed,
     require_all_passed,
     require_prerequisite,
     required_release_cases,
     reticulum_peers_snapshot,
     rnstatus_lists_interface,
+    set_lab_flags,
     stack_regression,
     start_component,
     start_log_tails,
@@ -407,6 +413,29 @@ def test_release_reticulum(env, svc):
     assert rnstatus_lists_interface(out, iface), (
         f"{stack_regression('reticulum', 'readiness')}\n"
         f"rnstatus does not list this instance's interface [{iface}]:\n{out[-1500:]}")
+    # A busy channel, before lxmd / MeshChat / Sideband start (their announces would add TX lines): the lab's
+    # fake daemon refuses the next framed 868 TX once and flags the OK as a send after a CAD timeout; one
+    # Reticulum TX (a path request for an unknown destination) must then be logged as the interface logs it.
+    # Reticulum runs on 868 radios only. Logs are read from marks taken here, not by their mtime.
+    rflog = root / "logs" / iface.split(" ", 1)[1] / "rf-reticulum.log"
+    txlog = root / "state" / "testlab" / "tx.jsonl"
+    marks = {p: file_mark(p) for p in (rflog, txlog, *(root / "logs").glob("start-*.log"))}
+    wrong = "the busy-channel check did not run"
+
+    def _busy_try_logged():
+        nonlocal wrong
+        tx = [json.loads(line) for line in read_since(txlog, marks[txlog]).splitlines() if line.strip()]
+        node = "".join(read_since(p, marks.get(p, 0)) for p in sorted((root / "logs").glob("start-*.log")))
+        wrong = busy_case_wrong(tx, read_since(rflog, marks[rflog]), node)
+        return not wrong
+    set_lab_flags(env, txbusy_868=1, txcadtimeout_868=True)
+    try:
+        subprocess.run([str(rnstatus.with_name("rnpath")), "--config", str(root / "state" / "reticulum"),
+                        "-w", "8", os.urandom(16).hex()], capture_output=True, text=True, timeout=60, check=False)
+        wait_for(_busy_try_logged, 30, every=1.0)
+    finally:
+        set_lab_flags(env, txbusy_868=0, txcadtimeout_868=False)      # re-read before lxmd starts
+    assert not wrong, f"{stack_regression('reticulum', 'readiness')}\nbusy channel: {wrong}"
     # Optional components of this stack: not started by the stack, so started by name.
     start_component(env, "lxmd", stack="reticulum")
     assert alive(env, "lxmd"), readiness_failed(env, "reticulum", "lxmd", "lxmd did not come up")

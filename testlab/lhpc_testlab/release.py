@@ -763,6 +763,69 @@ def pty_readiness(command: str, env: dict, expect: str, *, ready_timeout: float 
 _RNS_PEERS = ("rns", "lxmd", "meshchat", "sideband")
 
 
+SCENARIO_REREAD_S = 1.0    # s: the lab's fake daemon re-reads scenario.json at most every 0.8 s (+ margin)
+RF_LOG_OUTCOMES = ("ok", "ok-cad-timeout", "unconfirmed")    # the daemon interface's TX outcomes (rnsif v0.4.1)
+
+
+def set_lab_flags(env: dict, **flags) -> None:
+    """Merge `flags` into the lab scenario (state/testlab/scenario.json) and wait until the fake daemon has
+    re-read it: its next TX answers from the new flags (it reads at most every 0.8 s)."""
+    from lhpc.core import runtime_fs
+    from lhpc.core.paths import Paths
+    from lhpc_testlab import scenarios
+    paths = Paths(runtime_root=Path(env["LHPC_RUNTIME_ROOT"]))
+    rec = scenarios.load(paths)
+    rec["flags"] = {**rec.get("flags", {}), **flags}
+    runtime_fs.atomic_write(paths, scenarios.scenario_path(paths), json.dumps(rec, indent=1), 0o600)
+    time.sleep(SCENARIO_REREAD_S)
+
+
+def file_mark(path: Path) -> int:
+    """The size of a log now (0 when absent): `read_since` reads what was appended after it."""
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def read_since(path: Path, mark: int) -> str:
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(mark)
+            return fh.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+_RF_TX = re.compile(r" TX rssi=\S+ snr=\S+ len=(?P<len>\d+) outcome=(?P<outcome>\S+) ")
+_REFUSED_LINE = re.compile(r" sent \d+ bytes after (\d+) refused tries \(channel-busy (\d+), busy (\d+), not-ready (\d+);")
+
+
+def busy_case_wrong(tx_records: list, rf_text: str, node_text: str, band: str = "868") -> str:
+    """'' when ONE Reticulum packet met the lab's one busy try as the daemon interface must log it, else what is
+    missing: the fake daemon refused one framed TX of `band` (tx.jsonl, CHANNEL_BUSY) and sent the next of the
+    same length (OK); the RF log has no TX line for the refused try (every outcome is one of RF_LOG_OUTCOMES) and
+    ONE line of that length, ok-cad-timeout; the node log names the refusal once (channel-busy 1, the rest 0)."""
+    recs = [r for r in tx_records if r.get("band") == band]
+    refused = [i for i, r in enumerate(recs) if r.get("result") == "CHANNEL_BUSY"]
+    if len(refused) != 1:
+        return f"tx.jsonl pair: the fake daemon refused {len(refused)} TXs on {band}, not 1"
+    size = recs[refused[0]]["len"]
+    sent = next((r for r in recs[refused[0] + 1:] if r.get("result") == "OK"), None)
+    if sent is None or sent["len"] != size:
+        return f"tx.jsonl pair: no OK of len {size} after the refused try ({recs[refused[0]:][:4]})"
+    lines = [(int(m["len"]), m["outcome"]) for m in map(_RF_TX.search, rf_text.splitlines()) if m]
+    odd = [o for _, o in lines if o not in RF_LOG_OUTCOMES]
+    if odd:
+        return f"RF line: TX line(s) with outcome {odd} (a refused try writes none)"
+    if [o for n, o in lines if n == size] != ["ok-cad-timeout"]:
+        return f"RF line: the TX lines of len {size} are {[o for n, o in lines if n == size]}, not one ok-cad-timeout"
+    counts = [m.groups() for m in map(_REFUSED_LINE.search, node_text.splitlines()) if m]
+    if counts != [("1", "1", "0", "0")]:
+        return f"node line: not one 'after 1 refused tries (channel-busy 1, busy 0, not-ready 0; …)' (found {counts})"
+    return ""
+
+
 def rnstatus_lists_interface(out: str, name: str) -> bool:
     """Whether rnstatus output `out` lists the interface named `name`: both LoRa interface classes print
     themselves as `<class>[<name>]` (rns-lora-interface daemon.py / interface.py `__str__`), so the
