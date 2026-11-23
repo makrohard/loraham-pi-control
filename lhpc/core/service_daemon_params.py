@@ -7,7 +7,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from . import daemon_control, radio_start, runtime_fs
+from . import daemon_control, known_bands, radio_start, runtime_fs
 from .paths import PathContainmentError
 from .service_base import ActionResult
 from .snapshot_memo import invalidates_snapshot
@@ -113,7 +113,7 @@ class DaemonParamsMixin:
 
     def _one_rid(self, band: str, rid: str = "") -> str:
         """`rid`, else `band`'s one enabled radio, else "" (the per-band console entries, carried over W409aa)."""
-        t = radio_start.band_rid(self, band) if not rid and band in daemon_control.ALLOWED_BANDS else None
+        t = radio_start.band_rid(self, band) if not rid and band in known_bands.ALL else None
         return rid or (t.rid if t is not None and t.outcome == "proceed" else "")
 
     @invalidates_snapshot
@@ -216,7 +216,7 @@ class DaemonParamsMixin:
         FLOOR so `daemon_feed` returns nothing until fresh activity is appended. Non-destructive — the
         append-only daemon log (and its logs view) is untouched. Best-effort; a failure is swallowed so
         it can never break a start/stop. Called at every start (daemon OR any stack) and daemon stop."""
-        if not daemon_control.is_valid_band(band):
+        if not known_bands.is_known(band):
             return
         for r in [rid] if rid else radio_start.band_rids(self._paths, band) or [""]:   # item 16: each radio's window
             p = self._daemon_feed_source(band, r)

@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
+from . import known_bands
 from . import radios as radios_mod
 from .paths import PathContainmentError
 
@@ -22,7 +23,6 @@ BUSY_DELAYS_S = (2.5, 5.0, 10.0)             # A:308
 SPI_VERIFY_S = 4.0                           # A:301
 DAEMON_BINARY = "loraham_daemon"
 _RID = re.compile(r"r[1-9][0-9]?")
-_BANDS = ("433", "868")
 
 
 class Tri(str, Enum):
@@ -118,11 +118,11 @@ def parse_daemon_proc(pid: int, argv) -> DaemonProc:
     ids, bands = _option(argv, "--id"), _option(argv, "--radio")
     if ids:
         if len(ids) == 1 and _RID.fullmatch(ids[0]):
-            return DaemonProc(pid, "id", rid=ids[0], band=bands[0] if len(bands) == 1 and bands[0] in _BANDS else "")
+            return DaemonProc(pid, "id", rid=ids[0], band=bands[0] if len(bands) == 1 and known_bands.is_known(bands[0]) else "")
         return DaemonProc(pid, "unknown", reason=f"--id {ids!r} is not exactly one radio id")
-    if len(bands) == 1 and bands[0] in _BANDS:
+    if len(bands) == 1 and known_bands.is_known(bands[0]):
         return DaemonProc(pid, "no-id", band=bands[0])
-    return DaemonProc(pid, "unknown", reason=f"neither --id nor one --radio 433|868 ({bands!r})")
+    return DaemonProc(pid, "unknown", reason=f"neither --id nor one --radio {'|'.join(known_bands.ALL)} ({bands!r})")
 
 
 def _option(argv, name):
@@ -400,8 +400,8 @@ def resolve_target(state, models, can_run, *, rid=None, band=None, running=(), f
         if band_given and r.band != band:
             return _refuse(f"{rid} is on {r.band} MHz, not {band} MHz")
         return Target("proceed", rid, "", (rid,))
-    if band_given and band not in _BANDS:
-        return _refuse(f"{band!r} is not 433 or 868")
+    if band_given and not known_bands.is_known(band):
+        return _refuse(f"{band!r} is not {' or '.join(known_bands.ALL)}")
     scope = [r for r in _order(state.radios) if r.enabled and (not band_given or r.band == band)]
     cands = []
     for r in scope:

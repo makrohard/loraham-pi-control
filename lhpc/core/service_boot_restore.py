@@ -20,9 +20,8 @@ import os
 import time
 from pathlib import Path
 
-from . import boot_restore, instances, radios, updater_units
+from . import boot_restore, instances, known_bands, radios, updater_units
 from .boot_restore import Evidence, StackMeta
-from .daemon_control import ALLOWED_BANDS
 from .lifecycle import current_boot_id
 from .outcomes import Outcome, manual_required_only
 from .paths import PathContainmentError
@@ -560,7 +559,7 @@ class BootRestoreOpsMixin:
 
     def _boot_run_daemon_item(self, journal, item) -> None:
         from . import radio_start
-        recorded, rid = [b for b in item.get("bands", []) if b in ALLOWED_BANDS], item.get("rid", "")
+        recorded, rid = [b for b in item.get("bands", []) if b in known_bands.ALL], item.get("rid", "")
         kept, _owners = self._daemon_arbitrated_bands("")
         served, why = (set(self._daemon_claimed_bands()), "") if not rid else boot_restore.daemon_served(
             radio_start._daemon_procs(self), rid, recorded)

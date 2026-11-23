@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 
+from lhpc.core import known_bands
 from lhpc.core.service_base import ActionResult
 from lhpc.core.services import ControllerService
 
@@ -266,11 +267,11 @@ class DemoService(ControllerService):
     #     (`bands`) so it persists through localStorage like the rest of the demo state. -----
     def _dbands(self) -> set:
         raw = self._d("daemon").get("bands")
-        return {b for b in raw if b in ("433", "868")} if isinstance(raw, list) else set()
+        return {b for b in raw if b in known_bands.ALL} if isinstance(raw, list) else set()
 
     def _set_dbands(self, bands) -> None:
         d = self._d("daemon")
-        d["bands"] = sorted(b for b in bands if b in ("433", "868"))
+        d["bands"] = sorted(b for b in bands if b in known_bands.ALL)
         d["running"] = bool(d["bands"])          # daemon stack row reflects "any band up"
 
     def _req_band(self, k) -> str:
@@ -279,7 +280,7 @@ class DemoService(ControllerService):
         from lhpc.core import radios
         b = str((k or {}).get("band") or "")
         rid = getattr((k or {}).get("inst"), "rid", "") or ""
-        return b if b in ("433", "868") else next((r.band for r in radios.load(self._paths).radios
+        return b if b in known_bands.ALL else next((r.band for r in radios.load(self._paths).radios
                                                   if rid and r.id == rid), "")
 
     def _daemon_start_bands(self, k) -> list:
@@ -287,16 +288,16 @@ class DemoService(ControllerService):
         every configured radio-mode band (a bandless start serves the whole configured set —
         matching real dual/single mode), falling back to both."""
         b = self._req_band(k)
-        if b in ("433", "868"):
+        if b in known_bands.ALL:
             return [b]
         try:
-            bands = [x for x in self.active_bands() if x in ("433", "868")]
+            bands = [x for x in self.active_bands() if x in known_bands.ALL]
         except Exception:
             bands = []
-        return bands or ["433", "868"]
+        return bands or list(known_bands.ALL)
 
     def _daemon_up_on(self, band: str) -> bool:
-        if band not in ("433", "868"):
+        if band not in known_bands.ALL:
             return False
         if band in self._dbands():
             return True
@@ -675,7 +676,7 @@ class DemoService(ControllerService):
         a time). A band-SWITCHABLE stack occupies the band it was STARTED with (persisted in the
         model); otherwise the main component's declared band. '' for band-less stacks."""
         rb = self._d(sid).get("band")               # the band this stack was started on
-        if rb in ("433", "868"):
+        if rb in known_bands.ALL:
             return rb
         mc = getattr(self.stack(sid), "main_component", None) if self.stack(sid) else None
         if mc is None:
@@ -693,7 +694,7 @@ class DemoService(ControllerService):
         band our lifecycle used (else graywolf shows under 433 while the daemon is up on 868)."""
         d = self._d(self._sid(stack_id))
         rb = d.get("band")
-        return {rb} if (d.get("running") and rb in ("433", "868")) else set()
+        return {rb} if (d.get("running") and rb in known_bands.ALL) else set()
 
     def _band_owners(self, sid, band=None) -> list:
         """Running stacks that COMPETE for `band` (default: the target's band) — the ones a
@@ -784,7 +785,7 @@ class DemoService(ControllerService):
         away: every band-stack for the daemon (it owns the whole radio), else the TRANSITIVE
         closure of dependents (a dependent's own dependents lose their indirect provider too)."""
         if sid == "daemon":
-            return self._running_on_bands(("433", "868"))
+            return self._running_on_bands(known_bands.ALL)
         out, seen, frontier = [], {sid}, [sid]
         while frontier:
             for dep in self._dependents(frontier.pop()):
@@ -839,7 +840,7 @@ class DemoService(ControllerService):
                                                          bool((k or {}).get("stop_owners")))
         if err:
             return err
-        if apply and band in ("433", "868"):         # committed only once the dependencies hold (a refused start
+        if apply and band in known_bands.ALL:         # committed only once the dependencies hold (a refused start
             d["band"] = band                         # keeps the band it had)
         pending = started_deps if apply else self._deps_needing_start(sid, band)
         owners = self._band_owners(sid, band)          # competitors on the TARGET band
@@ -896,8 +897,8 @@ class DemoService(ControllerService):
             # The daemon is 'up' on a band via an explicit start OR a stack running there.
             # Stopping it takes those bands down — which means CASCADING to the stacks on them
             # (they lose the radio), or the daemon view would keep reading reachable.
-            served = sorted(self._dbands() | {self._band(o) for o in self._running_on_bands(("433", "868"))})
-            bands = [b] if b in ("433", "868") else served
+            served = sorted(self._dbands() | {self._band(o) for o in self._running_on_bands(known_bands.ALL)})
+            bands = [b] if b in known_bands.ALL else served
             cascaded = self._running_on_bands(bands)
             if apply:
                 self._set_dbands(self._dbands() - set(bands))
@@ -959,7 +960,7 @@ class DemoService(ControllerService):
                                                          bool((k or {}).get("stop_owners")))
         if err:
             return err
-        if apply and band in ("433", "868"):         # committed only once the dependencies hold (a refused start
+        if apply and band in known_bands.ALL:         # committed only once the dependencies hold (a refused start
             d["band"] = band                         # keeps the band it had)
         pending = started_deps if apply else self._deps_needing_start(sid, band)
         if apply:

@@ -5,6 +5,7 @@ confirmed-vs-sent distinction (never claim "applied" for an unconfirmable radio 
 import pytest
 
 from lhpc.core import daemon_control as dc
+from lhpc.core import known_bands
 from lhpc.core.services import ControllerService
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
@@ -36,7 +37,7 @@ def test_freq_accepts_valid_domain(good):
 def test_conf_socket_refuses_invalid_band(bad):
     with pytest.raises(dc.InvalidBand):
         dc.conf_socket(bad)
-    assert dc.is_valid_band(bad) is False
+    assert known_bands.is_known(bad) is False
 
 
 def test_read_view_invalid_band_is_not_reachable():

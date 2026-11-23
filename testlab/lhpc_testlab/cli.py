@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import sys
 
+from lhpc.core import known_bands
 from lhpc.core.services import ControllerService
 
 from . import ops
@@ -37,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     ps = sub.add_parser("scenario", help="switch scenario")
     ps.add_argument("name")
     pi = sub.add_parser("inject", help="queue one RX frame")
-    pi.add_argument("band", choices=("433", "868"))
+    pi.add_argument("band", choices=known_bands.ALL)
     pi.add_argument("preset")
     sub.add_parser("check", help="lab health gate")
     pw = sub.add_parser("web", help="serve the console with the lab web panel")

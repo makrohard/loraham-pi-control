@@ -10,7 +10,7 @@ import signal
 import time
 from pathlib import Path
 
-from . import instances, procident
+from . import instances, known_bands, procident
 from .outcomes import CompResult, Outcome
 from .service_base import ActionResult
 from .snapshot_memo import invalidates_snapshot
@@ -33,7 +33,7 @@ def _parse(svc, target: str, component: str):
     stk = svc.stack(sid)
     if stk is None:
         return None, None, [], f"Unknown stack '{sid}' (kill takes a stack id)."
-    if rid in ("433", "868"):                            # W405 (his yes): `<stack>@<band>` is no kill form
+    if known_bands.is_known(rid):                         # W405 (his yes): `<stack>@<band>` is no kill form
         run = instances.running_keys(svc, sid)
         return None, None, [], (f"Cannot kill {target}: a band is no instance; {sid} runs on "
                                 f"{', '.join(k.partition('@')[2] for k in run)}: use {' or '.join(run)}." if run else

@@ -11,10 +11,11 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import known_bands
+
 TABLE = Path(__file__).resolve().parents[1] / "data" / "radio_models.toml"
 TRANSPORTS = ("spi", "usb-ch341")
 CHIPS = ("sx127x", "sx1262")
-BANDS = ("433", "868")
 PIN_FIELDS = ("cs", "irq", "rst", "gpio", "aux", "txen", "rxen", "led_pin")   # the daemon profile's names
 _MODEL_KEYS = {"id", "label", "short", "transport", "chip", "bands", "power_default_dbm", "power_max_dbm",
                "high_power_switch", "variant", "usb", "direct"}
@@ -84,7 +85,8 @@ def _model(row: dict) -> RadioModel:
     need(row.get("transport") in TRANSPORTS, "transport", f"must be one of {', '.join(TRANSPORTS)}")
     need(row.get("chip") in CHIPS, "chip", f"must be one of {', '.join(CHIPS)}")
     bands = row.get("bands")
-    need(isinstance(bands, list) and bool(bands) and set(bands) <= set(BANDS), "bands", f"must be some of {', '.join(BANDS)}")
+    need(isinstance(bands, list) and bool(bands) and set(bands) <= set(known_bands.ALL), "bands",
+         f"must be some of {', '.join(known_bands.ALL)}")
     from .daemon_control import int_range
     lo, hi = int_range("POWER", row["chip"])
     need(type(row.get("power_default_dbm")) is int and lo <= row["power_default_dbm"] <= hi, "power_default_dbm",

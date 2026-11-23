@@ -8,8 +8,7 @@ import os
 import time
 from contextlib import contextmanager
 
-from . import instances
-from .daemon_control import ALLOWED_BANDS
+from . import instances, known_bands
 from .model import ResourceMode
 from .service_base import AdmissionRefused, SourceTxnBlocked
 
@@ -119,11 +118,11 @@ class AdmissionOpsMixin:
                     | self._operation_bands(target, band, radio, "start"))
         if is_daemon:
             if op == "stop":
-                if band in ALLOWED_BANDS:
+                if band in known_bands.ALL:
                     # Collateral: every other band the SAME process also serves is locked too,
                     # regardless of that band's CONF socket state (topology, not reachability).
                     own = set(self._daemon_pids_for_band(band))
-                    return {band} | {b for b in ALLOWED_BANDS
+                    return {band} | {b for b in known_bands.ALL
                                      if b != band and own & set(self._daemon_pids_for_band(b))}
                 # Whole-daemon stop: every band an owned/observed daemon PROCESS claims.
                 return self._daemon_claimed_bands()
@@ -142,7 +141,7 @@ class AdmissionOpsMixin:
         # Client.
         if op == "stop":
             eb = self._effective_band(sid, "")        # ACTUAL running band (marker/interactive)
-            if eb in ALLOWED_BANDS:
+            if eb in known_bands.ALL:
                 return {eb}
         # A LIVE multi-band owner with NO band evidence must claim EVERY band it could be
         # on. Falling back to the declared primary here meant a node actually running on
@@ -240,7 +239,7 @@ class AdmissionOpsMixin:
             # collateral included) — the same scope `_stop_impl` gives `stop_dependents`.
             sid = self.stack_of(target) or target
             stk = self.stack(sid)
-            per_band = (stk is not None and stk.main == self.DAEMON_ID and band in ("433", "868"))
+            per_band = (stk is not None and stk.main == self.DAEMON_ID and known_bands.is_known(band))
             stopped = self._operation_bands(target, band, "", "stop") if per_band else None
             for dep in self._dependents_of(target, stopped):
                 add(dep, False, band if per_band else "", "", "stop", [i for i in (instances.running_insts(self, dep) or instances.saved_insts(self, dep)) if not stopped or i is None or i.band in stopped])

@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import time
 
+from . import known_bands
 from . import restart_required as _rr
-from .daemon_control import ALLOWED_BANDS
 from .model import ComponentKind, RunState
 from .outcomes import CompResult, Outcome, applied_ok
 from .paths import PathContainmentError
@@ -89,7 +89,7 @@ class StopOpsMixin:
         if not any(self.DAEMON_ID in (c.depends_on or ()) for c in stk.components):
             return daemon_sid, []
         release, rid = [], getattr(inst, "rid", "")      # K8f D3 B5: an instance's client releases its radio's daemon
-        for b in sorted(bb for bb in active_bands if bb in ALLOWED_BANDS):
+        for b in sorted(bb for bb in active_bands if bb in known_bands.ALL):
             others = [d for d in self.stop_dependents(daemon_sid, bands={b}) if d not in exclude and ((d != sid and not rid) or (rid and (
                 (ri := instances.running_insts(self, d)) is None or any(getattr(i, "rid", "") == rid for i in ri if d != sid))))]
             if not others and self.daemon_view(b, rid).reachable:
@@ -202,7 +202,7 @@ class StopOpsMixin:
             cascade = True
         # Bands ACTUALLY being stopped — from the authoritative topology resolver (per-band daemon
         # stop includes its dual-band collateral; separate per-band instances are unaffected).
-        _daemon_band_stop = bool(target_is_daemon and band in ALLOWED_BANDS)
+        _daemon_band_stop = bool(target_is_daemon and band in known_bands.ALL)
         stopped_bands = self._operation_bands(target, band, "", "stop") if _daemon_band_stop else None
         other_bands = sorted((stopped_bands or set()) - {band}) if _daemon_band_stop else []
         # Fail closed: a PER-BAND daemon stop must not guess the band of a running band-switchable
@@ -337,7 +337,7 @@ class StopOpsMixin:
             # The daemon is multi-instance (one process per radio). A per-band stop signals ONLY the
             # owned instance(s) serving that band (with the instance's rid, that radio's alone). Record-driven +
             # identity-verified inside Lifecycle.stop, which returns a typed result.
-            if comp.id == self.DAEMON_ID and band in ALLOWED_BANDS:
+            if comp.id == self.DAEMON_ID and band in known_bands.ALL:
                 cr = life.stop(comp, band=band, rid=getattr(inst, "rid", "") or None)       # item 16: `--radio rN` alone
             elif _member and comp.id == _ri.NODE_ID:
                 _was = _rm.member_record(self, _rid) is not None
@@ -415,7 +415,7 @@ class StopOpsMixin:
         # per-band stop clears that band (+ its dual-band collateral), a whole-daemon stop clears
         # every served band. (A client that releases a daemon band recurses here as a daemon stop.)
         if target_is_daemon and own_ok:
-            for _b in ({band, *other_bands} if band in ALLOWED_BANDS
+            for _b in ({band, *other_bands} if band in known_bands.ALL
                        else set(self.radio_bands())):
                 self.clear_daemon_feed(_b, getattr(inst, "rid", ""))       # `--radio rN`: that radio's window alone
         # ok only when every result (dependents + own + daemon release) is a verified stop.

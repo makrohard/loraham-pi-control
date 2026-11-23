@@ -8,7 +8,7 @@ import hashlib
 import json
 import re
 
-from . import commands, radio_models, radios, resources
+from . import commands, known_bands, radio_models, radios, resources
 
 _RID_RE = re.compile(r"r[1-9][0-9]?")
 
@@ -982,12 +982,12 @@ def unclaimed(svc, comp, table=None, procs=None) -> bool:
     return bool(unclaimed_pids(svc, comp, table, procs))
 
 
-_BAND_SOCKET = re.compile(r"/tmp/lora[a-z]*(433|868)\.sock")    # a 0.13 per-band socket in an argv
+_BAND_SOCKET = re.compile(r"/tmp/lora[a-z]*([0-9]+)\.sock")    # a 0.13 per-band socket in an argv (a known band)
 
 
 def _socket_bands(argv) -> set:
     """The bands of the 0.13 per-band sockets an argv names."""
-    return {m.group(1) for t in argv if (m := _BAND_SOCKET.search(t))}
+    return {m.group(1) for t in argv if (m := _BAND_SOCKET.search(t)) and known_bands.is_known(m.group(1))}
 
 def unclaimed_pids(svc, comp, table=None, procs=None, band: str = "") -> list:
     """The pids of `unclaimed`: a process of the spec no instance's record or token claims (an older argv too: a

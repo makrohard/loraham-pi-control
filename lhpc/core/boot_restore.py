@@ -19,8 +19,7 @@ import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import procident, runtime_fs
-from .daemon_control import ALLOWED_BANDS
+from . import known_bands, procident, runtime_fs
 from .paths import PathContainmentError, Paths
 
 JOURNAL_VERSION = 1
@@ -40,7 +39,7 @@ def daemon_served(procs, rid: str, recorded) -> tuple[set, str]:
     own, is a why: the item fails by name and nothing is started (never a second start, never a false success)."""
     mine = [p for p in procs if p.kind == "id" and p.rid == rid]
     if any(not p.band for p in mine):                    # gate 2 finding 3: an untold band is refused, never ""
-        return set(), f"daemon@{rid} runs on a band its command line does not tell (no one --radio 433|868)"
+        return set(), f"daemon@{rid} runs on a band its command line does not tell (no one --radio {'|'.join(known_bands.ALL)})"
     if mine and not {p.band for p in mine} & set(recorded):
         return set(), f"daemon@{rid} runs on {'+'.join(sorted({p.band for p in mine}))} MHz, recorded on {'+'.join(recorded)}"
     if not mine and any(p.kind == "unknown" for p in procs):
@@ -131,7 +130,7 @@ def _validate_item(it) -> str:
     if "rid" in it and not rid_of(it["rid"]):
         return "item rid is not r1..r99"
     bands = it.get("bands")
-    if not isinstance(bands, list) or not all(b in ALLOWED_BANDS for b in bands):
+    if not isinstance(bands, list) or not all(b in known_bands.ALL for b in bands):
         return "item bands invalid"
     ev = it.get("evidence_ids")
     if not isinstance(ev, list) or not all(isinstance(e, str) and e for e in ev):
@@ -333,7 +332,7 @@ def derive_plan(evidence: list[Evidence], metas: dict[str, StackMeta], daemon_st
                                  "evidence_ids": ev_ids})
             continue
         if stack_id == daemon_stack_id:
-            ok_bands = {e.band for e in evs if e.band in ALLOWED_BANDS}
+            ok_bands = {e.band for e in evs if e.band in known_bands.ALL}
             if rid_of(evs[0].rid):            # K8f D3 B4: a radio's daemon (daemon@rN) is its own item, by its radio
                 daemon_items.append(new_item(secrets.token_hex(6), "daemon-reconcile", bands=tuple(sorted(ok_bands)),
                                              evidence_ids=tuple(ev_ids), rid=evs[0].rid))

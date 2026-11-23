@@ -32,7 +32,7 @@
       {{ hidden([("kind", "board"), ("back", url_for('hardware_add_page'))]) }}
       <p><strong>A HAT on the Pi's SPI bus</strong> <span class="muted">(not USB: it does not show up by itself)</span></p>
       <label>Board <select name="board" id="detect-board">{% for value, label in boards %}<option value="{{ value }}"{{ picked("board", "board", value) }}>{{ label }}</option>{% endfor %}</select></label>
-      <label>Band <select name="band"><option value="433"{{ picked("board", "band", "433") }}>433 MHz</option><option value="868"{{ picked("board", "band", "868") }}>868 MHz</option></select></label>
+      <label>Band <select name="band">{% for b in bands %}<option value="{{ b }}"{{ picked("board", "band", b) }}>{{ b }} MHz</option>{% endfor %}</select></label>
       <button type="submit" formaction="{{ url_for('hardware_detect') }}">Detect</button>
       <button type="submit">Add</button>
       {{ detect_result("board") }}

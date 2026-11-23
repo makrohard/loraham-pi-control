@@ -5,7 +5,7 @@ A per-band daemon stop also takes every other band the SAME process serves, what
 (no hard-coded "other band")."""
 import pytest
 
-from lhpc.core import service_admission, service_lifecycle_ops
+from lhpc.core import known_bands, service_admission
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -37,10 +37,10 @@ def test_one_process_serving_both_bands_takes_both(tmp_path):
 
 def test_the_collateral_is_every_band_the_same_process_serves(tmp_path, monkeypatch):
     # Not a hard-coded pair: with a third band the one process that serves all of them is stopped
-    # with all of them. Red-before at 7fbd03c8: {"433", "868"} (the hard-coded "other band").
+    # with all of them. Red-before at 7fbd03c8: {"433", "868"} (the hard-coded "other band"). ONE patch of the band
+    # list reaches every caller (known_bands.ALL, read when called).
     bands = ("433", "868", "915")
-    monkeypatch.setattr(service_admission, "ALLOWED_BANDS", bands)
-    monkeypatch.setattr(service_lifecycle_ops, "ALLOWED_BANDS", bands)
+    monkeypatch.setattr(known_bands, "ALL", bands)
     svc = _svc(tmp_path, {11: ["/x/loraham_daemon", "--radio", "all"],
                           12: ["/x/loraham_daemon", "--radio", "915"]})
     assert svc._operation_bands("daemon", "433", "", "stop") == set(bands)

@@ -17,6 +17,7 @@ from . import (
     gps,
     instances,
     interactive_markers,
+    known_bands,
     procident,
     radio_start,
     radios,
@@ -29,7 +30,6 @@ from . import resources as resources_mod
 from . import restart_required as _rr
 from . import reticulum_interfaces as _ri
 from . import reticulum_members as _rm
-from .daemon_control import ALLOWED_BANDS
 from .model import ComponentKind, ResourceMode, RunState
 from .outcomes import CompResult, Outcome
 from .paths import PathContainmentError
@@ -112,7 +112,7 @@ class LifecycleOpsMixin:
                         eff = self._live_bands(ss.stack.id, c.band)
                     else:
                         eb = self._effective_band(ss.stack.id, c.band)
-                        eff = {eb} if eb in ALLOWED_BANDS else set()
+                        eff = {eb} if eb in known_bands.ALL else set()
                 else:
                     eff = {c.band} if c.band else set()
                 running.append(limited(c, eff))
@@ -1878,12 +1878,10 @@ class LifecycleOpsMixin:
         free the radio — the live process still owns it."""
         bands = set()
         for radio in self._daemon_radio_modes():
-            if radio == "433":
-                bands.add("433")
-            elif radio == "868":
-                bands.add("868")
+            if known_bands.is_known(radio):
+                bands.add(radio)
             else:
-                bands |= set(ALLOWED_BANDS)       # missing / unknown -> conservative
+                bands |= set(known_bands.ALL)       # missing / unknown -> conservative
         return bands
 
     def _daemon_pids_for_band(self, band: str) -> list[int]:
@@ -1900,7 +1898,7 @@ class LifecycleOpsMixin:
                     radio = argv[i + 1]
                 elif tok.startswith("--radio="):
                     radio = tok.split("=", 1)[1]
-            if radio == band or radio not in ALLOWED_BANDS:
+            if radio == band or radio not in known_bands.ALL:
                 out.append(pid)              # unknown mode -> conservatively serves the band
         return out
 
@@ -1911,7 +1909,7 @@ class LifecycleOpsMixin:
         result. `meshtastic-<band>` and `daemon-<band>` are the same physical radio, so a running
         meshtastic on 868 makes 868 owned; a serve-all daemon start uses this to serve only free bands
         instead of colliding (which would fail-closed and take the working band down too)."""
-        want = {b for b in bands if b in ALLOWED_BANDS}
+        want = {b for b in bands if b in known_bands.ALL}
         if not want:
             return {}
         owners: dict[str, str] = {}
@@ -1943,7 +1941,7 @@ class LifecycleOpsMixin:
         that band, so a genuine conflict is surfaced by the normal blocker path, not silently skipped.
         Only a serve-all start (empty `radio`) is arbitrated to the free bands."""
         base = self._daemon_bands(radio)
-        if radio in ALLOWED_BANDS:
+        if radio in known_bands.ALL:
             return list(base), {}
         owners = self._direct_radio_owners(base)
         kept = [b for b in base if b not in owners]
@@ -2034,7 +2032,7 @@ class LifecycleOpsMixin:
             return lines, False, ""
         # Note when the hardware list narrows an all-bands request (only when nothing was arbitrated
         # away — the skip line already explains a band-owned narrowing).
-        if (radio or "") == "" and not owned and set(needed) != set(ALLOWED_BANDS):
+        if (radio or "") == "" and not owned and set(needed) != set(known_bands.ALL):
             lines.append(f"  [note] the hardware list serves {'+'.join(needed)}")
         for u in not_ready:
             ok_all, b = False, lab[u]
@@ -2380,7 +2378,7 @@ class LifecycleOpsMixin:
         onto the same radio. Unknown is not the default band; unknown is all of them.
         """
         eb = self._effective_band(stack_id, "")
-        if eb in ALLOWED_BANDS:
+        if eb in known_bands.ALL:
             return {eb}
         allowed = self.stack_bands(stack_id)
         if len(allowed) > 1:                  # K6: _effective_band is its running instances' launch band (13.12.5)
@@ -2605,7 +2603,7 @@ class LifecycleOpsMixin:
                          if st.run_state in up)
         # D: = bands with a USABLE radio (RADIO=READY), NOT merely reachable — a FAILED or
         # UNINITIALIZED daemon must never appear "served".
-        usable = [b for b in self.RADIO_BANDS if self.daemon_view(b).ready]
+        usable = [b for b in known_bands.ALL if self.daemon_view(b).ready]
         from . import runtime_fs
         from .paths import PathContainmentError
         idir = self._paths.runtime_root / "state" / "interactive"
@@ -2928,10 +2926,10 @@ class LifecycleOpsMixin:
         daemon_proc = dstat.run_state.value if dstat else "unknown"
         daemon_up = bool(dstat and dstat.run_state in up)
         daemon_installed = self._daemon_installed(dstat)
-        dvs = {b: self.daemon_view(b) for b in self.RADIO_BANDS}
+        dvs = {b: self.daemon_view(b) for b in known_bands.ALL}
         # LIVERSSI only, and this renders on every dashboard load -> the PASSIVE read. A scan here
         # would destroy an arriving frame just to draw a signal bar.
-        dch = {b: (self.daemon_channel(b) if dvs[b].reachable else {}) for b in self.RADIO_BANDS}
+        dch = {b: (self.daemon_channel(b) if dvs[b].reachable else {}) for b in known_bands.ALL}
         # OCCUPIED = reachable (may physically hold SPI, used for conflict reasoning);
         # USABLE = RADIO=READY (a working radio service). User-facing "served" summaries are
         # USABLE — a FAILED/UNINITIALIZED band is never presented as served.
@@ -3080,7 +3078,7 @@ class LifecycleOpsMixin:
         # disclose that stopping it stops the active band too.
         active = list(self.radio_bands())
         active_pids = {b: set(self._daemon_pids_for_band(b)) for b in active}
-        for band in self.RADIO_BANDS:
+        for band in known_bands.ALL:
             if band in active:
                 continue
             dv, live = dvs[band], [x for x in radio_start.band_radios(self, band) if x["reachable"]]

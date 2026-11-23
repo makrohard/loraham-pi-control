@@ -9,7 +9,7 @@ import tomllib
 import pytest
 import repo_paths
 
-from lhpc.core import radio_models
+from lhpc.core import known_bands, radio_models
 
 FIXTURE = repo_paths.REPO / "tests" / "data" / "daemon-hardware_profile.cpp"
 
@@ -92,7 +92,7 @@ def _daemon_profiles() -> dict:
         head, rest = block.split("{", 1)
         for preset in re.findall(r'"([\w-]+)"\) == 0', head):
             out[preset] = {}
-            for band in radio_models.BANDS:
+            for band in known_bands.ALL:
                 conds = {"band == 433": band == "433", "band != 868": band != "868", "ce0": preset.endswith("0"),
                          "band != 433": band != "433",                       # daemon 1.4.0's band guards
                          "!pi_band(band)": band not in ("433", "868"),
@@ -145,7 +145,7 @@ def test_every_variant_claims_the_daemons_pins_and_chip():
                 assert prof["chip"] == model.chip, (model.id, v.key)
                 assert prof.get("usb") == ({k: model.usb[k] for k in ("vid", "pid")} if model.usb else None), \
                     (model.id, v.key)
-            assert set(model.bands) == {b for b in radio_models.BANDS if b in daemon[v.preset]}, (model.id, v.key)
+            assert set(model.bands) == {b for b in known_bands.ALL if b in daemon[v.preset]}, (model.id, v.key)
 
 
 def test_the_rows_name_exactly_the_daemons_presets():

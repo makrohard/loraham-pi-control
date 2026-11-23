@@ -382,7 +382,7 @@ def _validate_graph(stacks: tuple[Stack, ...]) -> None:
     globally-unique component IDs, each `main` in its OWN stack, every dependency
     resolvable, no self-dependency or cycle (with cycle evidence), and valid declared
     bands. A structurally-broken manifest fails here, never at launch time."""
-    from .daemon_control import ALLOWED_BANDS
+    from . import known_bands
 
     seen_stacks: set[str] = set()
     for s in stacks:
@@ -448,9 +448,9 @@ def _validate_graph(stacks: tuple[Stack, ...]) -> None:
 
     for cid, c in comp_of.items():                     # declared bands are real bands
         for b in ([c.band] if c.band else []) + list(getattr(c, "bands", ()) or ()):
-            if b and b not in ALLOWED_BANDS:
+            if b and b not in known_bands.ALL:
                 raise ManifestError(f"component {cid!r} declares unknown band {b!r} "
-                                    f"(allowed: {', '.join(ALLOWED_BANDS)})")
+                                    f"(allowed: {', '.join(known_bands.ALL)})")
 
     # SHARED-SOURCE COHERENCE: every component consuming ONE checkout dir (same source.path)
     # must declare the IDENTICAL source spec — selector resolution, the ownership registry and

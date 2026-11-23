@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 
+from . import known_bands
 from .probes import System
 
 _READ_TIMEOUT = 1.0
@@ -147,13 +148,8 @@ class DaemonView:
         return self.reachable and self.radio_state == "READY"
 
 
-# The daemon serves exactly these bands; only they have a CONF socket. Validated at
+# The daemon serves exactly the known bands (known_bands.ALL); only they have a CONF socket. Validated at
 # every public boundary so a caller can never make us build an arbitrary socket path.
-ALLOWED_BANDS = ("433", "868")
-
-
-def is_valid_band(band) -> bool:
-    return isinstance(band, str) and band in ALLOWED_BANDS
 
 
 class InvalidBand(ValueError):
@@ -182,7 +178,7 @@ NO_SOCKET = "no daemon socket: the hardware list names no one radio for this ban
 
 def _valid_key(key) -> bool:
     """A daemon key: a band 433/868 (a 0.13.x daemon) or a radio id r1..r99 (stage L5), as conf_socket takes."""
-    return is_valid_band(key) or (isinstance(key, str) and _RID.fullmatch(key) is not None)
+    return known_bands.is_known(key) or (isinstance(key, str) and _RID.fullmatch(key) is not None)
 
 
 def conf_socket(band: str) -> str:
@@ -192,8 +188,8 @@ def conf_socket(band: str) -> str:
     arbitrary path. Each path prefers /run/loraham, else /tmp (W3-3)."""
     if isinstance(band, str) and _RID.fullmatch(band):
         return _prefer_run_socket(f"/run/loraham/loraconf-{band}.sock", f"/tmp/loraconf-{band}.sock")
-    if not is_valid_band(band):
-        raise InvalidBand(f"invalid band {band!r} (allowed: {', '.join(ALLOWED_BANDS)}, or a radio id r1..r99)")
+    if not known_bands.is_known(band):
+        raise InvalidBand(f"invalid band {band!r} (allowed: {', '.join(known_bands.ALL)}, or a radio id r1..r99)")
     return _prefer_run_socket(f"/run/loraham/loraconf{band}.sock", f"/tmp/loraconf{band}.sock")
 
 

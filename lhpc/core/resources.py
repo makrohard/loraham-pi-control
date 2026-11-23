@@ -20,13 +20,20 @@ import dataclasses
 import re
 from collections import defaultdict
 
+from . import known_bands
 from .model import Component, ResourceClaim, ResourceConflict, ResourceMode
 
 RADIO_KEY_PREFIX = "loraham.radio."
 SOCKET_KEY_PREFIX = "loraham.daemon-socket."
 # A radio key names its band's radio as a template (the shipped manifest) or, in a 0.13.x-shaped manifest, the
-# band itself: both are that band's radio, so neither is ever dropped as "not a radio claim".
-_BAND_RADIO = re.compile(r"(loraham\.(?:radio|daemon-socket))\.(?:\{radio:(433|868)\}|(433|868))")
+# band itself: both are that band's radio, so neither is ever dropped as "not a radio claim". The pattern takes any
+# number as the band; `_band_radio` keeps only a known band (known_bands.ALL).
+_BAND_RADIO = re.compile(r"(loraham\.(?:radio|daemon-socket))\.(?:\{radio:([0-9]+)\}|([0-9]+))")
+
+
+def _band_radio(key):
+    m = _BAND_RADIO.fullmatch(str(key))
+    return m if m and known_bands.is_known(m.group(2) or m.group(3)) else None
 
 
 def radio_claim(band: str, prefix: str = RADIO_KEY_PREFIX) -> str:
@@ -38,19 +45,19 @@ def radio_claim(band: str, prefix: str = RADIO_KEY_PREFIX) -> str:
 
 def radio_band(key: str) -> str:
     """The band of a radio or daemon-socket claim key; "" for any other key."""
-    m = _BAND_RADIO.fullmatch(str(key))
+    m = _band_radio(key)
     return (m.group(2) or m.group(3)) if m else ""
 
 
 def normal_key(key: str) -> str:
     """One form per radio key (the template), so a band literal and its template are the same claim."""
-    m = _BAND_RADIO.fullmatch(str(key))
+    m = _band_radio(key)
     return f"{m.group(1)}.{{radio:{m.group(2) or m.group(3)}}}" if m else key
 
 
 def claim_name(key: str, key_of) -> str:
     """The key as it leaves the conflict engine (a lock name, a message): `key_of(band)` names the radio."""
-    m = _BAND_RADIO.fullmatch(str(key))
+    m = _band_radio(key)
     return f"{m.group(1)}.{key_of(m.group(2) or m.group(3))}" if m else key
 
 

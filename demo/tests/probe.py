@@ -499,6 +499,7 @@ try:
     from lhpc_demo.bridge import _seed as _seed1
 
     from lhpc.core import firewall as _fw
+    from lhpc.core import known_bands as _kb
     from lhpc.core import rflog as _rflog
     _FX = _Path(_ld.__file__).parent / "fixtures"                 # read by path: a red-before fails at P1, not an import
     _run = "auto-install-aecd7e452f7445a385eee71bccf61a0e-"
@@ -594,14 +595,15 @@ try:
     # P3 no override, POST-START (main app): a name the demo can write for ANY radio id is no fixture's (static), and
     # after every stack started on 433 and 868 (+ its optional parts) each such file holds the demo's own lines.
     _bandless = {e.job() for e in _rflog.REGISTRY if e.job()}
-    _demo_shape = lambda n: bool(_re.fullmatch(r"start-[a-z0-9-]+-(433|868)-r\d+\.log|r\d+/rf-[a-z]+\.log", n)) or n in _bandless  # noqa: E731
+    _demo_shape = lambda n: bool((_m := _re.fullmatch(r"start-[a-z0-9-]+-([0-9]+)-r\d+\.log", n)) and _kb.is_known(_m.group(1))) \
+        or bool(_re.fullmatch(r"r\d+/rf-[a-z]+\.log", n)) or n in _bandless  # noqa: E731
     assert not [r for r in _man if _demo_shape(r.split("/", 1)[1] if r.startswith("logs/") else r)], "demo-logs: fixture in a demo name"
     _seed1(svc)                                     # its own state: identities + every stack installed, none running
     svc.seed_all_installed()
     for _s in svc.stacks():
         if _s.id in ("daemon", "loraham-pi-control"):
             continue
-        for _b in ("433", "868"):
+        for _b in _kb.ALL:
             if not svc.start(_s.id, apply=True, band=_b).ok:
                 svc.stop("daemon", apply=True)
                 svc.start(_s.id, apply=True, band=_b, stop_owners=True)

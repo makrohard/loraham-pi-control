@@ -17,6 +17,7 @@ import argparse
 import os
 import sys
 
+from lhpc.core import known_bands
 from lhpc.core.services import ActionResult, ControllerService
 from lhpc.version import __version__
 
@@ -1737,7 +1738,7 @@ def _run(argv: list[str] | None = None) -> int:
         _inst, band, why = radio_start.daemon_radio(svc, rid)
         if why:
             print("ERR   a band is gone (W308/W310): lhpc daemon takes a radio, lhpc daemon <rid> (lhpc hardware lists "
-                  "them)" if rid in ("433", "868") else f"ERR   {why}")
+                  "them)" if known_bands.is_known(rid) else f"ERR   {why}")
             return 2
         if args.set_kv:
             key, _, value = args.set_kv.partition("=")

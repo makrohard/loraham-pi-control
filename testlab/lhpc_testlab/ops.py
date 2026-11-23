@@ -11,7 +11,7 @@ import signal
 import sys
 import time
 
-from lhpc.core import reslock, runtime_fs
+from lhpc.core import known_bands, reslock, runtime_fs
 from lhpc.core.service_base import ActionResult, AdmissionRefused
 
 from . import (
@@ -313,8 +313,8 @@ def scenario(svc, name: str) -> ActionResult:
 def inject(svc, band: str, preset: str) -> ActionResult:
     if not is_active(svc):
         return _refusal(svc)
-    if band not in ("433", "868"):
-        return ActionResult(False, "Band must be 433 or 868")
+    if not known_bands.is_known(band):
+        return ActionResult(False, f"Band must be {' or '.join(known_bands.ALL)}")
     if preset not in INJECT_PRESETS:
         return ActionResult(False, f"Unknown preset {preset!r} — one of: "
                                    f"{', '.join(INJECT_PRESETS)}")

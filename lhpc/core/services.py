@@ -21,7 +21,14 @@ from typing import ClassVar
 
 from . import binary_install as binary_install_mod
 from . import config as _cfgmod
-from . import instance_liveness, instances, radio_start, spi_mode, stackupdates
+from . import (
+    instance_liveness,
+    instances,
+    known_bands,
+    radio_start,
+    spi_mode,
+    stackupdates,
+)
 from . import manifest as manifest_mod
 from . import meshcore_mode as _meshcore_mode
 from . import reticulum_members as _reticulum_members
@@ -32,7 +39,6 @@ from .config import (
     load_config,
     load_stack_config,
 )
-from .daemon_control import ALLOWED_BANDS
 from .install import Installer, Plan
 from .lifecycle import GUI_MISSING_HINT, Lifecycle
 from .model import (
@@ -698,7 +704,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
                         seen.add(toks[i + 1])
                     elif t.startswith("--radio="):
                         seen.add(t.split("=", 1)[1])
-            bands |= (seen & set(ALLOWED_BANDS)) or set(ALLOWED_BANDS)
+            bands |= (seen & set(known_bands.ALL)) or set(known_bands.ALL)
         return bands
 
     @staticmethod
@@ -2040,7 +2046,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         None when no single value applies."""
         if not any(c.id == self.DAEMON_ID for _, c in order):
             return None, None
-        if band in ALLOWED_BANDS:
+        if band in known_bands.ALL:
             bands = {band}
         else:
             bands = {c.band for _, c in order if self.DAEMON_ID in c.depends_on and c.band}
@@ -2087,8 +2093,6 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
     WEB_ACTIONS = ("install", "update", "uninstall", "start", "stop", "restart",
                    "build", "test", "test-tx", "clean", "join")
 
-    RADIO_BANDS = ALLOWED_BANDS   # the FULL band universe — detection/read/manage (never narrowed)
-
     def hardware_setup(self) -> str:
         """The configured radio HARDWARE setup id ('unset' | 'loraham' | 'uputronics' | …)."""
         return self.config().radio.hardware
@@ -2106,7 +2110,7 @@ class ControllerService(WebserverOpsMixin, AutoInstallOpsMixin, SelfUpdateOpsMix
         rows). The list decides what lhpc shows, serves and starts (S2), never a global hardware setup."""
         from . import radios
         rows = radios.load(self._paths).radios
-        return tuple(b for b in ALLOWED_BANDS if any(r.enabled and r.band == b for r in rows))
+        return tuple(b for b in known_bands.ALL if any(r.enabled and r.band == b for r in rows))
 
     def band_active(self, band: str) -> bool:
         """True iff an enabled radio of the hardware list is on `band` (the SET/offer gate)."""

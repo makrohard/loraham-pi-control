@@ -33,8 +33,9 @@ def _seed_identities(svc) -> None:
         save_operator_config(svc._paths, "DL0DEM")
     except Exception:
         pass
+    from lhpc.core import known_bands
     for stack, values, bands in (("meshtastic", {"node_name": "LHPC Demo", "node_short": "DEMO"},
-                                  ("433", "868")),
+                                  known_bands.ALL),
                                  ("meshcore", {"file_node_name": "lhpc-demo"}, ("",))):
         for band in bands:
             try:

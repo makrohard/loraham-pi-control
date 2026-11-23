@@ -17,7 +17,7 @@ from __future__ import annotations
 import ipaddress
 import re
 
-from .daemon_control import ALLOWED_BANDS
+from . import known_bands
 
 MAX_LEN = 256
 
@@ -277,7 +277,7 @@ def bind(value, *, field: str = "bind") -> str:
 
 def band(value, *, field: str = "band", allow_both: bool = True) -> str:
     s = str(value).strip()
-    allowed = ALLOWED_BANDS + (("both",) if allow_both else ())
+    allowed = known_bands.ALL + (("both",) if allow_both else ())
     if s not in allowed:
         raise ValidationError(f"{field}: invalid band {s!r} (allowed: {', '.join(allowed)})")
     return s

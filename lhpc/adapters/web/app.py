@@ -52,7 +52,13 @@ from markupsafe import Markup
 from lhpc.adapters.web import submenus as _submenus
 from lhpc.adapters.web.oneshot import OneShot
 from lhpc.core import attention as _attention
-from lhpc.core import auto_install_form, jobresult, stackupdates, web_client
+from lhpc.core import (
+    auto_install_form,
+    jobresult,
+    known_bands,
+    stackupdates,
+    web_client,
+)
 from lhpc.core import config as _config
 from lhpc.core import hotplug as _hotplug
 from lhpc.core import instances as _instances
@@ -2366,7 +2372,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             # radio's running instance still stops (G1-C7 B3). One exception, the §6 stray card: a band daemon no
             # radio names (a 0.13.x daemon still up) is stopped by its band, as before (W290: its Stop stays).
             stray = op == "stop" and target == "daemon" and "rid" not in request.form and \
-                request.form.get("band") in set(service.RADIO_BANDS) - set(service.radio_bands()) and \
+                request.form.get("band") in set(known_bands.ALL) - set(service.radio_bands()) and \
                 any(r["band"] == request.form["band"] for r in service.stray_daemons())   # the card's rule
             if (("band" in request.form or "rid" in request.form) and not stray) or target.endswith("@"):
                 abort(400)                                              # `kiss@` names no radio (G1-C54)
@@ -2897,7 +2903,7 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         for m in (m for m in models.values() if m.transport == "spi"):
             keyed = [v for v in m.variants if not v.band] if len(m.variants) > 1 else []
             boards += [(f"{m.id}:{v.key}", f"{m.label} ({v.key})") for v in keyed] or [(f"{m.id}:", m.label)]
-        return render_template("hardware_add.html", sticks=list(sticks.values()), boards=boards, valid=valid,
+        return render_template("hardware_add.html", sticks=list(sticks.values()), boards=boards, bands=known_bands.ALL, valid=valid,
                                list_state=view, detect=session.pop("hw_detect", None),
                                setups=service.hw_setups(), setup=service.hardware_setup())     # W292: the board setup
 

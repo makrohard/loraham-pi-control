@@ -8,7 +8,7 @@ import dataclasses
 import re
 
 from . import config as cfgmod
-from . import radio_daemon, radio_models, radios, rflog
+from . import known_bands, radio_daemon, radio_models, radios, rflog
 from .paths import PathContainmentError
 
 
@@ -1239,7 +1239,7 @@ def socket_key(paths, band: str) -> str:
     0.13.x daemon's `loraconf<band>.sock`, the upgrade case); "" — no socket at all — when a list exists and does not
     resolve the band to one radio (two enabled radios, none, or an invalid list: ledger L27), so no read and no SET
     ever reaches the 0.13.x band form there. A key that is not a band passes through (a radio id)."""
-    if band not in ("433", "868"):
+    if not known_bands.is_known(band):
         return band
     state = radios.load(paths)
     if state.kind == radios.ABSENT:                      # no hardware list: a 0.13.x daemon's band socket
@@ -1253,7 +1253,7 @@ def socket_refusal(paths, band: str, rid: str = "") -> str:
     radio's daemon is not running, never the band's radios."""
     if rid:
         return f"the daemon of {rid} is not running — start it first: lhpc stack start daemon@{rid}"
-    if band not in ("433", "868") or socket_key(paths, band):
+    if not known_bands.is_known(band) or socket_key(paths, band):
         return ""
     state = radios.load(paths)
     t = radio_daemon.resolve_target(state, radio_models.load(), lambda _r, _m: True, band=band)
@@ -1264,7 +1264,7 @@ def socket_refusal(paths, band: str, rid: str = "") -> str:
 
 def key_for(paths, band: str) -> str:
     """daemon_key from the runtime paths alone (the lifecycle has no service)."""
-    if band not in ("433", "868"):
+    if not known_bands.is_known(band):
         return band                                       # a radio id, or a key daemon_control refuses
     t = radio_daemon.resolve_target(radios.load(paths), radio_models.load(), lambda _r, _m: True, band=band)
     return t.rid if t.outcome == "proceed" else band
