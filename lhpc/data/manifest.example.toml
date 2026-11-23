@@ -857,8 +857,8 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "ef4ceb561a41a69dc043f2ce95ddb16a766850c9"
-    pin_tag = "v0.6.4"
+    pin_commit = "6335a90a9cf61e8825f72cc10f6f4642c8f3e910"
+    pin_tag = "v0.6.5"
     remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
     branch = "main"
 
@@ -909,8 +909,8 @@ main = "loraham-kiss-tnc"
 
     [stack.component.source]
     path = "src/loraham-kiss-tnc"
-    pin_commit = "ef4ceb561a41a69dc043f2ce95ddb16a766850c9"
-    pin_tag = "v0.6.4"
+    pin_commit = "6335a90a9cf61e8825f72cc10f6f4642c8f3e910"
+    pin_tag = "v0.6.5"
     remote = "https://github.com/makrohard/loraham-kiss-tnc.git"
     branch = "main"
 
