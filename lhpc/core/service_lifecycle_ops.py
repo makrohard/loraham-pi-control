@@ -937,8 +937,8 @@ class LifecycleOpsMixin:
                 and not _rm.joining(self, inst)):                       # B5: a member joins the running node
             _rid = getattr(inst, "rid", "")
             if _sid == _ri.STACK_ID and (_own := _rm.owner_record(self)) is not None and _rid:
-                return ActionResult(False, f"Reticulum runs on {_own['rid']}. Connect {_rid} to that node? "
-                                           "(live, no restart)", data={"connect": {"node": _own["rid"], "radio": _rid}},
+                return ActionResult(False, f"Reticulum runs on {_own['rid']}. Connect {_rid} to that node? (live, no restart) Restart "
+                                           f"MeshChat afterwards to see {_rid} in its interfaces.", data={"connect": {"node": _own["rid"], "radio": _rid}},
                                     next_commands=[f"lhpc stack start {_sid}@{_rid} --join --yes"])
             return ActionResult(False, f"'{_sid}' runs one instance at a time (one node, fixed ports): {_run[0]} runs",
                                 next_commands=[f"lhpc stack stop {_run[0]} --yes"])

@@ -147,7 +147,8 @@ def test_a_start_of_another_radio_offers_connect_and_names_the_join(box):
     _owner_up(box)
     plan = box.svc.start("reticulum", inst=instances.copy_of(box.svc, "reticulum", "r1")[0])
     # red-before (064363de): "'reticulum' runs one instance at a time (one node, fixed ports): reticulum@r2 runs"
-    assert not plan.ok and plan.summary == "Reticulum runs on r2. Connect r1 to that node? (live, no restart)"
+    assert not plan.ok and plan.summary == ("Reticulum runs on r2. Connect r1 to that node? (live, no restart) "
+                                            "Restart MeshChat afterwards to see r1 in its interfaces.")
     assert plan.next_commands == ["lhpc stack start reticulum@r1 --join --yes"]
 
 
@@ -404,7 +405,8 @@ def test_a_web_start_of_another_radio_asks_connect_and_the_owners_stop_names_its
     client = web(service_factory=lambda: box.svc)
     page = client.post("/action", data={"_csrf": csrf(client), "op": "start", "target": "reticulum@r1"}).get_data(as_text=True)
     # red-before (f4ff210c): a flash of the refusal, no Connect
-    assert 'name="op" value="join"' in page and "Connect r1 to that node?" in page
+    assert 'name="op" value="join"' in page and "Connect r1 to that node?" in page \
+        and "Restart MeshChat afterwards to see r1 in its interfaces." in page
     assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
     page = client.post("/action", data={"_csrf": csrf(client), "op": "stop", "target": "reticulum@r2"}).get_data(as_text=True)
     assert "[also disconnects] reticulum@r1: a radio of this node" in page
