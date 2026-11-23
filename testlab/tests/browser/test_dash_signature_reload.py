@@ -5,7 +5,9 @@ stays stale for good.
 
 A slow `GET /` is a held route, so "still loading" is a state, never a race. While a reload is held the page answers
 no evaluate, so that test runs on the page's real time and counts the requests the page sends: the polls go on
-(their answers are what must not reload again). The others pause the page's clock, so only the test moves the poll."""
+(their answers are what must not reload again). The others pause the page's clock, so only the test moves the poll,
+and answer a reload with 204 No Content: it is counted, the page stays, and a regression fails at its count instead
+of hanging in the next evaluate."""
 from __future__ import annotations
 
 import json
@@ -35,9 +37,11 @@ def _open(page, sig_answer, *, paused: bool):
     assert page.get_attribute("[data-dash-sig]", "data-pending-interactive") == "0"
     rendered["sig"] = page.get_attribute("[data-dash-sig]", "data-dash-sig")
     assert rendered["sig"]
-    # from now on every request for the dashboard document is counted and held (a slow `GET /`)
+    # from now on every request for the dashboard document is counted, and held (a slow `GET /`) on real time or
+    # answered 204 (the page stays) on a paused clock
     page.on("request", lambda r: navs.append(r) if r.is_navigation_request() else None)
-    page.route(lambda url: urlsplit(url).path == "/", lambda route: None)
+    page.route(lambda url: urlsplit(url).path == "/",
+               (lambda route: route.fulfill(status=204, body="")) if paused else (lambda route: None))
 
     def settled():
         # a round trip from the page: every request issued before it has reached its handler
@@ -76,4 +80,17 @@ def test_a_reload_deferred_by_text_entry_happens_on_the_next_poll(page):
     page.evaluate("() => document.getElementById('probe-entry').blur()")
     with page.expect_request(lambda r: r.is_navigation_request()):
         page.clock.run_for(POLL_MS)                    # typing ended: the next poll reloads
+    assert len(sigs) == 2, f"{len(sigs)} polls"
+
+
+def test_a_reload_deferred_by_a_text_selection_happens_once_it_is_cleared(page):
+    sigs, navs, settled = _open(page, lambda rendered: rendered + "-changed", paused=True)
+    assert page.evaluate("() => { window.getSelection().selectAllChildren(document.body);"
+                         " return String(window.getSelection()).length > 0; }")      # the viewer selected text
+    page.clock.run_for(POLL_MS)
+    settled()
+    assert (len(sigs), len(navs)) == (1, 0), f"{len(sigs)} polls, {len(navs)} reloads with text selected"
+    page.evaluate("() => window.getSelection().removeAllRanges()")
+    with page.expect_request(lambda r: r.is_navigation_request()):
+        page.clock.run_for(POLL_MS)                    # the selection is gone: the next poll reloads
     assert len(sigs) == 2, f"{len(sigs)} polls"
