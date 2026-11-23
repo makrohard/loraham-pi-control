@@ -568,7 +568,9 @@ def test_an_interrupt_is_a_stop(tmp_path):
 
 SUP = ('OPERATOR_CALL=N0CALL; RUN=; BOXES=; export EVD; SCRATCH=$EVD/scratch; mkdir -p "$SCRATCH"; '
        # stop as the product's, plus which of the run's processes (pids, one per line) are still alive at that moment
-       'stop() { local p; while read -r p; do kill -0 "$p" 2>/dev/null && echo "ALIVE $p" >&2; done < "$EVD/pids"; '
+       # (a zombie is an ended one: an init that never reaps, as a container's, keeps it, and `kill -0` counts it)
+       'stop() { local p s; while read -r p; do { read -r s < "/proc/$p/stat"; } 2>/dev/null || continue; s=${s##*) }; '
+       '[ "${s%% *}" = Z ] || echo "ALIVE $p" >&2; done < "$EVD/pids"; '
        'echo "STOP: $*" >&2; exit 2; }; : > "$EVD/pids"; runtraps\n')
 
 
@@ -609,11 +611,12 @@ def cleanup(p, evd):
 
 
 def alive(pid):
+    """The process runs: it exists and is no zombie (an init that never reaps, as a container's, keeps one)."""
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
         return False
-    return True
+    return state != "Z"
 
 
 # the worker: one background and one FOREGROUND child (each lives until killed), their pids in $EVD/pids
