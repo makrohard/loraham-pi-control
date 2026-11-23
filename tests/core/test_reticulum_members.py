@@ -26,6 +26,22 @@ from lhpc.core.services import ControllerService
 PINE = radios_fixture.BOX_H[3]                                    # r4, PineDio 868 (USB): the daemon backend
 
 
+# The refusals of the pinned interface's `loraham-rns-check-section` (rns-lora-interface f196175, section.py main/check)
+# a member test can meet: a block of another type, a missing required key, a half IFAC.
+_REQUIRED = ("band", "conf_socket", "data_socket", "frequency")
+
+
+def _real_refusal(block: str) -> str:
+    keys = dict(ln.strip().split(" = ", 1) for ln in block.splitlines() if " = " in ln and ln.strip()[:1] != "#")
+    if keys.get("type") != "LoRaDaemonInterface":
+        return f"type: {keys.get('type')!r} is not LoRaDaemonInterface"
+    if missing := [k for k in _REQUIRED if not keys.get(k)]:
+        return f"{missing[0]}: is required"
+    if bool(keys.get("networkname")) != bool(keys.get("passphrase")):
+        return "passphrase: IFAC needs both networkname and passphrase, or neither"
+    return ""
+
+
 class Node:
     """The running node's `rnstatus` and the interface's section check, as the box answers them."""
 
@@ -40,8 +56,7 @@ class Node:
         if tool == "loraham-rns-check-section":
             block = open(argv[1]).read()
             self.calls.append(("check", block))
-            line = self.check_line or ("passphrase: IFAC needs networkname and passphrase"   # the driver's half-IFAC rule
-                                       if "networkname" in block and "passphrase" not in block else "")
+            line = self.check_line or _real_refusal(block)
             return CommandResult(1, line + "\n", "") if line else CommandResult(0, "", "")
         if tool != "rnstatus":
             return self.base.run(argv, timeout, cwd=cwd, env=env)
@@ -163,14 +178,23 @@ def test_an_attach_the_node_does_not_list_is_refused_and_leaves_nothing(box, cap
     assert (_sections(box), _member(box, "r1"), _intent(box, "r1")) == (["[[LoRa r2]]"], [], "")
 
 
-def test_a_section_the_interface_refuses_is_never_written_or_attached(box, capsys):
+def test_a_section_the_interface_refuses_is_never_written_or_attached(box):
+    from lhpc.core import reticulum_members
     _owner_up(box)
     before = (box.root / "state" / "reticulum" / "config").read_text()
-    box.node.check_line = "txpower: 2..10 dBm on 433"
-    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 1
-    assert "txpower: 2..10 dBm on 433" in capsys.readouterr().out
+    reticulum_members._save_intent(box.svc, "r4", "r2")                  # r4: the stick, the daemon backend
+    box.node.check_line = "txpower: above the 868 MHz band cap"
+    assert "txpower: above the 868 MHz band cap" in reticulum_members.attach(box.svc, "r2", "r4")
     assert not [c for c in box.node.calls if c[:1] == ("--attach",)]
     assert (box.root / "state" / "reticulum" / "config").read_text() == before
+
+
+def test_an_spi_members_section_never_meets_the_daemon_interfaces_check(box, capsys):
+    # RETI-SOCKET (C2): the check is the daemon interface's and refuses every other type. Red-before (666d3661, with
+    # the fake refusing as the real tool does): "type: 'LoRaSPIInterface' is not LoRaDaemonInterface", the join fails
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0, capsys.readouterr().out
+    assert not [c for c in box.node.calls if c[:1] == ("check",)] and _member(box, "r1")
 
 
 def test_a_member_stop_detaches_and_never_signals_the_node(box, capsys):
@@ -221,16 +245,30 @@ def test_every_owner_start_reconciles_its_members_and_a_failed_one_never_fails_i
     assert [r["rid"] for r in _member(box, "r1")] == ["r1"]
 
 
+def test_a_live_daemon_members_settings_the_interface_refuses_are_never_saved_or_reloaded(box):
+    # save_refusal on the daemon member r4 (the check is the daemon interface's; the spi member's reload is below)
+    from lhpc.core import reticulum_members
+    _owner_up(box)
+    reticulum_members._save_intent(box.svc, "r4", "r2")
+    assert reticulum_members.attach(box.svc, "r2", "r4") == ""
+    r4 = instances.copy_of(box.svc, "reticulum", "r4")[0]
+    store = box.root / "config" / "stacks" / "reticulum@r4.toml"
+    before, calls = store.read_text(), len(box.node.calls)
+    box.node.check_line = "airtime_limit_short: 0-25 % on 868"
+    res = box.svc.save_config("reticulum", {"file_airtime_limit_short": "30.0"}, inst=r4)
+    # red-before (064363de): saved, nothing checked, nothing reloaded
+    assert not res.ok and "the interface would refuse these settings: airtime_limit_short" in " ".join(res.details)
+    assert box.node.calls[calls:][-1][0] == "check" and re.search(r"airtime_limit_short\s*=\s*30", box.node.calls[-1][1])
+    assert store.read_text() == before and not [c for c in box.node.calls[calls:] if c[:1] == ("--reload",)]
+
+
 def test_a_live_members_settings_are_checked_first_and_reloaded_live(box):
     _owner_up(box)
     assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
     r1 = instances.copy_of(box.svc, "reticulum", "r1")[0]
-    box.node.check_line = "frequency: 433050000-434790000 Hz"
-    res = box.svc.save_config("reticulum", {"file_frequency": "430000000"}, inst=r1)
-    # red-before (064363de): saved, nothing checked, nothing reloaded
-    assert not res.ok and "the interface would refuse these settings" in " ".join(res.details)
-    box.node.check_line = ""
+    # (the check-first refusal is the daemon interface's: test_a_section_the_interface_refuses_..., the panel test)
     res = box.svc.save_config("reticulum", {"file_frequency": "434000000"}, inst=r1)
+    # red-before (064363de): saved, nothing reloaded
     assert res.ok and ("--reload", "LoRa r1") in box.node.calls and "[member] r1: reloaded live" in "\n".join(res.details)
     box.node.refuse_reload = {"LoRa r1"}
     res = box.svc.save_config("reticulum", {"file_frequency": "434100000"}, inst=r1)

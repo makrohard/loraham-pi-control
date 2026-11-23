@@ -56,7 +56,10 @@ def listed(svc, timeout: float = TIMEOUT_S):
 
 def check(svc, rid: str, block: str) -> str:
     """Why the interface would refuse `block` ("" = it accepts it): the interface's own check of one section (the same
-    code its constructor runs), from the node's venv, before the block is written or attached."""
+    code its constructor runs), from the node's venv, before the block is written or attached. The check is the DAEMON
+    interface's (it refuses any other type): an spi radio's block is checked by its own constructor at attach."""
+    if instances.backend_of(svc, STACK_ID, _comp(svc), rid) != "daemon":
+        return ""
     src = svc._lifecycle().source_dir(_comp(svc))
     path = _config_dir(svc) / f".check-{rid}"
     try:

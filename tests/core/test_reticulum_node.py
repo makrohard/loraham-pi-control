@@ -71,6 +71,24 @@ def test_members_render_disabled_from_their_own_settings_and_band(tmp_path):
     assert text.count("# Attach point for external clients") == 1            # the next section's comment stays its own
 
 
+# what rns-lora-interface v0.4.0 (f196175) requires of a daemon section: docs/daemon-interface.md, section.py:100-142
+DAEMON_REQUIRED = ("type", "band", "frequency", "conf_socket", "data_socket")
+
+
+def test_every_daemon_interface_the_node_renders_has_the_keys_the_interface_requires(tmp_path):
+    # RETI-SOCKET: the owner and each member, each with ITS OWN radio's sockets; rf_log_path whenever rf_log is on
+    svc = _svc(tmp_path, (*BOX_H[:2], dataclasses.replace(BOX_H[2], enabled=False), BOX_H[3]))
+    _save(tmp_path, "r4", member_of="r2")
+    text = _render(tmp_path, svc)
+    for rid in ("r2", "r4"):
+        k = _keys(text, rid)
+        assert k["type"] == "LoRaDaemonInterface", (rid, k)
+        # red-before (666d3661): conf_socket missing in both blocks
+        assert [key for key in DAEMON_REQUIRED if not k.get(key)] == [], (rid, k)
+        assert (k["conf_socket"], k["data_socket"]) == (f"/tmp/loraconf-{rid}.sock", f"/tmp/loraf-{rid}.sock"), rid
+        assert k.get("rf_log") != "on" or k.get("rf_log_path") == f"{tmp_path}/logs/{rid}/rf-reticulum.log", (rid, k)
+
+
 def test_a_member_of_another_node_or_an_spi_member_on_a_usb_radio_is_absent(tmp_path):
     svc = _svc(tmp_path)
     _save(tmp_path, "r3", member_of="r2")                                   # the one eligible member

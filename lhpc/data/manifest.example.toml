@@ -3328,6 +3328,27 @@ kind = "str"
 hidden = true
 from_backend = { daemon = "LoRaDaemonInterface", spi = "LoRaSPIInterface" }
 label = "Interface type (from the radio's backend)"
+# The daemon interface's two REQUIRED sockets (rns-lora-interface docs/daemon-interface.md): this radio's CONF socket
+# and its FRAMED data socket, in the daemon component's LORAHAM_SOCKET_DIR (/tmp, its run_env) as
+# radio_daemon.socket_paths names them. `{rid}` = the rendered interface's radio; on spi blank, so left out.
+[[stack.component.config_file.param]]
+name = "daemon_conf_socket"
+key = "conf_socket"
+section = "interfaces/LoRa"
+kind = "str"
+hidden = true
+omit_if_empty = true
+from_backend = { daemon = "/tmp/loraconf-{rid}.sock", spi = "" }
+label = "Daemon CONF socket (from the radio's backend)"
+[[stack.component.config_file.param]]
+name = "daemon_data_socket"
+key = "data_socket"
+section = "interfaces/LoRa"
+kind = "str"
+hidden = true
+omit_if_empty = true
+from_backend = { daemon = "/tmp/loraf-{rid}.sock", spi = "" }
+label = "Daemon framed data socket (from the radio's backend)"
 [[stack.component.config_file.param]]
 name = "hardware"
 key = "hardware"

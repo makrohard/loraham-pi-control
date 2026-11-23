@@ -191,6 +191,51 @@ def test_the_rendered_interface_type_follows_the_backend(tmp_path):
     assert _rendered_type(tmp_path, svc, "r2") == "type = LoRaSPIInterface"
 
 
+def _lora_keys(tmp_path, svc, rid):
+    """{key: value} of `[[LoRa rid]]` as written (read here, not with the code under test)."""
+    svc.write_config_files("rns", "868", inst=instances.copy_of(svc, "reticulum", rid)[0])
+    lines = [ln.strip() for ln in (tmp_path / "state" / "reticulum" / "config").read_text().splitlines()]
+    out = {}
+    for ln in lines[lines.index(f"[[LoRa {rid}]]") + 1:]:
+        if ln.startswith("["):
+            break
+        if " = " in ln and not ln.startswith("#"):
+            out.update([ln.split(" = ", 1)])
+    return out
+
+
+def _daemon_socket_dir():
+    """Where the daemon LHPC runs serves its sockets: the daemon component's LORAHAM_SOCKET_DIR (manifest run_env)."""
+    comp = next(c for st in manifest.load_manifest() for c in st.components if c.id == DAEMON[1])
+    return dict(comp.run_env)["LORAHAM_SOCKET_DIR"]
+
+
+def test_the_daemon_interface_names_its_radios_conf_and_framed_sockets(tmp_path):
+    # RETI-SOCKET (R-P1 on 666d3661): rns-lora-interface v0.4.0 requires both, absolute; the data one is the FRAMED socket
+    from lhpc.core import radio_daemon
+    svc = _svc(tmp_path)
+    keys = _lora_keys(tmp_path, svc, "r2")
+    want = radio_daemon.socket_paths("r2", _daemon_socket_dir())
+    # red-before (666d3661): KeyError 'conf_socket' (neither key rendered: "conf_socket: is required" on box H)
+    assert (keys["conf_socket"], keys["data_socket"]) == (want.conf, want.frame) == ("/tmp/loraconf-r2.sock",
+                                                                                    "/tmp/loraf-r2.sock")
+    _backend(tmp_path, "r2", "spi")
+    keys = _lora_keys(tmp_path, svc, "r2")
+    assert keys["type"] == "LoRaSPIInterface" and "conf_socket" not in keys and "data_socket" not in keys
+
+
+def test_a_render_without_a_radio_names_no_socket(tmp_path, monkeypatch):
+    # C3: an instance without a radio id never gets "/tmp/loraconf-.sock". Measured: the render refuses it before any
+    # key ("is not a radio of the hardware list"), so no file is written; the from_backend fill also blanks an empty
+    # id (the key is then left out). The render always picks the band's radio when the list has one, so the one
+    # collaborator that picks it, instances.copy_of, is stubbed to find none.
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(instances, "copy_of", lambda *a, **k: [None])
+    writes = [w for w in svc.write_config_files("rns", "868", inst=commands.Instance("")) if w.component == "rns"]
+    assert [w.status for w in writes] == ["failed"] and "is not a radio of the hardware list" in writes[0].detail
+    assert not (tmp_path / "state" / "reticulum" / "config").exists()
+
+
 # ---- the configured readers (M7) --------------------------------------------------------------------------------------
 
 def _dep_keys(svc):

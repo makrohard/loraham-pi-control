@@ -284,6 +284,20 @@ jobs:
           test "$scripts_validated" -gt 0 || { echo "::error::zero referenced scripts validated"; exit 1; }
           echo "pin validation OK — ${validated} pinned source(s), ${scripts_validated} script(s)"
 
+      # The seam between LHPC and the pinned Reticulum interface, asked of the interface itself: every daemon section
+      # LHPC renders (owner and member) goes through the pinned checkout's own `loraham-rns-check-section`, installed
+      # with the pinned Reticulum (both checked out above). Unit tests compare the render with a key list; the 0.14.0
+      # live start failed on a key no list named (`conf_socket: is required`).
+      - name: The pinned Reticulum interface accepts every daemon section LHPC renders
+        run: |
+          set -euo pipefail
+          . "$GITHUB_WORKSPACE/.github/scripts/retry.sh"
+          python -m venv "$RUNNER_TEMP/rnscheck"
+          retry 3 "$RUNNER_TEMP/rnscheck/bin/python" -m pip install -q ext/reticulum
+          "$RUNNER_TEMP/rnscheck/bin/python" -m pip install -q --no-deps ext/loraham-rns-interface
+          retry 3 python -m pip install -q --require-hashes --no-deps -r requirements.lock
+          python .github/scripts/check-daemon-sections.py "$RUNNER_TEMP/rnscheck/bin/loraham-rns-check-section"
+
   meshcore-host:
     # LHPC's OWN tests for `lhpc/data/meshcore_host` — the adapter implementing openHop's
     # LoRaRadio contract on the LoRaHAM daemon's sockets, plus LHPC's identity, persistence and

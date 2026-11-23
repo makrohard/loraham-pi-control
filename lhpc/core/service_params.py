@@ -1982,9 +1982,9 @@ class ParamsConfigMixin:
                             break
                     values[p.name] = panel.get(p.key, "")
                     continue
-                if getattr(p, "from_backend", ()):      # B1: the value for the instance's backend (reticulum `type`)
-                    values[p.name] = dict(p.from_backend).get(
-                        _instances.backend_of(self, self._owner_stack_id(target), c, getattr(inst, "rid", "") or ""), "")
+                if getattr(p, "from_backend", ()):      # B1: the backend's value (`type`; a socket names THIS radio, none: blank)
+                    v = dict(p.from_backend).get(_instances.backend_of(self, self._owner_stack_id(target), c, rid := getattr(inst, "rid", "") or ""), "")
+                    values[p.name] = (v.replace("{rid}", rid) if rid else "") if "{rid}" in v else v
                     continue
                 if getattr(p, "panel_power", False):    # RADIO-POWER 3c: the panel's POWER; none refuses (never `power=`)
                     values[p.name], secret_error = _radio_start.panel_power(self, self._owner_stack_id(target), getattr(inst, "rid", ""))
