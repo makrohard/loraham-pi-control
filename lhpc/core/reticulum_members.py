@@ -84,6 +84,15 @@ def member_record(svc, rid: str):
     return next((r for r in life.owned_records(NODE_ID, role=None, rid=rid) if r.get(instances.MEMBER_OF)), None)
 
 
+def _member_records(svc, rid: str) -> list:
+    return [r for r in svc._lifecycle().owned_records(NODE_ID, role=None, rid=rid) if r.get(instances.MEMBER_OF)]
+
+
+def _same_process(rec, own) -> bool:
+    """`rec` names the running owner's process (pid + starttime): a record of a node that crashed does not."""
+    return own is not None and (rec.get("pid"), rec.get("starttime")) == (own.get("pid"), own.get("starttime"))
+
+
 def joining(svc, inst) -> str:
     """The radio a start of `inst` joins to the running node: its saved member_of names the running owner (and it is
     not that owner), else "". A join attaches its rns step and starts none of the node's clients."""
@@ -132,7 +141,7 @@ def attach(svc, owner: str, rid: str) -> str:
     own = owner_record(svc)
     if own is None or own.get("rid") != owner:
         return f"the Reticulum node on {owner} is not running"
-    if member_record(svc, rid) is not None and rid in (listed(svc) or set()):
+    if any(_same_process(r, own) for r in _member_records(svc, rid)) and rid in (listed(svc) or set()):
         return ""                                   # already connected
     block, why = _block(svc, owner, rid)
     if not why:
@@ -154,8 +163,8 @@ def _one_record(svc, own, owner: str, rid: str) -> bool:
     kept, one of any other process removed first, one written only when none is left. False = it could not be written."""
     life = svc._lifecycle()
     mine = False
-    for rec in [r for r in life.owned_records(NODE_ID, role=None, rid=rid) if r.get(instances.MEMBER_OF)]:
-        if (rec.get("pid"), rec.get("starttime")) == (own.get("pid"), own.get("starttime")):
+    for rec in _member_records(svc, rid):
+        if _same_process(rec, own):
             mine = True
         else:
             life._remove_record(rec)
@@ -176,8 +185,9 @@ def _left(why: str, kept: str) -> str:
 def reconcile(svc, owner: str, deadline: float) -> list[tuple[str, str]]:
     """THE node reconcile, after every owner start (manual and boot): wait for the node's RPC until `deadline`
     (time.monotonic), then attach each intended member not live yet. [(rid, "" | why)]; the owner stands either way."""
-    out = []
-    members = [m.rid for m in instances.node_members(svc, STACK_ID, owner) if member_record(svc, m.rid) is None]
+    out, own = [], owner_record(svc)
+    members = [m.rid for m in instances.node_members(svc, STACK_ID, owner)              # a crashed node's records do
+               if not any(_same_process(r, own) for r in _member_records(svc, m.rid))]  # not count (plan v25 §9.2)
     if not members:
         return out
     while listed(svc) is None and time.monotonic() < deadline:

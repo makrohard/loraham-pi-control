@@ -471,3 +471,12 @@ def test_the_owners_stop_clears_the_intent_of_a_radio_that_may_not_start_now(box
     res = box.svc.stop("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r2")[0])
     # red-before (ea51424b): r1 keeps member_of = "r2" (not eligible, not cleared): its own start refused for good
     assert res.ok and _intent(box, "r1") == ""
+
+
+def test_a_node_started_again_after_a_crash_keeps_one_member_record_on_its_new_process(box):
+    old = _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    old.kill()                                                       # the node crashed: no Stop, its records stay
+    old.wait(timeout=10)
+    new = _owner_up(box)                                             # its start reconciles r1 (plan v25 §9.2)
+    assert [r["pid"] for r in _member(box, "r1")] == [new.pid]
