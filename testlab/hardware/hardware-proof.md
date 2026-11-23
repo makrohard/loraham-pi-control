@@ -43,6 +43,9 @@ line); a failed direction does not skip the other.
 
 A frame row first reads FREQ and SF of both ends from the daemon's STATUS line; a difference is a FAIL (the radio is
 present but incompatible). BW, coding rate and sync word are not in STATUS: a mismatch there shows as a frame not heard.
+Each frame send waits for the daemon's TX_RESULT (form `dtxr` sets TXRESULT=1 on the row's own daemon; recovery restores the
+found value before it stops the daemon): a refusal, a frame error or no result (cause unknown) is the row's FAIL, with the
+daemon's STATUS and STATS from before and after the send in the evidence (`<row>-txstat0-*`, `<row>-txstat-*`).
 Rows 5, 12 and 13 have no on-air PASS yet.
 The Reticulum rows (5, 12, 13) tell the box's announce by its LXMF address, read only from MeshChat's identity before each
 exchange (its display name is only logged; the address is masked in the evidence like the passwords, and the end scan checks

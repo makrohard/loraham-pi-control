@@ -1295,7 +1295,7 @@ def test_a_usb_radio_gone_after_a_frame_is_a_stop(tmp_path, sel, answer, rc):
 FRAME_MIN = ('keep H433 r1; keep HSTK r3; needs() { :; }; undo_mark() { echo 0; }; started() { :; }; jpower() { :; }; '
              'pset() { XRC=0; SET=1; }; '
              'dpower() { local p=10; [ -z "${SET:-}" ] || p=$RB; printf "STATUS FREQ=433.1 SF=11 POWER=%s\\n" "$p" > "$OUT/PW-$3.txt"; '
-             'keep "P_$3" "$p"; }; tx() { exit 7; }; frame_row 7 H:H433 H:HSTK min,min same-box')
+             'keep "P_$3" "$p"; }; tx() { exit 7; }; txron() { :; }; txframe() { exit 7; }; frame_row 7 H:H433 H:HSTK min,min same-box')
 
 
 @pytest.mark.parametrize("rb, rc", [("2", 7), ("5", 2), ("", 2)])
@@ -1429,7 +1429,7 @@ def test_an_incomplete_forms_ok_stops_a_live_start(tmp_path):
                        env=_env(tmp_path, LAB_ENV=str(HW / "lab.example.env"), LANE="fast", FORMS_OK="start"),
                        capture_output=True, text=True, timeout=60, check=False)
     assert r.returncode == 2
-    assert stop_lines(r) == ["STOP: form not confirmed: dset rx_rf stop tx_text (FORMS_OK must hold every form of the chosen rows)"]
+    assert stop_lines(r) == ["STOP: form not confirmed: dset dtxr rx_rf stop tx_text (FORMS_OK must hold every form of the chosen rows)"]
     assert "== ROW" not in r.stdout
 
 

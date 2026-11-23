@@ -117,10 +117,44 @@ print("SENT", h, flush=True); time.sleep(max(0.0, t0 + 8 - time.monotonic()))
 try: c = post("http://127.0.0.1:8790/api/v1/lxmf-messages/" + h + "/cancel", {}, 1.5)
 except Exception as e: print("LATE: no cancel answer", type(e).__name__); sys.exit(5)
 w = time.monotonic() - t0; print("CANCEL", "%.1f" % w, (c.get("lxmf_message") or {}).get("state")); sys.exit(5 if w > 9.5 else 0)'
+# TXTEXT_PY: the frame send of the frame rows ({rid} from the form; argv: the text, the wait in s): one TX_PACKET (type 2) on
+# the daemon's framed socket, then the frames it answers are read until its TX_RESULT (type 4: status, flags, seq) or the
+# wait ends; RX_PACKET frames are skipped. The daemon answers only with TXRESULT=1 (txron sets it for the row). Exit 0 = the
+# daemon reports the frame sent (OK); 2 = it refused it (the status name: BUSY, CHANNEL_BUSY, RADIO_NOT_READY, RADIO_ERROR,
+# INVALID_PACKET, INVALID_BAND); 3 = an ERROR frame (a frame error); 4 = NO_TX_RESULT: none in the wait, or the socket closed
+# first (the cause is unknown: a frame never read, a restart that reset TXRESULT, a late or lost result look alike).
+# rc 0 therefore never stands for a frame the daemon dropped (a refusal in its TX worker prints nothing in its log).
+TXTEXT_PY='import os, socket, struct, sys, time
+p = "/run/loraham/loraf-{rid}.sock"
+p = p if os.path.exists(p) else "/tmp/loraf-{rid}.sock"
+b = sys.argv[1].encode(); w = float(sys.argv[2]); end = time.monotonic() + w
+s = socket.socket(socket.AF_UNIX); s.connect(p); s.sendall(bytes([2]) + struct.pack("<H", len(b)) + b)
+names = ("OK", "BUSY", "CHANNEL_BUSY", "RADIO_NOT_READY", "RADIO_ERROR", "INVALID_PACKET", "INVALID_BAND")
+buf = b""
+while True:
+    while len(buf) >= 3 and len(buf) >= 3 + struct.unpack("<H", buf[1:3])[0]:
+        t, k = buf[0], struct.unpack("<H", buf[1:3])[0]; d = buf[3:3 + k]; buf = buf[3 + k:]
+        if t == 4 and k == 4:
+            st = d[0]; print("TX_RESULT", names[st] if st < len(names) else st, "flags=%d seq=%d" % (d[1], struct.unpack("<H", d[2:4])[0]))
+            sys.exit(0 if st == 0 else 2)
+        if t == 3:
+            print("ERROR", d.decode("utf-8", "replace")); sys.exit(3)
+    left = end - time.monotonic()
+    if left <= 0:
+        print("NO_TX_RESULT within %.0f s" % w); sys.exit(4)
+    s.settimeout(left)
+    try:
+        c = s.recv(4096)
+    except socket.timeout:
+        continue
+    if not c:
+        print("NO_TX_RESULT: the socket closed first"); sys.exit(4)
+    buf += c'
 declare -A F=(
   [start]='{LH} stack start {inst} --yes'
   [stop]='{LH} stack stop {inst} --yes'
   [dset]='{LH} daemon {rid} --set POWER={p} --yes'
+  [dtxr]='{LH} daemon {rid} --set=TXRESULT={v} --yes'   # one word: blanks removed, '--set TXRESULT' would read as the power token settx
   [meshcom_send]="python3 -c \"import socket,sys; s=socket.create_connection(('127.0.0.1',{port}),5); s.sendall(('::'+sys.argv[1]+'\\\\r\\\\n').encode()); s.close()\" '{n}'"
   [mt_send]='{LH} meshtastic@{rid} --sendtext "{n}" --ack'
   [mt_pget]='{LH} meshtastic@{rid} --get lora.tx_power'
@@ -137,7 +171,7 @@ declare -A F=(
   [rt_join]='{LH} stack start reticulum@{rid} --join --yes'
   [rt_announce]="python3 -c \"import urllib.request as u; print(u.urlopen('http://127.0.0.1:8790/api/v1/announce', timeout=30).read().decode()[:80])\""
   [chat_client]='{LH} stack start chat@{rid} --yes'
-  [tx_text]="python3 -c \"import os,socket,struct,sys; p='/run/loraham/loraf-{rid}.sock'; p=p if os.path.exists(p) else '/tmp/loraf-{rid}.sock'; s=socket.socket(socket.AF_UNIX); s.connect(p); b=sys.argv[1].encode(); s.sendall(bytes([2])+struct.pack('<H',len(b))+b); s.close()\" '{n}'"
+  [tx_text]="python3 -c '$TXTEXT_PY' '{n}' {to}"
   [rx_rf]="grep -hF -- '{n}' {RT}/logs/{rid}/rf-*.log 2>/dev/null | grep -F ' RX '"
   [rx_mt]="{LH} rflog meshtastic@{rid} --decrypt 2>/dev/null | grep -F ' RX ' | grep -F -- '{n}'"
   [rx_mc]="{LH} rflog meshcore@{rid} --decrypt 2>/dev/null | grep -F ' RX ' | grep -F -- '{n}'"
@@ -166,12 +200,20 @@ declare -A RFORMS=([1]="start stop tx_mcom rx_mcom rx_mcom_app" [2]="start stop"
 # source file into <sid>@<rid> of endpoint A's radio ({band} = that radio's band). J1's value is the input MCSET_J1.
 declare -A MJOB=([1]="J1 meshcom meshcom.toml mc_callsign" [2]="J2 graywolf graywolf@{band}.toml call"
   [3]="J3 meshtastic meshtastic@{band}.toml node_name,node_short" [4]="J4 meshcore meshcore.toml file_node_name")
-rforms() { if [ "$(rowf "$1" kind)" = frame ]; then echo "start stop tx_text rx_rf$(case "$(rowf "$1" power)" in *min*) echo " dset";; esac)"; else echo "${RFORMS[$1]}"; fi; }
+rforms() { if [ "$(rowf "$1" kind)" = frame ]; then echo "start stop tx_text rx_rf dtxr$(case "$(rowf "$1" power)" in *min*) echo " dset";; esac)"; else echo "${RFORMS[$1]}"; fi; }
 # ---- 4. the box-side helpers (python, run on the box) ----------------------------------------------------------------------
 STATUS_PY='import socket,sys,os; r=sys.argv[1]; p=next((d+"/loraconf-"+r+".sock" for d in ("/run/loraham","/tmp") if os.path.exists(d+"/loraconf-"+r+".sock")),None); assert p, "no conf socket of "+r; s=socket.socket(socket.AF_UNIX); s.settimeout(30); s.connect(p); s.sendall(b"GET STATUS\n"); b=b""
 while not b.endswith(b"\n") and len(b) < 4096:
  c=s.recv(4096 - len(b)); assert c, "EOF before the end of the STATUS line"; b+=c
 print(b.decode().strip())'
+# TXSTAT_PY: a radio's daemon STATUS and STATS lines (read only), one connection each; a line of another kind is skipped
+TXSTAT_PY='import socket,sys,os; r=sys.argv[1]; p=next((d+"/loraconf-"+r+".sock" for d in ("/run/loraham","/tmp") if os.path.exists(d+"/loraconf-"+r+".sock")),None); assert p, "no conf socket of "+r
+for q in ("STATUS", "STATS"):
+    s = socket.socket(socket.AF_UNIX); s.settimeout(30); s.connect(p); s.sendall(("GET " + q + "\n").encode()); b = b""; t = None
+    while t is None and len(b) < 8192:
+        c = s.recv(4096); assert c, "EOF before the " + q + " line"; b += c
+        t = next((x for x in b.split(b"\n")[:-1] if x.startswith(q.encode() + b" ")), None)
+    assert t, "no " + q + " line"; s.close(); print(t.decode())'
 # MCHASH_PY: the LXMF delivery address of the box's MeshChat, read only from its identity file (the manifest runs MeshChat with
 # --storage-dir {runtime}/state/meshchat and no --identity-file: its identity is <storage>/identity); prints the hash only
 # MCID: R0's prerequisite read of the Reticulum rows' boxes (read only): MeshChat's identity exists (it is written at MeshChat's
@@ -759,6 +801,42 @@ hpower() {   # hpower <key> [<capture>]: the shared RNode through the PC's rnsd:
   [ "$tp" -le 7 ] || stop "rnode: the shared RNode is set to $tp dBm (above 7): no TX"
   keep "P_$k" "$tp"; pwok PC:rnode; ok "rnode: the shared RNode at $tp dBm (read now, <= 7)"; }
 started() { keep "STARTED_$1_${3##*@}" 1; undo_push "$1" "$(gstop "$3")"; must "$1" "$2" "$(form start inst="$3")"; }   # its guarded stop, journalled BEFORE the start;
+txron() {   # txron <row> <a|b> <box> <rid> <key>: the row's own daemon of that radio answers each frame with its TX_RESULT
+  # (TXRESULT=1, a daemon-global switch, default 0: other clients of the daemon would see it too). Only on a daemon this run
+  # started (STARTED_<box>_<rid>, after R1 stopped every recorded instance; a frame row starts no other client of it). The found
+  # value (its STATUS in PW-<key>) is journalled BEFORE the set, after the daemon's stop (started): recovery runs newest first, so
+  # it restores TXRESULT while the daemon still runs, then stops it. Read back 1, else STOP (an older daemon without TXRESULT
+  # fails the setter's confirmation or the read-back: no TX)
+  local w=$3 r=$4 v
+  [ "$(getk "STARTED_${w}_$r")" = 1 ] || stop "row $1: $w:$r was not started by this run: TXRESULT is set only on its own daemon: no TX"
+  if [ "$MODE" = dry ]; then v=0; else v=$(jfield "$(body "PW-$5.txt" | head -n 1)" TXRESULT) || stop "row $1: $w:$r: $v: no TX"; fi
+  case "$v" in 0|1) ;; *) stop "row $1: $w:$r: TXRESULT '$v' (want 0 or 1): no TX";; esac
+  undo_push "$w" "$(form dtxr rid="$r" v="$v")"; must "$w" "$1-txr-$2.txt" "$(form dtxr rid="$r" v=1)"
+  must "$w" "$1-txr-$2-st.txt" "{RT}/venv/lhpc/bin/python -c '$STATUS_PY' $r"; [ "$MODE" = dry ] && return 0
+  v=$(jfield "$(body "$1-txr-$2-st.txt" | head -n 1)" TXRESULT) && [ "$v" = 1 ] || stop "row $1: $w:$r reads TXRESULT '$v' after the set: no TX"; }
+txwait() {   # txwait <key>: the frame send's wait for its TX_RESULT in s: the sender's CADWAIT (its STATUS, ms) + 10 (airtime, margin)
+  local c; [ "$MODE" = dry ] && { echo 12; return 0; }; c=$(jfield "$(body "PW-$1.txt" | head -n 1)" CADWAIT) || { echo "$c"; return 1; }
+  [[ $c =~ ^[0-9]{1,5}$ ]] || { echo "CADWAIT '$c' is not a number of ms"; return 1; }; echo $(( (10#$c + 999) / 1000 + 10 )); }
+txframe() {   # txframe <row> <key> <box> <rid> <nonce>: one frame (tx_text) and its TX_RESULT. The daemon's STATUS + STATS are
+  # read before the send (<row>-txstat0-*: still TXRESULT=1, else a restart reset it: STOP, no TX) and after it (<row>-txstat-*),
+  # the after-read BEFORE the verdict (a FAIL's undos stop that daemon). The send's exit status is kept at once (the reads after
+  # it set XRC again): 0 = sent; 2 refused, 3 frame error, 4 NO_TX_RESULT (cause unknown) = the row's FAIL; any other = STOP
+  local f="$1-tx-$3-$4.txt" s0="$1-txstat0-$3-$4.txt" s="$1-txstat-$3-$4.txt" tw tc sr v w; tw=$(txwait "$2") || stop "row $1: $3:$4: $tw: no TX"
+  must "$3" "$s0" "{RT}/venv/lhpc/bin/python -c '$TXSTAT_PY' $4"
+  [ "$MODE" = dry ] || { v=$(jfield "$(body "$s0" | grep '^STATUS ' | head -n 1)" TXRESULT) && [ "$v" = 1 ]; } \
+    || stop "row $1: $3:$4 reads TXRESULT '$v' before the send (a daemon restart resets it): no TX"
+  tx "$2" 1 "$5" -- X "$3" "$f" "$(form tx_text rid="$4" n="$5" to="$tw")"; tc=$XRC
+  X "$3" "$s" "{RT}/venv/lhpc/bin/python -c '$TXSTAT_PY' $4"; sr=$XRC
+  w="the daemon's STATUS and STATS before/after in $s0, $s$([ "$sr" = 0 ] || echo "; the read after the send failed, rc $sr")"
+  case "$tc" in 0) [ "$sr" = 0 ] || stop "$s: exit status $sr ($OUT/$s)";;
+    2) fail "TX refused: $(body "$f" | tail -n 1) ($w)";;
+    3) fail "TX frame error: $(body "$f" | tail -n 1) ($w)";;
+    4) fail "TX unconfirmed: $(body "$f" | tail -n 1), cause unknown$(txstate "$s0" "$s") ($w)";;
+    *) stop "$f: exit status $tc ($OUT/$f)";; esac; }
+txstate() {   # txstate <before> <after>: "; daemon state ..." when the after-read shows TXRESULT not 1 or UPTIME not on from before
+  local a u v; a=$(jfield "$(body "$2" | grep '^STATUS ' | head -n 1)" TXRESULT) || a='?'
+  u=$(jfield "$(body "$1" | grep '^STATS ' | head -n 1)" UPTIME) || u='?'; v=$(jfield "$(body "$2" | grep '^STATS ' | head -n 1)" UPTIME) || v='?'
+  [ "$a" = 1 ] && [[ $u =~ ^[0-9]+$ && $v =~ ^[0-9]+$ ]] && [ "$v" -ge "$u" ] || echo "; daemon state after the send: TXRESULT=$a, UPTIME $u -> $v"; }
 # STARTED_<box>_<rid>: RS counts that radio as one that could send (runrids), even if the row ends before its first tx
 
 # ---- 9. the report, the results and the COVERAGE table ----------------------------------------------------------------------
@@ -973,9 +1051,10 @@ frame_row() {   # frame_row <id> <box:KEY> <box:KEY> <power a,b> <flags>: the da
     [ -n "$p0" ] || stop "row $id: no recorded power of $2:$3: no undo, no set, no TX"
     jpower "$2" "$3" "$p0"; pset "$2" "$id-set-$1.txt" "$3" "$STICK_MIN"; [ "$XRC" = 0 ] || stop "$id-set-$1.txt: exit status $XRC"; dpower "$2" "$3" "$4"
     [ "$MODE" = dry ] || [ "$(getk "P_$4")" = "$STICK_MIN" ] || stop "row $id: $2:$3 reads back '$(getk "P_$4")' dBm after POWER=$STICK_MIN: no TX"; done
+  txron "$id" a "$ba" "$ra" "$qa"; txron "$id" b "$bb" "$rb" "$qb"   # each sender answers its frame with a TX_RESULT
   local sa sb; sa=$([ "$pa" = min ] && echo "$STICK_MIN dBm (minimum)" || echo "$(getk "P_$qa" as-is) dBm (as-is)"); sb=$([ "$pb" = min ] && echo "$STICK_MIN dBm (minimum)" || echo "$(getk "P_$qb" as-is) dBm (as-is)")
   for x in "A->B $qa $ba $ra $qb $bb $rb $sa" "B->A $qb $bb $rb $qa $ba $ra $sb"; do read -r d q1 b1 r1 q2 b2 r2 pw <<< "$x"; n=$(nonce)
-    tx "$q1" 1 "$n" -- must "$b1" "$id-tx-$b1-$r1.txt" "$(form tx_text rid="$r1" n="$n")"
+    txframe "$id" "$q1" "$b1" "$r1" "$n"
     usbcheck "$id-usb-$b1-$r1-a.txt" "$ka"; usbcheck "$id-usb-$b1-$r1-b.txt" "$kb"
     boxrx "$b2" "$id-rx-$b2-$r2.txt" rx_rf "$r2" "$n" 30 || fail "not heard: $n"
     REPORT "$id" daemon "$b1 ($r1) -> $b2 ($r2)" "$(v="RADIO_$ka"; set -- ${!v}; echo "$3")" "$b2 ($r2)" "$d" "yes ('$n' RX on $b2:$r2)" "$pw" PASS; done

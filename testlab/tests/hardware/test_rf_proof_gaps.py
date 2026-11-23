@@ -114,7 +114,7 @@ NOREC = ('keep HMS r5; keep Z868 r2; needs() { :; }; undo_mark() { echo 0; }; st
          'jpower() { echo "JPOWER $*" >> "$EVD/ran.txt"; }; pset() { XRC=0; SET=1; }; '
          'dpower() { local p=10; [ -z "${SET:-}" ] || p=2; printf "STATUS FREQ=868.1 SF=9 POWER=%s\\n" "$p" > "$OUT/PW-$3.txt"; '
          '[ -n "${REC:-}" ] && keep "P_$3" "$p"; return 0; }; '
-         'tx() { exit 7; }; RADIO_HMS="H meshstick-1262 868 serial=S"; frame_row 8 H:HMS Z:Z868 min,min -')
+         'tx() { exit 7; }; txron() { :; }; txframe() { exit 7; }; RADIO_HMS="H meshstick-1262 868 serial=S"; frame_row 8 H:HMS Z:Z868 min,min -')
 
 
 @pytest.mark.parametrize("rec, rc", [("1", 7), ("", 2)])
