@@ -1,12 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- Reticulum now reaches the radio through the daemon (any radio, USB too); `backend = spi` per radio
-  (`lhpc config reticulum@<rid>`) keeps the direct driver on an SPI radio.
-- Reticulum on the daemon: its radio values are on the radio's Daemon radio parameters panel (Reticulum's defaults);
-  re-enter yours there (the Config page keeps frequency, SF, BW, CR and power for `backend = spi` only).
-
 ## 0.14.0
 
 - Radios: the hardware list (config/radios.toml, written by `lhpc hardware <setup>` or the Hardware page) names each
@@ -29,6 +22,10 @@
   Meshstick library (a source-built daemon: see the update steps); a failing USB stick is re-opened, not fatal.
 - Reticulum: `rnode_framing` defaults to `yes` (was `no`), so LHPC boxes and RNode devices hear each other; a framed
   box and a bare box cannot.
+- Reticulum now reaches the radio through the daemon (any radio, USB too); `backend = spi` per radio
+  (`lhpc config reticulum@<rid>`) keeps the direct driver on an SPI radio.
+- Reticulum on the daemon: its radio values are on the radio's Daemon radio parameters panel (Reticulum's defaults);
+  re-enter yours there (the Config page keeps frequency, SF, BW, CR and power for `backend = spi` only).
 - MeshChat announces itself once at every start, so a box is discoverable on the air; a failed announce is logged and
   the start stands.
 - Updates: a bare `lhpc update <stack>` keeps the installed lane; `lhpc source-check`, the stack page and `lhpc status
