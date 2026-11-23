@@ -40,15 +40,30 @@ def test_stack_and_box_states_are_remembered_across_a_reload(flask_page, tmp_pat
 
 
 def test_running_on_and_start_a_stack_folds_persist_independently(flask_page, tmp_path):
-    # F30 (his words): both boxes fold, open by default; each keeps its own state across a reload
+    # both boxes fold; Running on is open by default, Start a stack collapsed; each keeps the viewer's last
+    # choice across a reload, and a fresh browser shows the defaults again
     page, _posts = flask_page(path="/", cmdlines=_meshcore_r3(tmp_path), listeners=[Listener("ipv4", "127.0.0.1", 5399, 1)])
     run, start = page.locator("details#runon-r3"), page.locator("details#starton-r3")
-    assert run.evaluate("d => d.open") and start.evaluate("d => d.open")
-    run.locator("> summary").click(position={"x": 6, "y": 8})
+    assert run.evaluate("d => d.open") and not start.evaluate("d => d.open")              # the defaults
+    start.locator("> summary").click(position={"x": 6, "y": 8})                          # open Start a stack
+    page.wait_for_function("() => localStorage.getItem('lhpc:starton-r3') === '1'")
+    page.reload()
+    assert page.locator("details#starton-r3").evaluate("d => d.open")                    # remembered
+    assert page.locator("details#runon-r3").evaluate("d => d.open")                      # the other keeps its own
+    page.locator("details#starton-r3 > summary").click(position={"x": 6, "y": 8})        # close it again
+    page.wait_for_function("() => localStorage.getItem('lhpc:starton-r3') === '0'")
+    page.reload()
+    assert not page.locator("details#starton-r3").evaluate("d => d.open")
+    run = page.locator("details#runon-r3")
+    run.locator("> summary").click(position={"x": 6, "y": 8})                           # Running on: its own key
     page.wait_for_function("() => localStorage.getItem('lhpc:runon-r3') === '0'")
     page.reload()
     assert not page.locator("details#runon-r3").evaluate("d => d.open")
-    assert page.locator("details#starton-r3").evaluate("d => d.open")                 # the other keeps its own state
+    assert not page.locator("details#starton-r3").evaluate("d => d.open")
+    page.evaluate("() => localStorage.clear()")                                         # a fresh browser
+    page.reload()
+    assert page.locator("details#runon-r3").evaluate("d => d.open")
+    assert not page.locator("details#starton-r3").evaluate("d => d.open")
     page.context.close()
 
 

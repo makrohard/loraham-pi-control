@@ -109,11 +109,12 @@ def test_no_name_no_sident_and_a_failing_read_keeps_home_usable(tmp_path, web, m
     assert _line(doc, "r1") == "Running on r1 Meshtastic"
 
 
-def test_running_on_and_start_a_stack_fold_open_and_hardware_stays_last(tmp_path, web):
+def test_running_on_folds_open_start_a_stack_folds_collapsed_and_hardware_stays_last(tmp_path, web):
+    # "Start a stack on rX" is collapsed by default (dash.js remembers the viewer's last choice)
     svc = _running(tmp_path, "chat", "loraham-chat", ("r1",))
     doc = parse(web(service_factory=lambda: svc).get("/", headers=LOCAL).get_data(as_text=True))
     run, start = doc.by_id("runon-r1"), doc.by_id("starton-r1")
-    assert run.has_attr("open") and start.has_attr("open")
+    assert run.has_attr("open") and not start.has_attr("open")
     assert "Running on r1" in doc.within(doc.within(run).find("summary")[0]).text
     assert "Start a stack on r1" in doc.within(doc.within(start).find("summary")[0]).text
     assert run.end < start.index                                                   # Start is outside Running on

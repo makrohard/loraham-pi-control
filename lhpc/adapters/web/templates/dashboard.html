@@ -393,7 +393,9 @@
                  "daemon <band>" (daemon@rX) is the first entry, added here outside the stacks' radio filter --- #}
           {% set daemon_offer = r.rid and not up and r.daemon.installed %}
           {% if r.startable or daemon_offer %}
-            <details class="runon" id="starton-{{ key }}" open><summary class="ronsum"><h3>Start a stack on {{ r.rid }}</h3></summary>{# his word: folds, open #}
+            <details class="runon" id="starton-{{ key }}"><summary class="ronsum"><h3>Start a stack on {{ r.rid }}</h3></summary>{# folds,
+               collapsed by default; the viewer's last choice is remembered per card (dash.js, localStorage), and across
+               dash.js's own reload a tab's open/closed snapshot (sessionStorage) wins #}
             <form method="post" action="{{ url_for('action') }}" class="startform">
               <input type="hidden" name="_csrf" value="{{ csrf_token() }}">
               <input type="hidden" name="op" value="start">
