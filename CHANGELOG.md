@@ -35,6 +35,10 @@
   re-enter yours there (the Config page keeps frequency, SF, BW, CR and power for `backend = spi` only).
 - Stopping or restarting MeshChat no longer disconnects the node's other radios, and starting a client on the
   node's own radio is no longer refused while another radio is connected.
+- Stopping a radio's daemon takes that radio out of the Reticulum node first: a connected radio disconnects, on the
+  node's own radio the node stops; the confirm names it. A daemon restart keeps the node and its radios.
+- A failed stop no longer offers a kill with nothing to kill: the kill page names an unverifiable process without a
+  Kill button, and with no process left the stop's message says so.
 - MeshChat announces itself once at every start, so a box is discoverable on the air; a failed announce is logged and
   the start stands.
 - MeshChat is selected to start with Reticulum by default (saved choices stay; untick it on Settings). If it is not built

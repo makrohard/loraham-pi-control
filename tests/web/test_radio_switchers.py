@@ -64,7 +64,11 @@ def test_the_meshcore_mode_saves_the_shown_radio(client, rid):
 
 
 @pytest.mark.parametrize("rid", ["r1", "r3"])
-def test_the_kill_confirm_kills_the_named_radio(client, rid):
+def test_the_kill_confirm_kills_the_named_radio(client, rid, monkeypatch):
+    from lhpc.core import kill
+    from lhpc.core.service_base import ActionResult
+    monkeypatch.setattr(kill, "kill", lambda svc, target, component="", apply=False: ActionResult(   # a process to
+        True, f"Kill {target}: 1 process(es).", data={"pids": [4242]}))      # signal: the form shows (Part K0)
     s = _scope(client, f"/kill/meshcom?component=meshcom-bridge&radio={rid}", "kill-form")
     assert _hidden_radio(s) == [rid]
 

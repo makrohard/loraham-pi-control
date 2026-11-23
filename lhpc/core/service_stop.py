@@ -131,7 +131,7 @@ class StopOpsMixin:
     @invalidates_snapshot
     def stop(self, target: str, apply: bool = False, cascade: bool = False,
              band: str = "", release_daemon: bool = True, auto_install_ctx=None,
-             *, _operator: bool = True, inst=None) -> ActionResult:
+             *, _operator: bool = True, inst=None, _node_rides: bool = False) -> ActionResult:
         """Public, LOCKED entry — acquires the lifecycle bundle (incl. dependents on cascade) so a DIRECT call gets the same coordination as CLI/web. `release_daemon=False`
         is the INTERNAL cascade path: a client stopped as part of a daemon cascade must not itself
         release the daemon (the outer daemon stop is the sole owner of daemon teardown)."""
@@ -152,12 +152,14 @@ class StopOpsMixin:
         slot0, _whole = (_app := _stk0 is not None and _stk0.main != self.DAEMON_ID) and inst is None, inst is None or _app   # K5: each <stack>@<rid> its own intent
         if not apply:
             return self._stop_impl(target, apply=False, cascade=cascade, band=band,
-                                   release_daemon=release_daemon, inst=instances.copy_of(self, _sid0, band=band)[0] if slot0 else inst)
+                                   release_daemon=release_daemon, inst=instances.copy_of(self, _sid0, band=band)[0] if slot0 else inst,
+                                   _node_rides=_node_rides)
         try:
             with self._lifecycle_guard("stop", target, band, cascade=cascade, inst=inst):
                 inst = instances.copy_of(self, _sid0, band=band)[0] if slot0 else inst      # a band caller's, under the lock (G1-C47)
                 res = self._stop_impl(target, apply=True, cascade=cascade, band=band,
-                                      release_daemon=release_daemon, _operator=_operator and _whole, inst=inst)
+                                      release_daemon=release_daemon, _operator=_operator and _whole, inst=inst,
+                                      _node_rides=_node_rides)
                 # Durable OPERATOR INTENT — ONLY for a DIRECT, WHOLE-STACK operator stop. `_operator` is False on every
                 # internal route (cascade dependents, the daemon band release, owner stops for a start, restart's stop
                 # leg, uninstall/clean, auto-install): those tombstoned the shared daemon and whole stacks the operator
@@ -183,7 +185,7 @@ class StopOpsMixin:
 
     def _stop_impl(self, target: str, apply: bool = False, cascade: bool = False,
                    band: str = "", release_daemon: bool = True,
-                   _operator: bool = False, inst=None) -> ActionResult:
+                   _operator: bool = False, inst=None, _node_rides: bool = False) -> ActionResult:
         items, err = self._resolve(target)
         if err:
             return ActionResult(False, err, next_commands=["lhpc list"])
@@ -224,6 +226,8 @@ class StopOpsMixin:
                                     next_commands=[f"lhpc status {target}"])
         # Orphaned dependents are scoped to the band(s) actually being stopped.
         dependents = radio_start.daemon_dependents(self, _sid or target, (band if _daemon_band_stop else "") if target_is_daemon else None, inst, stopped_bands)
+        if _node_rides and target_is_daemon:   # R5: a daemon restart's stop leg leaves the Reticulum node as it is
+            dependents = [d for d in dependents if d.partition("@")[0] != _ri.STACK_ID]
         _rid = getattr(inst, "rid", "") or ""
         # B5: a node member's stop detaches it (never a signal: its process is the owner's); the owner's ends the node's
         # memberships after its verified cessation (below)
@@ -260,13 +264,21 @@ class StopOpsMixin:
                     details.append(f"  [also stops] {_dsid} {_b} MHz: no other stack needs it")
             _mem = _rm.owner_members(self, _rid) if _owner else []
             details += [f"  [also disconnects] {_ri.STACK_ID}@{m}: a radio of this node" for m in _mem]      # B6 C4
-            if _member and any(c.id == _ri.NODE_ID for _, c in items):   # B6 C3: what a member's Stop of rns does
+            _leaves = _member and any(c.id == _ri.NODE_ID for _, c in items)   # B6 C3: what a member's Stop of rns does
+            if _leaves:
                 details.append(f"  [{'disconnects' if _rm.member_record(self, _rid) else 'removes'}] {_rid} from the "
                                f"Reticulum node (it keeps running)")
+            for dep in (d for d in dependents if target_is_daemon and d.partition("@")[0] == _ri.STACK_ID and "@" in d):
+                sub = self._stop_impl(_ri.STACK_ID, release_daemon=False, inst=instances.resolve(self, dep)[1]).data
+                what = (f"leaves the Reticulum node (it keeps running on {sub['leaves']})" if sub.get("leaves")
+                        else "the Reticulum node stops" if sub.get("node_stops") else "")     # R2: its own stop plan
+                details += [f"  [stop dependent] {dep}: {what}"] * bool(what) + [
+                    f"  [also disconnects] {_ri.STACK_ID}@{m}" for m in sub.get("members", ())]
             return ActionResult(True, f"Stop plan for '{target}': {len(items)} component(s).", details=details,
                                 next_commands=[f"lhpc stack stop {instances.named(self, target, inst)} --yes"],   # this plan's
                                 data={"changes": len(items), "dependents": dependents, "members": _mem,
-                                      "commands": sysd, "other_bands": other_bands})
+                                      "commands": sysd, "other_bands": other_bands, "node_stops": _owner,
+                                      "leaves": (_rm.owner_record(self) or {}).get("rid", "") if _leaves else ""})
         details = []
         results: list[CompResult] = []          # every result (dependents + own + daemon release)
         own_results: list[CompResult] = []       # ONLY the target's own components
@@ -294,7 +306,7 @@ class StopOpsMixin:
                 blocked_deps.extend(interactive_deps)
                 dep_block = True                 # preflight block: stop NO automatic dependent
             else:
-                for dep in dependents:
+                for n, dep in enumerate(dependents):
                     # release_daemon=False: the OUTER daemon stop owns teardown — a dependent must
                     # not recursively stop the daemon (it just clears its own marker on cessation).
                     # a dependent stopped by an OPERATOR cascade (stop daemon) was the
@@ -315,6 +327,12 @@ class StopOpsMixin:
                     if not dep_res.ok:
                         dep_block = True
                         blocked_deps.append(dep)
+                        if dep.partition("@")[0] == _ri.STACK_ID:    # R7 fail closed: no node stop after a failed leave
+                            for left in dependents[n + 1:]:
+                                results.append(CompResult(component=left, stack=left, action="stop", outcome=Outcome.BLOCKED,
+                                                          summary=f"not attempted — {dep} did not stop first"))
+                                details.append(f"  [not attempted] dependent {left}: {dep} did not stop first")
+                            break
 
         for _, comp in items:
             # Never stop the daemon while a dependent is still running / not verified stopped.
@@ -607,7 +625,7 @@ class StopOpsMixin:
         # stopped (F-R3, reticulum-rnode-test-2026-09-24). Captured BEFORE the stop leg — after
         # it nothing is running — and re-raised by name after the stack is back.
         _optional_up = self._running_optional_components(target) if self.stack(target) else []
-        stopped = self.stop(target, apply=True, cascade=cascade, band=band, _operator=False, inst=inst)
+        stopped = self.stop(target, apply=True, cascade=cascade, band=band, _operator=False, inst=inst, _node_rides=True)
         if not stopped.ok:
             # Strict transition: never start after an unverified/failed stop. Preserve
             # the failed-stop typed results as the restart evidence.
@@ -654,8 +672,8 @@ class StopOpsMixin:
             if _check:
                 _ex = {target} if self.stack(target) else set()
                 if self._restart_stops_dependents(target, cascade):
-                    _ex |= set(self._stop_impl(target, apply=False, cascade=cascade,
-                                               band=_rband, inst=inst).data.get("dependents") or [])
+                    _ex |= set(self._stop_impl(target, apply=False, cascade=cascade, band=_rband, inst=inst,
+                                               _node_rides=True).data.get("dependents") or [])
             if (_r := self._start_preflight_refusal(target, _pre_order, _rband, radio, "restart",
                                                     check_blockers=_check, render=apply,
                                                     exclude_holders=_ex, inst=inst)) is not None:
@@ -679,7 +697,7 @@ class StopOpsMixin:
             return ActionResult(False, res.summary.replace("start", "restart", 1),
                                 details=res.details, data=res.data,
                                 next_commands=res.next_commands)
-        stp = self._stop_impl(target, apply=False, band=band, inst=inst)
+        stp = self._stop_impl(target, apply=False, band=band, inst=inst, _node_rides=True)
         data = dict(res.data)
         data["dependents"] = list(stp.data.get("dependents") or [])
         data["other_bands"] = list(stp.data.get("other_bands") or [])

@@ -70,6 +70,9 @@ Connect on the radio's card. Its card then says "Connected to the Reticulum node
 connected — <why>" with Connect and Remove. A member's saved settings (Config or panel) reload its interface live; the owner's panel values take effect at
 the node's restart. The owner's Stop
 ends the node and its memberships; a restart of the owner restarts the node once and connects its radios again.
+Stopping a radio's daemon takes that radio out of the node first (a member leaves; on the owner's radio the node
+stops), and the confirm says so; a daemon restart keeps the node as it is (the radio's interface is back once its
+daemon is ready).
 MeshChat lists a newly connected radio after its own restart ([Clients](#clients)).
 
 ## Hardware

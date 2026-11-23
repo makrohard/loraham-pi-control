@@ -1178,7 +1178,13 @@ def radio_dependents(svc, band: str, inst=None):
     for stk in (instances.stack_as(svc, s, instances.live) for s in svc.stacks()):     # B1 note C3: live
         if stk.id == daemon_sid or not any(svc.DAEMON_ID in c.depends_on for c in stk.components):
             continue
-        for i in commands.stack_instances(stk, svc._paths):
+        insts = commands.stack_instances(stk, svc._paths)
+        if instances.fixed_ports_only(stk):      # the one node: its owner and each live member on the daemon, members
+            own, cfg = instances.recorded_radio(svc._paths, stk.id, rids), svc.stack(stk.id)          # first (R6)
+            insts = tuple(commands.Instance(r) for r in sorted({i.rid for i in insts} | instances.recorded(svc, stk.id),
+                                                               key=lambda r: (r == own, int(r[1:])))
+                          if instances.access(svc, cfg, r) == "daemon")
+        for i in insts:
             if i.rid in rids and any(instances.instance_runs(svc, c, i, band) for c in stk.components if c.process):
                 out.append(f"{stk.id}@{i.rid}")
     return out

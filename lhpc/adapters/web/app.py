@@ -2543,8 +2543,12 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # The kill confirm: one click, with the processes the kill would signal named first; an instance's kill keeps
         # its radio through the preview and the POST (gate 2 finding 1).
         plan = _kill.kill(service, f"{sid}@{rid}" if rid else sid, component)
+        actionable = plan.ok and bool((plan.data or {}).get("pids"))       # a process the kill would signal
+        if failed is not None and not actionable and not (plan.data or {}).get("unresolved"):
+            flash(plan.summary, "warn")       # nothing a kill could signal: the stop's flash and why (a member: its way)
+            return _redirect_for(sid, rid)
         return render_template("kill_confirm.html", version=__version__, sid=sid, rid=rid,
-                               component=component, plan=plan, failed=failed)
+                               component=component, plan=plan, failed=failed, actionable=actionable)
 
     @app.get("/kill/<sid>")
     def kill_page(sid: str):

@@ -880,3 +880,148 @@ def test_a_client_stop_that_does_not_verify_says_it_released_nothing(box):
     assert not res.ok
     assert "  [kept] daemon band(s) and dependency stacks: not released (this stop did not verify)" in res.details
     assert not [d for d in res.details if d.startswith(("  [stopped daemon]", "  [stopped dependency]"))], res.details
+
+
+# ---- a daemon stop takes its radio out of the node first (PLAN-DAEMON-STOP-RNS v4) -----------------------------------
+
+def _daemon_member(box, rid="r4"):
+    """`rid` (the r4 stick: the daemon backend) joined to the node on r2, as a live member."""
+    from lhpc.core import reticulum_members
+    reticulum_members._save_intent(box.svc, rid, "r2")
+    assert reticulum_members.attach(box.svc, "r2", rid) == ""
+
+
+def _owner_on_daemon(box):
+    """The node's owner r2 reached through its radio's daemon (its saved backend), r4 a live member on its daemon."""
+    owner = _owner_up(box)
+    radios_fixture.reticulum_backend(box.root, ["r2"], "daemon")
+    _daemon_member(box)
+    return owner
+
+
+def _daemon_stop(box, rid, apply=False, band=""):
+    from lhpc.core import radio_start
+    return box.svc.stop("daemon", apply=apply, band=band, inst=radio_start.daemon_inst(rid, "868") if rid else None)
+
+
+def _deps(res):
+    return [r.component for r in res.results if r.component.startswith("reticulum")]
+
+
+def test_a_daemon_stop_on_a_members_radio_takes_it_out_of_the_node_first(box):
+    # red-before (8d8a90e2): the member's radio named no dependent (the one node's instance = its owner's radio)
+    owner = _owner_on_daemon(box)
+    plan = _daemon_stop(box, "r4")
+    assert plan.data["dependents"] == ["reticulum@r4"], plan.details
+    assert "  [stop dependent] reticulum@r4: leaves the Reticulum node (it keeps running on r2)" in plan.details
+    res = _daemon_stop(box, "r4", apply=True)
+    assert res.ok, res.summary + "\n".join(res.details)
+    assert _deps(res) == ["reticulum@r4"] and res.results[-1].component == "loraham-daemon"
+    assert ("--detach", "LoRa r4") in box.node.calls and owner.poll() is None
+    assert (_sections(box), _member(box, "r4"), _intent(box, "r4")) == (["[[LoRa r2]]"], [], "r2")      # R3 intent
+
+
+def test_a_daemon_stop_on_the_owners_radio_stops_the_node_and_ends_its_memberships(box):
+    owner = _owner_on_daemon(box)
+    plan = _daemon_stop(box, "r2")
+    assert plan.data["dependents"] == ["reticulum@r2"], plan.details
+    # red-before (8d8a90e2): the dependent named, what its stop does not
+    assert plan.details[-2:] == ["  [stop dependent] reticulum@r2: the Reticulum node stops",
+                                 "  [also disconnects] reticulum@r4"], plan.details
+    res = _daemon_stop(box, "r2", apply=True)
+    assert res.ok, res.summary + "\n".join(res.details)
+    assert _deps(res) == ["reticulum@r2"] and owner.wait(timeout=10) is not None
+    # R3: a radio's daemon stop is band-scoped (its radio's band): no operator intent passes, r4's intent stays
+    assert (_member(box, "r4"), _intent(box, "r4")) == ([], "r2")
+
+
+def test_a_daemon_stop_on_a_member_of_an_spi_node_names_it(box):
+    # red-before (8d8a90e2): the ea9fb906 shape (owner on SPI, the member on its daemon) named nothing
+    _owner_up(box)
+    _daemon_member(box)
+    plan = _daemon_stop(box, "r4")
+    assert plan.data["dependents"] == ["reticulum@r4"], plan.details
+    assert "  [stop dependent] reticulum@r4: leaves the Reticulum node (it keeps running on r2)" in plan.details
+
+
+def test_a_member_teardown_that_fails_leaves_the_daemon_up(box):
+    _owner_up(box)
+    _daemon_member(box)
+    box.node.j_down = True
+    res = _daemon_stop(box, "r4", apply=True)
+    assert not res.ok and "  [blocked] loraham-daemon: a dependent is still running — daemon left up" in res.details
+    assert len(_member(box, "r4")) == 1 and _intent(box, "r4") == "r2"
+
+
+def test_the_web_stop_of_a_members_daemon_names_the_member_and_what_it_does(box, web, csrf):
+    _owner_up(box)
+    _daemon_member(box)
+    client = web(service_factory=lambda: box.svc)
+    page = client.post("/action", data={"_csrf": csrf(client), "op": "stop", "target": "daemon@r4"}).get_data(as_text=True)
+    assert re.search(r"Other running stacks depend on this:</strong>\s*reticulum@r4\.", page), page
+    assert "[stop dependent] reticulum@r4: leaves the Reticulum node (it keeps running on r2)" in page
+
+
+def test_a_daemon_stop_where_reticulum_runs_on_spi_or_not_at_all_names_none(box):
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0      # r1 on SPI
+    assert _daemon_stop(box, "r4").data["dependents"] == []                          # nothing on r4
+    _daemon_member(box)                                                             # the node now on a daemon too
+    assert _daemon_stop(box, "r1").data["dependents"] == []
+
+
+def test_a_daemon_restart_keeps_the_node_and_its_members(box, monkeypatch):
+    # R5: the restart's stop leg leaves the node as it is (the interface rides through on READY); a25 C2: its preflight
+    # passes without stop_owners on the member's and the owner's radio (G1 256 B1: no node holder excluded, dry-run and apply)
+    from lhpc.core import radio_start
+    from lhpc.core.service_base import ActionResult
+    owner = _owner_on_daemon(box)
+    real_start = ControllerService.start
+    monkeypatch.setattr(ControllerService, "start", lambda self, t, apply=False, *a, **kw: ActionResult(True, "started")
+                        if t == "daemon" and apply else real_start(self, t, apply, *a, **kw))
+    for rid in ("r4", "r2"):
+        inst = radio_start.daemon_inst(rid, "868")
+        plan = box.svc.restart("daemon", band="868", inst=inst)
+        assert plan.ok and plan.data["dependents"] == [], plan.details
+        res = box.svc.restart("daemon", apply=True, band="868", inst=inst)
+        assert res.ok, res.summary + "\n".join(res.details)
+        assert not _deps(res) and not [c for c in box.node.calls if c[:1] == ("--detach",)]
+    assert owner.poll() is None and len(_member(box, "r4")) == 1 and _intent(box, "r4") == "r2"
+    assert _sections(box) == ["[[LoRa r2]]", "[[LoRa r4]]"]
+
+
+def test_a_band_daemon_stop_takes_the_members_out_before_the_node_stops(box):
+    owner = _owner_on_daemon(box)
+    plan = _daemon_stop(box, "", band="868")
+    assert plan.data["dependents"] == ["reticulum@r4", "reticulum@r2"], plan.details
+    res = _daemon_stop(box, "", apply=True, band="868")
+    assert res.ok, res.summary + "\n".join(res.details)
+    assert _deps(res) == ["reticulum@r4", "reticulum@r2"] and ("--detach", "LoRa r4") in box.node.calls
+    assert owner.wait(timeout=10) is not None and _member(box, "r4") == []
+
+
+
+def test_a_failed_member_stop_offers_no_kill_and_says_how_it_ends(box, web, csrf):
+    # Part K (his H finding; red-before 8d8a90e2): the failed member stop rendered "Yes, kill" over the M8 refusal
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    box.node.j_down = True
+    client = web(service_factory=lambda: box.svc)
+    r = client.post("/action", data={"_csrf": csrf(client), "op": "stop", "target": "reticulum@r1", "confirmed": "yes"})
+    assert r.status_code in (302, 303) and "kill" not in r.headers["Location"]
+    page = client.get(r.headers["Location"], headers={"Host": "localhost:8443"}).get_data(as_text=True)
+    assert "Cannot kill reticulum@r1: it is a member of the node on r2" in page and 'id="kill-form"' not in page
+
+
+def test_a_band_daemon_stop_whose_member_does_not_leave_never_stops_the_node(box):
+    # R7 fail closed (red-before 8d8a90e2 + R1: the owner's node stopped after r4's failed detach, r4's record left
+    # against a node that is gone)
+    from lhpc.core.outcomes import Outcome
+    owner = _owner_on_daemon(box)
+    box.node.j_down = True
+    res = _daemon_stop(box, "", apply=True, band="868")
+    assert not res.ok and owner.poll() is None and len(_member(box, "r4")) == 1
+    assert [(r.component, r.outcome) for r in res.results if r.component.startswith("reticulum")] == [
+        ("reticulum@r4", Outcome.UNVERIFIED), ("reticulum@r2", Outcome.BLOCKED)]
+    assert "  [not attempted] dependent reticulum@r2: reticulum@r4 did not stop first" in res.details
+    assert "  [blocked] loraham-daemon: a dependent is still running — daemon left up" in res.details

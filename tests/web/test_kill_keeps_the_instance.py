@@ -24,7 +24,7 @@ def _spy(monkeypatch):
 
     def kill(svc, target, component="", apply=False):
         calls.append((target, component, apply))
-        return ActionResult(True, f"Would kill {target}.")
+        return ActionResult(True, f"Would kill {target}.", data={"pids": [4242]})   # a process to signal (Part K0)
     monkeypatch.setattr(kill_mod, "kill", kill)
     return calls
 

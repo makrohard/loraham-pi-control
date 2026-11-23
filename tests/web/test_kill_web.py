@@ -37,13 +37,23 @@ def test_the_confirm_names_the_processes(web, tmp_path):
 
 
 def test_a_failed_stop_offers_the_whole_stack_kill(web, csrf, tmp_path):
-    # A matching process LHPC does not own: the stop refuses (MANUAL_REQUIRED).
-    c = web(cmdlines={999999: _kiss_argv(tmp_path)})
+    # A matching process LHPC does not own: the stop refuses (MANUAL_REQUIRED). A live pid: it has an identity.
+    import os
+    c = web(cmdlines={os.getpid(): _kiss_argv(tmp_path)})
     r = c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss@r1",
                                 "confirmed": "yes"})
     page = r.get_data(as_text=True)
     assert r.status_code == 200 and 'id="stop-failed"' in page and 'id="kill-form"' in page
     assert 'name="component" value=""' in page                       # the whole stack
+
+
+def test_a_failed_stop_over_an_unverifiable_process_lists_it_and_offers_no_kill(web, csrf, tmp_path):
+    # Part K0 (red-before 8d8a90e2: "Yes, kill" over a candidate the kill never signals): the page names it, no form
+    c = web(cmdlines={999999: _kiss_argv(tmp_path)})
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss@r1", "confirmed": "yes"})
+    page = r.get_data(as_text=True)
+    assert r.status_code == 200 and 'id="stop-failed"' in page and "[unverifiable] pid 999999" in page
+    assert 'id="kill-form"' not in page and 'id="kill-cancel"' in page
 
 
 def test_a_stop_that_succeeds_offers_no_kill(web, csrf):
@@ -83,3 +93,21 @@ def test_the_confirm_names_an_in_flight_start(web, tmp_path):
     finally:
         p.kill()
         p.wait(timeout=5)
+
+
+def test_a_failed_stop_with_no_process_left_offers_no_kill(web, csrf, monkeypatch):
+    # Part K (red-before 8d8a90e2): the page offered "Kill kiss@r1: 0 process(es)." with its button
+    from lhpc.core.service_base import ActionResult
+    c = web()
+    monkeypatch.setattr(ControllerService, "stop", lambda self, *a, **kw: ActionResult(False, "Stop of kiss did not verify."))
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss@r1", "confirmed": "yes"})
+    assert r.status_code in (302, 303) and "kill" not in r.headers["Location"]
+    page = c.get(r.headers["Location"]).get_data(as_text=True)
+    assert "Stop of kiss did not verify." in page and "Kill kiss@r1: 0 process(es)." in page
+
+
+def test_the_kill_page_with_nothing_to_kill_has_no_kill_button(web):
+    # Part K2 (red-before 8d8a90e2): the page itself, reached directly, carried "Yes, kill" over 0 processes
+    page = web().get("/kill/kiss").get_data(as_text=True)
+    assert "Kill kiss: 0 process(es)." in page and 'id="kill-form"' not in page and "SIGTERM" not in page
+    assert 'id="kill-cancel"' in page                                    # Cancel and the summary outside the form

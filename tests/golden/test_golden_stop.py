@@ -37,7 +37,7 @@ def test_plan_is_read_only(kiss_box, run_op):
     plan = run_op(box.root, lambda: box.svc.stop("kiss"))
     assert plan.fields == {
         "ok": True, "summary": "Stop plan for 'kiss': 2 component(s).",
-        "data_keys": ["changes", "commands", "dependents", "members", "other_bands"],   # reti B6: the node's members
+        "data_keys": ["changes", "commands", "dependents", "leaves", "members", "node_stops", "other_bands"],   # reti B6 + R2: the node
         "next_commands": ["lhpc stack stop kiss@r1 --yes"],
         "heads": ["[stop] loraham-kiss-serial", "[stop] loraham-kiss-tnc"], "outcomes": []}
     assert plan.phases == [] and plan.files == {"added": [], "removed": [], "changed": []}

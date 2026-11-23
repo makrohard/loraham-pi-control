@@ -366,7 +366,7 @@ def _card_forms(doc, card_id):
 def test_g1_w2_3_an_entry_without_an_instance_keeps_its_stop_and_loses_run(tmp_path, web, csrf):
     # W370 (G1-W2-RE, W290): a kiss process no launch record and no argv names a radio for keeps its state and its Stop
     # on each card of its band (posting that card's instance), never a Run; the Stop is not dead: lhpc owns no such
-    # process, so the stop is refused and Kill is offered.
+    # process, so the stop is refused; the kill of kiss@r3 names no process (Part K0): no Kill, the flash says so.
     from htmlq import parse
     c = _two_433_web(tmp_path, web, {200: ["/x/loraham-kiss-tnc"]})
     doc = parse(c.get("/").get_data(as_text=True))
@@ -374,8 +374,9 @@ def test_g1_w2_3_an_entry_without_an_instance_keeps_its_stop_and_loses_run(tmp_p
         assert [f for f in _card_forms(doc, card) if f[1].partition("@")[0] == "kiss"] == [("stop", f"kiss@{card[6:]}")]
         assert doc.present(f"noinst-{card[6:]}-kiss"), card
     page = c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss@r3", "confirmed": "yes"})
-    body = page.get_data(as_text=True)
-    assert page.status_code == 200 and 'id="stop-failed"' in body and 'id="kill-form"' in body
+    assert page.status_code in (302, 303) and "kill" not in page.headers["Location"]
+    body = c.get(page.headers["Location"]).get_data(as_text=True)
+    assert "Kill kiss@r3: 0 process(es)." in body and 'id="kill-form"' not in body
 
 
 def test_g1_w2_3_an_instance_shows_on_its_own_radios_card_only(tmp_path, web):
