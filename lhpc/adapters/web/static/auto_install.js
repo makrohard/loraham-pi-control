@@ -16,6 +16,9 @@
   // Starting card: reload ONLY when the EXPECTED new run's marker appears — the old
   // terminal marker may still answer the API meanwhile and must not trigger reloads.
   var expect = runCard.getAttribute("data-run-expect") || "";
+  // A navigation once sent is never sent again by a later tick: on a page that renders slower than the poll, each
+  // repeat aborted the last and the page never arrived.
+  var leaving = false;
   var offset = 0;
   var timer = null;
   var interval = 2000;
@@ -40,11 +43,13 @@
   }
 
   function render(d) {
+    if (leaving) return;
     var st = d.state || {};
     if (expect) {
-      if (d.run_id === expect) { window.location.reload(); return; }  // marker landed
+      if (d.run_id === expect) { leaving = true; window.location.reload(); return; }  // marker landed
       if (!d.spawn_live) {
         // The spawn ended WITHOUT our marker: a pre-claim refusal — show its output.
+        leaving = true;
         window.location.href = "/auto-install?spawn=" + encodeURIComponent(expect);
       }
       return;
