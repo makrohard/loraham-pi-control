@@ -15,6 +15,7 @@ it is reported as written but not durable.
 """
 from __future__ import annotations
 
+import functools
 import os
 import re
 import tempfile
@@ -127,6 +128,20 @@ def load(paths, models: dict | None = None) -> State:
 
 def load_text(text: str, models: dict | None = None) -> State:
     """`load` on a text: the same structure checks, the row checks and the save checks (Q6)."""
+    rows = _rows(text)
+    if isinstance(rows, State):
+        return rows
+    radios, retired = rows
+    reasons = check(list(radios), models, retired)
+    return (State(INVALID, reasons=tuple(reasons)) if reasons
+            else State(VALID, radios=radios, retired=retired))
+
+
+@functools.lru_cache(maxsize=4)
+def _rows(text: str):
+    """`load_text`'s parse, structure and row checks, once per text: one dashboard render reads the list hundreds of
+    times. (radios, retired) as tuples of frozen values, or the INVALID State. A changed file is a different text, so
+    nothing is ever stale. The save checks (`check`) are never cached: they take the caller's models."""
     try:
         data = tomllib.loads(text)
     except (tomllib.TOMLDecodeError, RecursionError, ValueError) as exc:      # never BaseException (Q9)
@@ -137,15 +152,11 @@ def load_text(text: str, models: dict | None = None) -> State:
     retired = data.get("retired", [])
     if why := _retired_error(retired):
         return State(INVALID, reasons=(why,))
-    retired = tuple(retired)
     radios, reasons = [], []
     for i, row in enumerate(rows, 1):
         r, why = _row(row, i)
         (reasons.append(why) if why else radios.append(r))
-    if not reasons:
-        reasons = check(radios, models, retired)
-    return (State(INVALID, reasons=tuple(reasons)) if reasons
-            else State(VALID, radios=tuple(radios), retired=retired))
+    return State(INVALID, reasons=tuple(reasons)) if reasons else (tuple(radios), tuple(retired))
 
 
 def _retired_error(retired) -> str:

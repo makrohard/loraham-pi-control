@@ -6,6 +6,7 @@ supported chips and transports is one row and no code. Unused until the hardware
 """
 from __future__ import annotations
 
+import functools
 import re
 import tomllib
 from dataclasses import dataclass
@@ -62,14 +63,23 @@ class RadioModel:
 
 
 def load(path: Path = TABLE) -> dict:
-    """{id: RadioModel} in table order; ModelError on the first row outside the schema."""
+    """{id: RadioModel} in table order; ModelError on the first row outside the schema. Every call builds its own
+    models from the parsed rows, so nothing a caller holds is shared with another."""
     models = {}
-    for row in tomllib.loads(path.read_text(encoding="utf-8")).get("model", []):
+    for row in _rows(path.read_text(encoding="utf-8")):
         model = _model(row)
         if model.id in models:
             raise ModelError(f"duplicate model id {model.id!r}")
         models[model.id] = model
     return models
+
+
+@functools.lru_cache(maxsize=2)
+def _rows(text: str) -> tuple:
+    """The table's rows, parsed once per text: one dashboard render reads the table hundreds of times. A changed file
+    is a different text, so nothing is ever stale. The rows are never handed out: `_model` only reads them and copies
+    what it keeps."""
+    return tuple(tomllib.loads(text).get("model", []))
 
 
 def _model(row: dict) -> RadioModel:
@@ -103,7 +113,12 @@ def _model(row: dict) -> RadioModel:
     need(bool(variants), "variant", "is required")
     need(len({v.key for v in variants}) == len(variants), "variant", "keys must differ")
     return RadioModel(row["id"], row["label"], row["short"], row["transport"], row["chip"], tuple(bands),
-                      row["power_default_dbm"], row["high_power_switch"], variants, usb, row.get("direct"), top)
+                      row["power_default_dbm"], row["high_power_switch"], variants, _copy(usb), _copy(row.get("direct")), top)
+
+
+def _copy(table):
+    """A sub-table the model keeps, as its own dict (the parsed rows are shared by every load)."""
+    return None if table is None else dict(table)
 
 
 def _variant(v: dict, where: str, bands: list, transport: str = "spi") -> Variant:
