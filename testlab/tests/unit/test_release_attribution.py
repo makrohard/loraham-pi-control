@@ -1,6 +1,6 @@
 """The release lane's attribution contract, proved where the automation reads it: the required
 case list, the `STACK-REGRESSION` marker grammar, JUnit attribution through the REAL release
-helpers with the executable stubbed, the between-case cleanup fixture, the `-x` invocation, and
+helpers with the executable stubbed, the between-case cleanup fixture and its clean-lab proof, the run-all invocation, and
 the one rule the lane shares with the binary builder."""
 from __future__ import annotations
 
@@ -342,8 +342,7 @@ def test_a_failing_case_releases_its_stack_and_a_passing_one_does_not(tmp_path):
     assert json.loads((tmp_path / "calls.json").read_text()) == ["kiss"]
 
 
-# The lane as a RELEASE runs it: `-x`, and a stop that cannot stop anything. One radio pair,
-# two stacks that both want it.
+# A stop that cannot stop anything. One radio pair, two stacks that both want it.
 _FAILFAST_LANE = """
 import lhpc_testlab.release as rel
 import pytest
@@ -375,36 +374,49 @@ def test_release_reticulum(env):
 """
 
 
-def test_a_stopped_run_reports_its_failed_cleanup_and_never_reaches_the_next_stack(tmp_path):
-    """The two sequences that made continuing after a failure unsafe in BOTH directions.
+def _junit_outcomes(tmp_path, lane: str, *extra_args) -> dict:
+    """{case name: [(outcome, text), ...]} — "failure", "error", "skipped" or "passed" — for a lane
+    run as its own pytest process. A case that FAILS and whose teardown then ERRORS has both."""
+    import xml.etree.ElementTree as ET
 
-    A cleanup that SUCCEEDS used to be followed by the next case failing UNMARKED on its
-    prerequisite, and the consumer — right to refuse attribution when a run also carries an
-    unexplained failure — then dropped the genuine freeze the first case had earned. A cleanup
-    that FAILS was worse: the band stayed held, the next case hit it, earned its OWN valid
-    marker, and an innocent stack was frozen with nothing in the JUnit saying the lab had not
-    cleaned up.
-
-    `-x` and a raising teardown answer both. The run stops at the first genuine regression, which
-    is the only one this lane can still judge; the failed stop is reported as a teardown ERROR on
-    that same case, with no marker on it — so a run whose lab is broken cannot attribute anything
-    at all. Nothing about the second stack is claimed either way, and a stopped run can never
-    satisfy the publication gate, which requires every required case to have passed.
-    """
-    entries = _junit_entries(tmp_path, _FAILFAST_LANE, "-x", "-p", "lhpc_testlab.release_lane")
-    assert [(n, k) for n, k, _ in entries] == [("test_release_kiss", "failure"),
-                                               ("test_release_kiss", "error")], entries
-    failure, error = entries[0][2], entries[1][2]
-    assert set(STACK_REGRESSION_IN_TEXT.findall(failure)) == {("kiss", "readiness")}
-    assert "STACK-REGRESSION" not in error, error
-    assert "could not release" in error, error
+    (tmp_path / "test_marker_lane.py").write_text(lane)
+    xml = tmp_path / "junit.xml"
+    subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *extra_args,
+                    "test_marker_lane.py", f"--junitxml={xml}"],
+                   cwd=tmp_path, capture_output=True, text=True, timeout=300, check=False)
+    out: dict = {}
+    # Untrusted only in the abstract: this XML is the file pytest just wrote here.
+    for case in ET.parse(xml).getroot().iter("testcase"):  # noqa: S314
+        got = [(e.tag, (e.get("message") or "") + "\n" + (e.text or "")) for e in case
+               if e.tag in ("failure", "error", "skipped")]
+        out.setdefault(case.get("name"), []).extend(got or [("passed", "")])
+    return out
 
 
-def test_the_release_verify_job_runs_the_lane_with_x():
-    """`-x` IS the correction above, and it lives in the invocation rather than in the lane's
-    code — so nothing in the lane notices when it is dropped. The automated release dispatches
-    exactly this job and reads exactly this JUnit, which makes the flag part of the attribution
-    contract and not a preference."""
+def _unmarked(outcomes: dict) -> list:
+    """The failing entries the consumer reads as UNATTRIBUTED (no marker): any one of them makes it
+    refuse every hold in the run."""
+    return [(n, k) for n, entries in outcomes.items() for k, t in entries
+            if k in ("failure", "error") and not STACK_REGRESSION_IN_TEXT.search(t)]
+
+
+def test_a_failed_cleanup_makes_the_whole_run_unattributable(tmp_path):
+    """The lane runs every case now, so a cleanup that could not stop what the failing case held
+    must make the RUN say so: the band stays held and the next stack's own MARKED failure would
+    otherwise freeze an innocent stack. The failed stop is a teardown ERROR with no marker on the
+    failing case, and the consumer attributes nothing in a run that carries one."""
+    out = _junit_outcomes(tmp_path, _FAILFAST_LANE, "-p", "lhpc_testlab.release_lane")
+    kiss = dict(out["test_release_kiss"])
+    assert set(STACK_REGRESSION_IN_TEXT.findall(kiss["failure"])) == {("kiss", "readiness")}
+    assert "STACK-REGRESSION" not in kiss["error"] and "could not release" in kiss["error"], kiss
+    assert ("test_release_kiss", "error") in _unmarked(out)
+    assert "test_release_reticulum" in out                # judged: the lane no longer stops
+
+
+def test_the_release_verify_job_runs_the_lane_without_x():
+    """Every case runs and every failure is reported; the attribution `-x` used to protect is now
+    kept by `inherits` and the clean-lab proof, so a re-added `-x` would hide every failure after
+    the first again."""
     import shlex
 
     wf = (Path(__file__).resolve().parents[3] / ".github" / "workflows" / "testlab.yml")
@@ -416,7 +428,305 @@ def test_the_release_verify_job_runs_the_lane_with_x():
     assert invocations, "the release-verify job no longer runs the release lane"
     for ln in invocations:
         argv = shlex.split(ln, comments=True)
-        assert "-x" in argv, f"the release lane must stop at the first failure: {ln.strip()}"
+        assert not {"-x", "--exitfirst"} & set(argv), f"the release lane must run every case: {ln.strip()}"
+        assert "--maxfail" not in {a.partition("=")[0] for a in argv}, ln.strip()
+
+
+
+def test_the_lane_gates_every_case_that_inherits_or_judges_the_whole_install():
+    """The gates live in the lane's case bodies, which only the aarch64 release job runs — so the
+    calls are pinned here: a case that builds on another case's stack opens with its gate, and the
+    identity case opens with `require_all_passed()`."""
+    import ast
+
+    lane = Path(__file__).resolve().parents[1] / "release" / "test_release_verify.py"
+    bodies = {f.name: f.body for f in ast.parse(lane.read_text()).body if isinstance(f, ast.FunctionDef)}
+
+    def first_call(case):
+        stmt = next(s for s in bodies[case]
+                    if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant)))   # past the docstring
+        return ast.unparse(stmt)
+    assert first_call("test_release_graywolf") == "require_prerequisite(env, 'kiss', left_by='test_release_kiss')"
+    assert first_call("test_release_voice_gtk") == "require_prerequisite(env, 'daemon', left_by='test_release_chat')"
+    assert first_call("test_release_voice_terminal") == "inherits('test_release_voice_gtk')"
+    assert first_call("test_release_reticulum_nomadnet") == \
+        "require_prerequisite(env, 'reticulum', left_by='test_release_reticulum')"
+    assert first_call("test_release_identity_matches_candidate_manifest") == "require_all_passed()"
+
+# A lane as a release now runs it: no -x. The stub is the cleanup lane's: status from STATE, a stop
+# that stops. `rel.lab_endpoints` is the clean-lab proof's endpoint source, replaced by plain
+# module assignment (it exists on both sides of the change).
+_RUN_ALL_STUB = """
+import socket, subprocess
+import lhpc_testlab.release as rel
+import pytest
+
+STATE = {"kiss": "stopped", "graywolf": "stopped", "daemon": "stopped", "chat": "stopped",
+         "voice": "stopped", "reticulum": "stopped"}
+
+def _run(env, *a, **kw):
+    if a[:1] == ("status",):
+        out = "".join(f"[{s}] {s.title()}  ({st})\\n" for s, st in STATE.items())
+        return type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+    assert a[:2] == ("stack", "stop"), a
+    STATE[a[2].partition("@")[0]] = "stopped"
+    return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+rel.run_lhpc = _run
+rel.lab_endpoints = lambda env: []
+
+@pytest.fixture
+def env():
+    return {}
+"""
+
+_PREREQUISITE_LANE = _RUN_ALL_STUB + """
+def test_release_kiss(env):
+    STATE["kiss"] = "running"
+    assert False, rel.stack_regression("kiss", "readiness") + "\\nkiss never served KISS/TCP"
+
+def test_release_graywolf(env):
+    rel.require_prerequisite(env, "kiss", left_by="test_release_kiss")
+    assert False, rel.stack_regression("graywolf", "start") + "\\nmust never be reached"
+
+def test_release_reticulum(env):
+    STATE["reticulum"] = "running"
+"""
+
+
+def test_a_case_inheriting_from_a_failed_one_is_skipped_and_an_independent_one_runs(tmp_path):
+    """kiss fails MARKED; graywolf, which builds on the KISS chain kiss leaves up, is SKIPPED
+    naming kiss (before, it failed UNMARKED in `require_prerequisite`, and that unattributed
+    failure made the consumer drop kiss's genuine freeze); reticulum, independent, runs."""
+    out = _junit_outcomes(tmp_path, _PREREQUISITE_LANE, "-p", "lhpc_testlab.release_lane")
+    assert [k for k, _ in out["test_release_kiss"]] == ["failure"], out
+    (kind, why), = out["test_release_graywolf"]
+    assert kind == "skipped" and "not run: test_release_kiss did not pass" in why, out
+    assert out["test_release_reticulum"] == [("passed", "")], out
+    assert _unmarked(out) == []                            # kiss's marker is the run's only verdict
+
+
+_CHAIN_LANE = _RUN_ALL_STUB + """
+def test_release_chat(env):
+    STATE["daemon"] = "running"
+    assert False, rel.stack_regression("chat", "readiness") + "\\nchat drew nothing"
+
+def test_release_voice_gtk(env):
+    rel.require_prerequisite(env, "daemon", left_by="test_release_chat")
+    assert False, rel.stack_regression("voice", "start") + "\\nmust never be reached"
+
+def test_release_voice_terminal(env):
+    rel.inherits("test_release_voice_gtk")
+    assert False, rel.stack_regression("voice", "readiness") + "\\nmust never be reached"
+
+def test_release_identity_matches_candidate_manifest(env):
+    rel.require_all_passed()
+    assert False, "mandatory components are not installed: voice"
+"""
+
+
+def test_a_not_run_walks_down_the_chain_and_only_the_broken_stack_is_named(tmp_path):
+    """chat fails → voice_gtk (which needs the daemon chat leaves up) is SKIPPED → voice_terminal
+    (which runs voice_gtk's install) is SKIPPED too, and the identity case is not judged: the only
+    stack the JUnit names is chat. Ungated, voice_terminal failed MARKED voice."""
+    out = _junit_outcomes(tmp_path, _CHAIN_LANE, "-p", "lhpc_testlab.release_lane")
+    assert [k for k, _ in out["test_release_chat"]] == ["failure"], out
+    for case, after in (("test_release_voice_gtk", "test_release_chat"),
+                        ("test_release_voice_terminal", "test_release_voice_gtk")):
+        (kind, why), = out[case]
+        assert kind == "skipped" and f"not run: {after} did not pass" in why, out
+    (kind, why), = out["test_release_identity_matches_candidate_manifest"]
+    assert kind == "skipped" and "not judged: test_release_chat, test_release_voice_gtk" in why, out
+    named = {m for entries in out.values() for k, t in entries if k in ("failure", "error")
+             for m in STACK_REGRESSION_IN_TEXT.findall(t)}
+    assert named == {("chat", "readiness")} and _unmarked(out) == [], out
+
+
+def test_the_identity_case_runs_when_every_box_case_passed(tmp_path):
+    lane = _RUN_ALL_STUB + """
+def test_release_kiss(env):
+    pass
+
+def test_release_identity_matches_candidate_manifest(env):
+    rel.require_all_passed()
+"""
+    out = _junit_outcomes(tmp_path, lane, "-p", "lhpc_testlab.release_lane")
+    assert out["test_release_identity_matches_candidate_manifest"] == [("passed", "")], out
+
+
+# The verdict's case (G1 row 210 B1): kiss fails and leaves a listener LHPC status does not show,
+# then an independent, otherwise healthy stack fails to start on it and earns its own marker.
+_ORPHAN_LANE = _RUN_ALL_STUB.replace("rel.lab_endpoints = lambda env: []\n", """
+ORPHAN = socket.socket()
+ORPHAN.bind(("127.0.0.1", 0))
+ADDRESS = "127.0.0.1:%d" % ORPHAN.getsockname()[1]
+rel.lab_endpoints = lambda env: [("kiss", "loraham-kiss-tnc", "tcp", ADDRESS)]
+""") + """
+def test_release_kiss(env):
+    STATE["kiss"] = "running"
+    ORPHAN.listen()
+    if CLOSE:
+        ORPHAN.close()
+    assert False, rel.stack_regression("kiss", "readiness") + "\\nkiss never served KISS/TCP"
+
+def test_release_reticulum(env):
+    STATE["reticulum"] = "running"
+    assert False, rel.stack_regression("reticulum", "readiness") + "\\nrnsd gone: its port was taken"
+"""
+
+
+def test_an_orphan_lhpc_cannot_see_makes_the_run_unattributable(tmp_path):
+    """After kiss's stops succeed, the clean-lab proof finds the endpoint still accepting and turns
+    kiss's teardown into an UNMARKED error naming it — so reticulum's marker, earned on what kiss
+    left, cannot become a freeze: the consumer refuses every hold in a run with an unmarked entry."""
+    out = _junit_outcomes(tmp_path, _ORPHAN_LANE.replace("STATE = {", "CLOSE = False\nSTATE = {"),
+                          "-p", "lhpc_testlab.release_lane")
+    kiss = dict(out["test_release_kiss"])
+    assert "STACK-REGRESSION" not in kiss["error"], kiss
+    assert re.search(r"kiss/loraham-kiss-tnc tcp 127\.0\.0\.1:\d+ still accepts connections", kiss["error"]), kiss
+    assert "NOTHING in this run may be attributed" in kiss["error"], kiss
+    assert dict(out["test_release_reticulum"])["failure"]          # the independent case was judged
+    assert ("test_release_kiss", "error") in _unmarked(out)
+
+
+def test_a_lab_shown_clean_keeps_every_marker(tmp_path):
+    """The same lane with the listener closed before kiss fails: no teardown error, kiss's marker
+    stands, and the independent reticulum is judged and attributed on its own."""
+    out = _junit_outcomes(tmp_path, _ORPHAN_LANE.replace("STATE = {", "CLOSE = True\nSTATE = {"),
+                          "-p", "lhpc_testlab.release_lane")
+    assert [k for k, _ in out["test_release_kiss"]] == ["failure"], out
+    assert [k for k, _ in out["test_release_reticulum"]] == ["failure"], out
+    assert _unmarked(out) == []
+
+
+def test_a_stack_still_holding_after_a_stop_that_succeeded_is_a_leftover(tmp_path):
+    """The stop answers rc 0 but LHPC still reports the stack running: the second status read names it."""
+    lane = _RUN_ALL_STUB.replace('    STATE[a[2].partition("@")[0]] = "stopped"\n', "") + """
+def test_release_kiss(env):
+    STATE["kiss"] = "running"
+    assert False, rel.stack_regression("kiss", "readiness") + "\\nkiss never served KISS/TCP"
+"""
+    out = _junit_outcomes(tmp_path, lane, "-p", "lhpc_testlab.release_lane")
+    kiss = dict(out["test_release_kiss"])
+    assert "kiss is still running after its stop" in kiss["error"] and "STACK-REGRESSION" not in kiss["error"]
+
+
+# --- lab_leftovers itself: fail closed on every answer that cannot show the lab clean ------------------
+
+
+def _leftovers(monkeypatch, status, endpoints=(), timeout=0.0):
+    import lhpc_testlab.release as rel
+
+    def run(env, *args, timeout=300.0, check=False):
+        if isinstance(status, BaseException):
+            raise status
+        return status
+    monkeypatch.setattr(rel, "run_lhpc", run)
+    monkeypatch.setattr(rel, "lab_endpoints", lambda env: list(endpoints))
+    return rel.lab_leftovers({}, timeout=timeout)
+
+
+_CLEAN = subprocess.CompletedProcess(["lhpc", "status"], 0, "[kiss] KISS TNC  (stopped)\n", "")
+
+
+@pytest.mark.parametrize("status, why", [
+    (subprocess.TimeoutExpired(["lhpc", "status"], 180), "`lhpc status` timed out"),
+    (subprocess.CompletedProcess(["lhpc", "status"], 1, "[kiss] KISS TNC  (stopped)\n", ""), "failed (rc 1)"),
+], ids=["timeout", "rc1"])
+def test_a_status_that_cannot_be_read_is_a_leftover(monkeypatch, status, why):
+    left = _leftovers(monkeypatch, status)
+    assert len(left) == 1 and why in left[0] and "cannot be shown clean" in left[0], left
+
+
+@pytest.mark.parametrize("state", ["running", "degraded", "failed"])
+def test_a_stack_lhpc_still_reports_holding_is_a_leftover(monkeypatch, state):
+    status = subprocess.CompletedProcess(["lhpc", "status"], 0, f"[kiss] KISS TNC  ({state})\n", "")
+    assert _leftovers(monkeypatch, status) == [f"kiss is still {state} after its stop"]
+
+
+def test_a_refused_port_and_a_missing_socket_are_free(monkeypatch, tmp_path):
+    import socket
+
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    assert _leftovers(monkeypatch, _CLEAN, [("kiss", "k", "tcp", f"127.0.0.1:{port}"),
+                                            ("daemon", "d", "unix", str(tmp_path / "gone.sock"))]) == []
+
+
+def test_a_listening_port_and_a_listening_socket_are_leftovers(monkeypatch, tmp_path):
+    import socket
+
+    with socket.socket() as t, socket.socket(socket.AF_UNIX) as u:
+        t.bind(("127.0.0.1", 0))
+        t.listen()
+        u.bind(str(tmp_path / "live.sock"))
+        u.listen()
+        addr = f"127.0.0.1:{t.getsockname()[1]}"
+        left = _leftovers(monkeypatch, _CLEAN, [("kiss", "k", "tcp", addr),
+                                                ("daemon", "d", "unix", str(tmp_path / "live.sock"))])
+    assert left == [f"kiss/k tcp {addr} still accepts connections",
+                    f"daemon/d unix {tmp_path / 'live.sock'} still accepts connections"]
+
+
+def test_an_answer_that_cannot_rule_out_a_holder_is_a_leftover(monkeypatch):
+    import lhpc_testlab.release as rel
+
+    def denied(*a, **k):
+        raise PermissionError(13, "Permission denied")
+    monkeypatch.setattr(rel.socket, "create_connection", denied)
+    left = _leftovers(monkeypatch, _CLEAN, [("kiss", "k", "tcp", "127.0.0.1:8001")])
+    assert left == ["kiss/k tcp 127.0.0.1:8001 gave PermissionError: [Errno 13] Permission denied, "
+                    "so it cannot be shown free"]
+
+
+def test_an_unrendered_address_is_a_leftover(monkeypatch):
+    left = _leftovers(monkeypatch, _CLEAN, [("daemon", "d", "unix", "/tmp/loraconf-{rid}.sock")])
+    assert left == ["daemon/d unix /tmp/loraconf-{rid}.sock is not rendered, so it cannot be checked"]
+
+
+def test_an_endpoint_still_closing_is_polled_until_free(monkeypatch):
+    """Counted answers, not time: the endpoint is held for two rounds, then free."""
+    import lhpc_testlab.release as rel
+
+    answers = iter(["still accepts connections", "still accepts connections"])
+    monkeypatch.setattr(rel, "_endpoint_held", lambda kind, address: next(answers, ""))
+    assert _leftovers(monkeypatch, _CLEAN, [("kiss", "k", "tcp", "127.0.0.1:8001")], timeout=60) == []
+
+
+# --- T-SET: the endpoints the proof checks are the ones the lane itself waits on ---------------------------
+
+
+def test_the_clean_lab_proof_checks_every_rendered_endpoint_the_lane_waits_on(tmp_path):
+    """On the lab's own baseline hardware list (`setup_radios(paths, "loraham")`, what the lab reset
+    writes: lhpc_testlab/ops.py `set_hardware_setup("loraham")`), every address the lane's own
+    `port_of` resolves is in `lab_endpoints`, rendered per instance: meshcore runs on r2, where its
+    ports are NOT the base ones; meshtastic's r2 instance is there beside r1; the daemon's socket is
+    there for each radio; and nothing is left as a template. Containment, not equality: the proof may
+    check more than the lane waits on."""
+    from lhpc_testlab import release as rel
+    from lhpc_testlab.testing import port_of
+
+    from lhpc.core import radio_start
+    from lhpc.core.paths import Paths
+
+    ok, why = radio_start.setup_radios(Paths(runtime_root=tmp_path), "loraham")[:2]
+    assert ok, why
+    env = {"LHPC_RUNTIME_ROOT": str(tmp_path)}
+    eps = rel.lab_endpoints(env)
+    tcp = {a for _s, _c, k, a in eps if k == "tcp"}
+    unix = {a for _s, _c, k, a in eps if k == "unix"}
+    assert port_of(env, "meshcore", rel.MESHCORE_COMPANION) == 5133      # rendered != base (measured)
+    for stack, base in (("kiss", rel.KISS_TCP), ("graywolf", rel.GRAYWOLF_UI), ("meshtastic", rel.MESHTASTIC_API),
+                        ("meshtastic", rel.MESHTASTIC_WEB), ("meshcom", rel.MESHCOM_UI),
+                        ("meshcore", rel.MESHCORE_COMPANION), ("meshcore", rel.REPEATER_DASHBOARD),
+                        ("meshcore", rel.MESHCORE_WEBUI)):
+        assert f"127.0.0.1:{port_of(env, stack, base)}" in tcp, (stack, base, sorted(tcp))
+    assert f"127.0.0.1:{rel.MESHCHAT_UI}" in tcp                       # the lane waits on it unrendered
+    assert {"127.0.0.1:5133", "127.0.0.1:8133", "127.0.0.1:8921", "127.0.0.1:4536"} <= tcp, sorted(tcp)
+    assert {"/tmp/loraconf-r1.sock", "/tmp/loraconf-r2.sock"} <= unix, sorted(unix)
+    assert not [a for _s, _c, _k, a in eps if "{" in a], eps
 
 
 def test_the_lane_refuses_to_fake_a_box_without_a_display(tmp_path):

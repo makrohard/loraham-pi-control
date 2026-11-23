@@ -23,6 +23,8 @@ import urllib.request
 import warnings
 from pathlib import Path
 
+import pytest
+
 from lhpc.core import build_regression as br
 from lhpc_testlab import data_path
 from lhpc_testlab.testing import named, run_lhpc
@@ -281,8 +283,112 @@ def holding_stacks(env: dict) -> set:
     `degraded` counts: it is a component that IS up with an endpoint it promised missing, and it
     holds the band exactly like a healthy one. So does `failed`, which can leave a process behind.
     """
-    return {sid for sid, state in stack_states(env).items()
-            if state in ("running", "degraded", "failed")}
+    return {sid for sid, state in stack_states(env).items() if state in _HOLDING}
+
+
+_HOLDING = ("running", "degraded", "failed")
+
+# The box cases of THIS run that did not PASS — their setup or call failed or was skipped — by
+# name. Filled by the lane's report hook (`lhpc_testlab.release_lane`); read by `inherits`. A skip
+# counts on purpose: a case that inherits from a skipped one has nothing to inherit either, so a
+# "not run" walks down a chain (and any future environment skip of a box case also skips the
+# cases inheriting from it, and the identity case).
+NOT_PASSED: set[str] = set()
+
+
+def inherits(left_by: str) -> None:
+    """SKIP this case when `left_by`, the earlier case whose installed or running stack it builds
+    on, did not pass: what this case would judge was never handed to it. Run without `-x`, the
+    lane otherwise reports such a case as a failure of its own — unmarked, which makes the
+    consumer refuse the genuine freeze the earlier case earned — or, with no gate at all, as a
+    MARKED failure naming a stack that never had a chance to run."""
+    if left_by in NOT_PASSED:
+        pytest.skip(f"not run: {left_by} did not pass, and this case inherits what it leaves")
+
+
+def require_all_passed() -> None:
+    """SKIP a case that judges the WHOLE install (the identity case) when an earlier box case did
+    not pass: the install is incomplete by that case's own report, and the run is red already.
+    Judging it anyway reports the same gap a second time, unmarked — which makes the consumer
+    refuse the genuine freeze the first case earned."""
+    if NOT_PASSED:
+        pytest.skip(f"not judged: {', '.join(sorted(NOT_PASSED))} did not pass, so the install is "
+                    f"incomplete by that case's own report (the run is red already)")
+
+
+def lab_endpoints(env: dict) -> list:
+    """`(stack, component, kind, address)` of every tcp and unix endpoint LHPC declares, for every
+    instance of every stack on the lab root's hardware list (`instances.saved_insts`), each
+    instance as `instances.resolve` gives it to `port_of`, and the address rendered the way the
+    product renders an instance's endpoint (`inst.subst(address_template or address)`,
+    lhpc/core/model.py) — which also names the daemon's `loraconf-{rid}.sock` per radio, a template
+    `endpoints_for` leaves alone. What a component of this lab can hold. A unit lane's stubbed env
+    (no lab root) has none."""
+    if "LHPC_RUNTIME_ROOT" not in env:
+        return []
+    from lhpc.core import instances
+    from lhpc.core.paths import Paths
+    from lhpc.core.services import ControllerService
+    svc = ControllerService(paths=Paths(runtime_root=Path(env["LHPC_RUNTIME_ROOT"])))
+    out = set()
+    for stack in svc.stacks():
+        for saved in instances.saved_insts(svc, stack.id):
+            inst = instances.resolve(svc, f"{stack.id}@{saved.rid}")[1] if saved is not None else None
+            for comp in stack.components:
+                out |= {(stack.id, comp.id, ep.kind,
+                         inst.subst(ep.address_template or ep.address) if inst is not None else ep.address)
+                        for ep in comp.endpoints if ep.kind in ("tcp", "unix")}
+    return sorted(out)
+
+
+def _endpoint_held(kind: str, address: str) -> str:
+    """Why `address` is not free ("" when it is): it accepts a connection, or the answer cannot
+    rule that out. Only a refused connection or a missing socket file is free."""
+    if "{" in address:
+        return "is not rendered, so it cannot be checked"
+    try:
+        if kind == "unix":
+            with socket.socket(socket.AF_UNIX) as s:
+                s.settimeout(1)
+                s.connect(address)
+        else:
+            host, _, port = address.rpartition(":")
+            socket.create_connection((host, int(port)), timeout=1).close()
+    except (ConnectionRefusedError, FileNotFoundError):
+        return ""
+    except OSError as exc:
+        return f"gave {type(exc).__name__}: {exc}, so it cannot be shown free"
+    return "still accepts connections"
+
+
+def lab_leftovers(env: dict, timeout: float = 10.0) -> list:
+    """What the lab still holds after a failed case's cleanup, each named: a stack LHPC still
+    reports holding on a SECOND status read, a status that cannot be read, and every endpoint of
+    `lab_endpoints` that is not free by the deadline (polled, so a process still exiting is not
+    a leftover). [] = the lab is shown clean, and a later case may be judged and attributed.
+
+    The orphan this catches is one LHPC status does not show: its stop succeeded, yet a process
+    keeps a port or socket. The next independent stack then fails to start, LHPC reports it gone,
+    and its readiness check earns a VALID marker for a fault that is not its own. Limit: a
+    resource that is neither an LHPC-reported stack nor a declared tcp/unix endpoint (a UDP
+    port, a device or lock file) is not seen."""
+    try:
+        r = run_lhpc(env, "status", timeout=180)
+    except subprocess.TimeoutExpired:
+        return ["`lhpc status` timed out, so the lab cannot be shown clean"]
+    if r.returncode != 0:
+        return [f"`lhpc status` failed (rc {r.returncode}), so the lab cannot be shown clean"]
+    left = [f"{sid} is still {state} after its stop"
+            for sid, state in sorted((m.group(1), m.group(2)) for m in _STACK_STATE.finditer(r.stdout))
+            if state in _HOLDING]
+    endpoints = lab_endpoints(env)
+    deadline = time.monotonic() + timeout
+    while True:
+        held = [f"{stack}/{comp} {kind} {address} {why}" for stack, comp, kind, address in endpoints
+                if (why := _endpoint_held(kind, address))]
+        if not held or time.monotonic() >= deadline:
+            return left + held
+        time.sleep(0.5)
 
 
 def require_prerequisite(env: dict, *stacks: str, left_by: str) -> None:
@@ -295,7 +401,11 @@ def require_prerequisite(env: dict, *stacks: str, left_by: str) -> None:
     used to fail at its OWN marked start or readiness assertion instead — and an automated
     release then froze a stack that never had a chance to run. Saying so here, with no marker,
     keeps the freeze on the case that actually broke and tells a reader which one that was.
+
+    When `left_by` itself did not pass, this case is SKIPPED instead (`inherits`): the lane runs
+    every case, and the earlier case's own report already says what broke.
     """
+    inherits(left_by)
     down = sorted(s for s in stacks if not running(env, s))
     assert not down, (
         f"prerequisite not met: {', '.join(down)} is not running. {left_by} leaves it up for "

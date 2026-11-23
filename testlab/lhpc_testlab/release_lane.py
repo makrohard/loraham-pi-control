@@ -16,15 +16,20 @@ from pathlib import Path
 
 import pytest
 
-from lhpc_testlab.release import holding_stacks, stop
+from lhpc_testlab import release as rel
+from lhpc_testlab.release import holding_stacks, lab_leftovers, stop
 
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     """Publish each phase's report on the item, so a fixture teardown can see whether the case
-    FAILED. pytest offers no other way to make cleanup conditional on the outcome."""
+    FAILED (pytest offers no other way to make cleanup conditional on the outcome), and record a
+    box case whose setup or call did not PASS in `release.NOT_PASSED`, for `inherits`."""
     outcome = yield
-    setattr(item, f"rep_{outcome.get_result().when}", outcome.get_result())
+    rep = outcome.get_result()
+    setattr(item, f"rep_{rep.when}", rep)
+    if rep.when in ("setup", "call") and not rep.passed and "env" in item.fixturenames:
+        rel.NOT_PASSED.add(item.name)
 
 
 def case_failed(item) -> bool:
@@ -59,9 +64,13 @@ def release_what_a_failing_case_took(request):
     innocent stack with nothing anywhere saying the lab had failed to clean up. pytest reports a
     raising teardown as a separate, unmarked testcase error, and the consumer refuses to
     attribute anything from a run that carries an unmarked failure — which is the honest outcome
-    for a lab that could not release a radio. The automated lane also runs with `-x`
-    (`.github/workflows/testlab.yml`), so nothing runs after the first failure anyway; the raise
-    is what makes a broken cleanup say so instead of ending the run quietly.
+    for a lab that could not release a radio.
+
+    **The lab is then PROVED clean** (`lab_leftovers`): a second status read and every endpoint
+    LHPC declares. The lane runs every case (no `-x`), so after a failure later independent cases
+    are judged — and a stop that succeeded can still leave an orphan holding a port or socket
+    that LHPC status does not show. The next stack would then fail on it and earn its own valid
+    marker. Anything left joins the same unmarked teardown error: that run attributes nothing.
     """
     if "env" not in request.fixturenames:      # the lane-hygiene case touches no box
         yield
@@ -78,6 +87,7 @@ def release_what_a_failing_case_took(request):
             stop(env, sid)
         except AssertionError as exc:
             stuck.append(str(exc))
+    stuck += lab_leftovers(env)
     assert not stuck, ("teardown could not release what this case held, so the lab still holds a "
                        "radio band and NOTHING in this run may be attributed to a stack:\n"
                        + "\n".join(stuck))

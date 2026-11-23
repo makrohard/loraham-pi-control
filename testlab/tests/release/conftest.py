@@ -20,10 +20,13 @@ that stack's own install, build, start or readiness — additionally carries the
 other failure deliberately carries none: an automated release freezes a stack only on a marked
 failure, and reports an unmarked one as an ordinary failure.
 
-RUN IT WITH `-x` (the CI job does): the cases chain over one radio pair, so after the first
-failure nothing later is judged in a state that means anything, and a release reads this lane's
-JUnit to decide what to freeze. A stopped run may still carry the attribution for its first
-regression; it can never satisfy the publication gate, which needs every required case to pass.
+The lane runs EVERY case and reports every failure; the job still fails when any case does, and
+the publication gate needs every required case to pass. Three things keep a later case's
+verdict meaningful after an earlier failure, because a release reads this lane's JUnit to decide
+what to freeze: a case that inherits an earlier case's stack is SKIPPED when that case did not
+pass (`inherits`); the failing case's cleanup stops what is holding and then PROVES the lab
+clean, or raises an unmarked teardown error, on which nothing in the run is attributed; and the
+identity case is skipped after a box case did not pass.
 
 Two fixtures here keep that attribution honest across cases. `release_what_a_failing_case_took`
 stops the stacks a FAILING case started, so its band never lands on the next case's marked

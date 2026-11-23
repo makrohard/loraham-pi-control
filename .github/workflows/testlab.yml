@@ -310,18 +310,16 @@ jobs:
           python3 .github/scripts/mirror-sources.py resolved /srcmirror
           backoff pip install -q -e ./testlab
           backoff pip install -q pytest
-          # -x: STOP AT THE FIRST FAILURE. The lane chains stacks over one radio pair, so a
-          # case that fails leaves the run in a state later cases cannot be judged in — and the
-          # automated release reads this JUnit to decide which stack to freeze. Continuing
-          # produced both wrong answers: a cleaned-up failure was followed by an unmarked
-          # prerequisite failure, which made the consumer refuse a genuine freeze; and a failed
-          # cleanup was followed by an innocent stack earning its own valid marker. Stopping
-          # here bounds the run to its FIRST genuine regression. An aborted run can never
-          # satisfy the publication gate anyway: that requires every required case to have
-          # passed. Cleanup still runs (fixture teardown is unaffected by -x) and a failed stop
-          # still surfaces as its own teardown error.
+          # EVERY case runs and every failure is reported (no -x); the job fails when any case
+          # does, and the publication gate needs every required case to have passed. The
+          # automated release reads this JUnit to decide which stack to freeze, so a later case
+          # must not be judged on what an earlier failure left: a case that inherits the stack
+          # of an earlier case is SKIPPED when that case did not pass, and the cleanup of the
+          # failing case stops what is holding and then PROVES the lab clean (second status read + every
+          # endpoint LHPC declares free) or raises an unmarked teardown error, on which the
+          # consumer attributes nothing (testlab/lhpc_testlab/release_lane.py).
           DISPLAY=:99 LHPC_RELEASE_VERIFY=1 LHPC_CHAIN_HEAVY=1 \
-            python -m pytest testlab/tests/release -q -rs -x \
+            python -m pytest testlab/tests/release -q -rs \
               --junitxml=/out/junit-release.xml
           LANE
           crun --user root -v "$PWD":/repo:ro -v "$PWD/srcmirror":/srcmirror:ro \
