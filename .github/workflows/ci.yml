@@ -257,6 +257,21 @@ jobs:
               || { echo "::error::$path: pinned commit ${PIN} not found on ${BRANCH} (orphaned pin?)"; exit 1; }
             git -C "$dir" merge-base --is-ancestor "$PIN" "origin/${BRANCH}" \
               || { echo "::error::$path: pinned commit ${PIN} is not an ancestor of origin/${BRANCH}"; exit 1; }
+            # The pin_tag names the pin: a tag the remote has must peel to PIN; a pin_tag that is no tag
+            # there (a describe name X-N-g<sha>, or a short sha) must end in a sha prefix of PIN (>= 7 hex).
+            # Only the tag lookup and fetch are retried (acquisition); the comparisons are not.
+            if [ -n "${TAG:-}" ]; then
+              tagged=$(retry 3 git -C "$dir" ls-remote --tags origin "refs/tags/${TAG}")
+              if [ -n "$tagged" ]; then
+                retry 3 git -C "$dir" fetch --no-tags origin "refs/tags/${TAG}:refs/tags/${TAG}"
+                test "$(git -C "$dir" rev-parse "refs/tags/${TAG}^{commit}")" = "$PIN" \
+                  || { echo "::error::$path: pin_tag ${TAG} is not the pinned commit ${PIN}"; exit 1; }
+              else
+                sfx=${TAG##*-}; sfx=${sfx#g}
+                [[ "$sfx" =~ ^[0-9a-f]{7,40}$ && "$PIN" == "$sfx"* ]] \
+                  || { echo "::error::$path: pin_tag ${TAG} is no tag on ${REMOTE} and does not end in a sha prefix of ${PIN}"; exit 1; }
+              fi
+            fi
             if [ -n "${KCS:-}" ]; then        # a box judges a build at the pin by the pin (kernel chip selects)
               git -C "$dir" merge-base --is-ancestor "$KCS" "$PIN" \
                 || { echo "::error::$path: pinned commit ${PIN} does not contain kernel_cs_since ${KCS}"; exit 1; }
