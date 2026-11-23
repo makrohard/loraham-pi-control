@@ -1503,3 +1503,100 @@ def test_the_interface_name_is_matched_whole():
     assert rel.rnstatus_lists_interface("LoRaSPIInterface[LoRa r1]\n", "LoRa r1")
     assert not rel.rnstatus_lists_interface("LoRaSPIInterface[LoRa r10]\n", "LoRa r1")
     assert not rel.rnstatus_lists_interface("LoRa r1\n", "LoRa r1")
+
+
+# --- MeshCom's web UI: no login by default, and its gzip assets load ----------------------------
+import gzip as _gzip  # noqa: E402
+import http.server as _http  # noqa: E402
+import threading as _threading  # noqa: E402
+
+_MC_CALL = "DL0TST-1"
+
+
+def _mc_page(content: str) -> bytes:
+    """MeshCom's "/" at its pin, shortened: the title, the asset tags, and the initial sub-page."""
+    return (f'<!DOCTYPE html>\n<html>\n<head>\n<title>{_MC_CALL} - Meshcom</title>\n'
+            '<link rel="stylesheet" href="/mc.css?v=1a2b" onerror="mcRe(this)">\n'
+            '<script src="/mc.js?v=3c4d" onerror="mcRe(this)"></script>\n</head>\n<body>\n'
+            f'<div id="content_layer">\n{content}</div>\n</body>\n</html>\n').encode()
+
+
+_MC_INFO = '<div class="subheader">Node Information</div><div id="content_inner"><table></table></div>\n'
+_MC_LOGIN = ('<div class="subheader">Login required</div><div id="content_inner"><input type="password" '
+             'maxlength="20" size="20" id="nodepassword" name="nodepassword"></div>\n')
+_GZ = {"Content-Encoding": "gzip"}
+_MC_GOOD = {"/": (200, {}, _mc_page(_MC_INFO)),
+            "/mc.css?v=1a2b": (200, _GZ, _gzip.compress(b"body{margin:0}")),
+            "/mc.js?v=3c4d": (200, _GZ, _gzip.compress(b"function mcRe(e){}"))}
+
+
+@pytest.fixture
+def meshcom_node(tmp_path, monkeypatch):
+    """A local server answering like the MeshCom firmware from `routes[path] = (status, headers, body)`
+    (404 for anything else), and a lab whose `lhpc status` reports meshcom-qemu running."""
+    servers = []
+
+    def serve(**changes):
+        routes = {**_MC_GOOD, **changes}
+
+        class H(_http.BaseHTTPRequestHandler):
+            def do_GET(self):
+                status, headers, body = routes.get(self.path, (404, {}, b""))
+                self.send_response(status)
+                for k, v in headers.items():
+                    self.send_header(k, v)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+        srv = _http.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        servers.append(srv)
+        _threading.Thread(target=srv.serve_forever, daemon=True).start()
+        return srv.server_address[1]
+
+    monkeypatch.setattr(rel, "run_lhpc", lambda env, *a, timeout=300.0, check=False: subprocess.CompletedProcess(
+        ["lhpc", *a], 0, "[meshcom] MeshCom\n  meshcom-qemu             running\n", ""))
+    (tmp_path / "logs").mkdir()
+    yield serve, {"LHPC_RUNTIME_ROOT": str(tmp_path)}
+    for srv in servers:
+        srv.shutdown()
+        srv.server_close()
+
+
+def _run_meshcom_case(port: int, env: dict, lane: Path = _RV):
+    """The lane's test_release_meshcom itself, compiled from its source: install, start and stop are
+    stubbed, its web checks are the real ones against the node on `port`."""
+    svc = types.SimpleNamespace(_resolved_param_value=lambda *a, **k: _MC_CALL)
+    noop = lambda *a, **k: None                                                   # noqa: E731
+    case = _rv_function("test_release_meshcom", lane, stop=noop, install_build=noop, _artifact_intact=noop,
+                        _start=noop, named=lambda env, s: f"{s}@r1",
+                        instances=types.SimpleNamespace(resolve=lambda svc, t: (None, "r1")),
+                        port_of=lambda env, s, p: port, MESHCOM_UI=rel.MESHCOM_UI,
+                        assert_web_ui=rel.assert_web_ui,
+                        assert_meshcom_web_ui=getattr(rel, "assert_meshcom_web_ui", None))
+    case(env, svc)
+
+
+def test_the_meshcom_case_passes_on_the_firmwares_default_web_ui(meshcom_node):
+    serve, env = meshcom_node
+    _run_meshcom_case(serve(), env)
+
+
+@pytest.mark.parametrize("change, why", [
+    ({"/": (200, {}, _mc_page(_MC_LOGIN))}, "shows its login page, not the node information"),
+    ({"/mc.css?v=1a2b": (200, {}, b"body{margin:0}")}, "stylesheet http://127.0.0.1:{port}/mc.css?v=1a2b is not gzip"),
+    ({"/mc.js?v=3c4d": (404, {}, b"")}, "script http://127.0.0.1:{port}/mc.js?v=3c4d answered 404"),
+    ({"/mc.js?v=3c4d": (200, _GZ, b"\x1f\x8b\x08\x00broken")}, "script http://127.0.0.1:{port}/mc.js?v=3c4d does not decompress"),
+    ({"/mc.css?v=1a2b": (200, _GZ, _gzip.compress(b" \n"))}, "stylesheet http://127.0.0.1:{port}/mc.css?v=1a2b is empty"),
+    ({"/": (200, {}, _mc_page(_MC_INFO).replace(b'<script src="/mc.js?v=3c4d"', b"<script"))}, "references no script"),
+], ids=["password-set", "css-not-gzip", "js-404", "js-corrupt", "css-empty", "no-script"])
+def test_the_meshcom_case_refuses_a_login_or_a_broken_asset(meshcom_node, change, why):
+    serve, env = meshcom_node
+    port = serve(**change)
+    with pytest.raises(AssertionError) as exc:
+        _run_meshcom_case(port, env)
+    text = str(exc.value)
+    assert why.format(port=port) in text
+    assert "STACK-REGRESSION" not in text                       # the component still runs: no stack blamed

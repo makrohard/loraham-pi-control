@@ -26,6 +26,7 @@ from lhpc_testlab.release import (
     REPEATER_DASHBOARD_TITLE,
     alive,
     assert_graywolf_web_ui,
+    assert_meshcom_web_ui,
     assert_plugin_manager_running,
     assert_web_ui,
     binaries_at_the_pins,
@@ -521,15 +522,18 @@ def _web_client_is_the_pinned_one(env) -> Path:
 def test_release_meshcom(env, svc):
     """The emulated MeshCom node from the published artifact: its web UI answers once the
     firmware has booted (502 until then — that wait is the point), titled with the node call
-    LHPC set (the firmware writes `<node call> - Meshcom`, web_functions.cpp at its pin)."""
+    LHPC set (the firmware writes `<node call> - Meshcom`, web_functions.cpp at its pin), showing
+    the node information without a login (no web password by default; the login page has the same
+    title) and loading its gzip-encoded stylesheet and script."""
     stop(env, "kiss", "graywolf", require=False)
     install_build(env, svc, "meshcom", timeout=2400)
     _artifact_intact(svc, "meshcom")
     _start(env, "meshcom", timeout=1200)
     inst = instances.resolve(svc, named(env, "meshcom"))[1]
     call = svc._resolved_param_value("meshcom", "run", "meshcom-qemu", "mc_callsign", inst=inst)
-    assert_web_ui(env, "meshcom", "meshcom-qemu", f"http://127.0.0.1:{port_of(env, 'meshcom', MESHCOM_UI)}/",
-                  timeout=900, page=f"<title>{call} - Meshcom</title>")
+    url = f"http://127.0.0.1:{port_of(env, 'meshcom', MESHCOM_UI)}/"
+    assert_web_ui(env, "meshcom", "meshcom-qemu", url, timeout=900, page=f"<title>{call} - Meshcom</title>")
+    assert_meshcom_web_ui(env, url)
     stop(env, "meshcom")
 
 

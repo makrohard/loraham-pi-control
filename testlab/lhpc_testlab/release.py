@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import gzip
 import json
 import os
 import pathlib
@@ -21,6 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import warnings
+import zlib
 from pathlib import Path
 
 import pytest
@@ -1106,6 +1108,62 @@ REPEATER_DASHBOARD_TITLE = "<title>Repeater Dashboard</title>"
 # graywolf's SPA shell (web/index.html at the fetched pin v0.14.14, embedded in the release binary; served at "/"
 # without a login: pkg/app/wiring.go:1621,1633-1659).
 GRAYWOLF_TITLE = "<title>graywolf</title>"
+
+
+# MeshCom's "/" at the firmware pin (web_functions.cpp deliver_scaffold): without a web password (the default,
+# meshcom_settings.h node_webpwd {0}) it carries the node information page, with one the login page, both 200 and
+# under the same title. Its stylesheet and scripts are gzip blobs (deliver_web_asset: Content-Encoding gzip).
+MESHCOM_INFO_PAGE = "Node Information"                # sub_page_info's sub-header
+MESHCOM_LOGIN_FIELD = 'id="nodepassword"'             # sub_page_login's password input (web_login_page.cpp)
+_STYLESHEET = re.compile(r'<link rel="stylesheet" href="(/[^"]+)"')
+_SCRIPT = re.compile(r'<script src="(/[^"]+)"')
+
+
+def _http_get_encoded(url: str) -> tuple:
+    """`(status, Content-Encoding, raw body)` of one bounded GET; `(0, "", b"")` when nothing answered."""
+    try:
+        with urllib.request.urlopen(url, timeout=5) as r:
+            return r.status, r.headers.get("Content-Encoding", ""), r.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, "", b""
+    except OSError:
+        return 0, "", b""
+
+
+def meshcom_web_ui_wrong(url: str) -> str:
+    """What is wrong with MeshCom's web UI at `url` beyond its title; "" when nothing is: "/" shows the node
+    information without a login, and the page's first stylesheet and first script answer 200, gzip-encoded,
+    decompress and are not empty."""
+    status, body = _http_get(url, None)
+    if status != 200:
+        return f"answered {status}"
+    page = body.decode("utf-8", errors="replace")
+    if MESHCOM_LOGIN_FIELD in page or MESHCOM_INFO_PAGE not in page:
+        return "shows its login page, not the node information: a web password is set (the default is none)"
+    for kind, ref in (("stylesheet", _STYLESHEET), ("script", _SCRIPT)):
+        m = ref.search(page)
+        if not m:
+            return f"references no {kind}"
+        asset = urllib.parse.urljoin(url, m.group(1))
+        status, encoding, raw = _http_get_encoded(asset)
+        if status != 200:
+            return f"{kind} {asset} answered {status}"
+        if encoding != "gzip":
+            return f"{kind} {asset} is not gzip-encoded (Content-Encoding {encoding!r})"
+        try:
+            text = gzip.decompress(raw)
+        except (OSError, EOFError, zlib.error) as exc:
+            return f"{kind} {asset} does not decompress ({type(exc).__name__}: {exc})"
+        if not text.strip():
+            return f"{kind} {asset} is empty"
+    return ""
+
+
+def assert_meshcom_web_ui(env: dict, url: str) -> None:
+    """MeshCom's web UI is the one an operator gets: no login by default, and its gzip assets load. Run once
+    after `assert_web_ui` proved "/" is up; reported through `readiness_failed` like it."""
+    wrong = meshcom_web_ui_wrong(url)
+    assert not wrong, readiness_failed(env, "meshcom", "meshcom-qemu", f"meshcom-qemu's web UI {url} {wrong}")
 
 
 def meshcore_webui_healthy(doc: dict) -> bool:
