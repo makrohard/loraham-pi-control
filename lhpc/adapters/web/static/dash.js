@@ -261,12 +261,16 @@
   if (grid) {
     var sig = grid.getAttribute("data-dash-sig");
     var pending = grid.getAttribute("data-pending-interactive") === "1";
+    // A reload still loading is never restarted by a later poll: on a box whose page renders slower than the
+    // poll, each new reload aborted the last and none ever finished. A reload the viewer stopped (Stop/Esc, or a
+    // page restored from the back/forward cache) reloads on change again only after the viewer reloads it.
+    var reloading = false;
     setInterval(function () {
       if (document.hidden) return;
       fetch("/api/dash-signature")
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (d) {
-          if (!d || d.sig === sig) return;          // nothing structural changed
+          if (reloading || !d || d.sig === sig) return;   // nothing structural changed, or the reload is on its way
           var a = document.activeElement;
           // Only genuine text-entry defers the reload. A clicked BUTTON keeps focus
           // long after the click and would veto every tick (stale badges for 30s+).
@@ -283,6 +287,7 @@
               });
               sessionStorage.setItem("dashDetails", JSON.stringify(states));
             } catch (e) { /* private mode etc. */ }
+            reloading = true;
             location.reload();
           }
         })
