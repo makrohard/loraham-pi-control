@@ -1376,3 +1376,81 @@ def test_only_platformios_own_last_line_makes_a_5xx_a_transfer(monkeypatch, tmp_
     msg = _install_build_message("meshtastic")
     assert "STACK-REGRESSION" not in msg
     assert not _EXTERNAL.search(msg) and calls["build"] == 1
+
+
+# --- a failed start carries the start logs it wrote ---------------------------------------------
+import ast as _ast  # noqa: E402
+import os as _os  # noqa: E402
+import types  # noqa: E402
+
+import lhpc_testlab.release as rel  # noqa: E402
+
+_RV = Path(__file__).resolve().parents[1] / "release" / "test_release_verify.py"
+
+
+def _rv_function(name: str, lane: Path = _RV, **namespace):
+    """One top-level function of the release lane, compiled from its source with `namespace` as its
+    globals: the lane is read, not imported (a test module may not import a sibling test module)."""
+    fn = next(f for f in _ast.parse(lane.read_text()).body
+              if isinstance(f, _ast.FunctionDef) and f.name == name)
+    glb = {"__builtins__": __builtins__, **namespace}
+    exec(compile(_ast.Module(body=[fn], type_ignores=[]), str(lane), "exec"), glb)  # noqa: S102 - the lane's own source
+    return glb[name]
+
+
+def _start_failure_text(root: Path, lane: Path = _RV) -> str:
+    """The AssertionError text of the lane's `_start` for a reticulum start that fails the way the
+    RETI-SOCKET defect did: lhpc says only "ready endpoint(s) never came up", the cause is in the
+    component's start log, which the start writes. An older log of another component is left alone.
+    The lane's clock reads 1000 until the start ran and 2000 after it, so `since` must be taken before."""
+    logs = root / "logs"
+    logs.mkdir(parents=True)
+    old = logs / "start-kiss-433-r1.log"
+    old.write_text("an earlier case's start\n")
+    _os.utime(old, (940.0, 940.0))
+    clock = {"now": 1000.0}
+
+    def run_lhpc(env, *args, timeout):
+        (logs / "start-rns-433-r1.log").write_text(
+            "[Error]    An unhandled <class 'loraham_rns.section.SectionError'> exception occurred: "
+            "conf_socket: is required\n"
+            "[Critical] interface 'LoRa r1' was not registered\n")
+        _os.utime(logs / "start-rns-433-r1.log", (1000.5, 1000.5))
+        clock["now"] = 2000.0
+        return subprocess.CompletedProcess(args, 1, "ERR   Run FAILED for 'reticulum': rns did not start/verify.\n"
+                                           "  [unverified] rns: ready endpoint(s) never came up\n", "")
+
+    start = _rv_function("_start", lane, run_lhpc=run_lhpc, named=lambda env, s: f"{s}@r1",
+                         stack_regression=rel.stack_regression,
+                         time=types.SimpleNamespace(time=lambda: clock["now"]),
+                         start_log_tails=getattr(rel, "start_log_tails", None))
+    with pytest.raises(AssertionError) as exc:
+        start({"LHPC_RUNTIME_ROOT": str(root)}, "reticulum")
+    return str(exc.value)
+
+
+def test_a_failed_start_shows_the_cause_its_component_logged(tmp_path):
+    text = _start_failure_text(tmp_path)
+    assert text.splitlines()[0] == rel.stack_regression("reticulum", "start")
+    assert "rns: ready endpoint(s) never came up" in text
+    assert "start-rns-433-r1.log (tail)" in text
+    assert "SectionError'> exception occurred: conf_socket: is required" in text
+    assert "start-kiss-433-r1.log" not in text                      # written before this start
+
+
+def test_the_start_log_tails_are_the_logs_written_since(tmp_path):
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    env, since = {"LHPC_RUNTIME_ROOT": str(tmp_path)}, 1_000_000.0
+    assert rel.start_log_tails(env, since) == ""
+    ages = {"start-rns-433-r1.log": 0.0,                            # at `since`
+            "start-loraham-daemon-433-r1.log": 5.0,                 # after it
+            "start-meshchat-r1.log": -(rel.START_LOG_SLACK - 0.5),  # within the coarse-clock slack
+            "start-lxmd-r1.log": -(rel.START_LOG_SLACK + 1.0),      # before it
+            "build-rns-0.log": 5.0}                                 # no start log
+    for name, age in ages.items():
+        (logs / name).write_text(f"tail of {name}\n")
+        _os.utime(logs / name, (since + age, since + age))
+    text = rel.start_log_tails(env, since)
+    shown = re.findall(r"--- .*/(\S+) \(tail\) ---\ntail of \1\n", text)
+    assert shown == ["start-loraham-daemon-433-r1.log", "start-meshchat-r1.log", "start-rns-433-r1.log"]

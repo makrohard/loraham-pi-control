@@ -661,6 +661,25 @@ def _log_tails(logs, size: int = 1500) -> str:
     return "".join(out)
 
 
+START_LOG_SLACK = 2.0      # s: file mtimes come from the kernel's coarse clock, which can lag time.time()
+
+
+def _written_since(path: Path, since: float) -> bool:
+    try:
+        return path.stat().st_mtime >= since - START_LOG_SLACK
+    except OSError:                                   # removed meanwhile: nothing to show
+        return False
+
+
+def start_log_tails(env: dict, since: float) -> str:
+    """The tails of every start log written to at or after `since` (less START_LOG_SLACK), for a failed
+    start's message: the cause a component logs (a traceback, a refused section) is in its start log, not
+    in lhpc's output. Start logs are appended to, so the log of a component still running from an earlier
+    case shows too (info only, no marker); "" when none."""
+    logs = Path(env["LHPC_RUNTIME_ROOT"], "logs").glob("start-*.log")
+    return _log_tails(sorted(p for p in logs if _written_since(p, since)))
+
+
 def pty_readiness(command: str, env: dict, expect: str, *, ready_timeout: float = 60.0,
                   hold: float = 5.0, stack: str | None = None,
                   logs=(), on_timeout=None) -> bytes:

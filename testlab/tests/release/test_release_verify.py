@@ -7,6 +7,7 @@ next claims it. Each case names its own evidence; none of them is a log grep.
 from __future__ import annotations
 
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,7 @@ from lhpc_testlab.release import (
     reticulum_peers_snapshot,
     stack_regression,
     start_component,
+    start_log_tails,
     stop,
     wait_for,
     wait_tcp,
@@ -158,9 +160,10 @@ def _start(env, stack: str, timeout: float = 600.0, *, attribute: bool = True):
     — so its failure carries no `stack_regression` marker and can never freeze the wrong thing.
     """
     mark = f"{stack_regression(stack, 'start')}\n" if attribute else ""
+    since = time.time()                      # wallclock: a timestamp for the start-log mtime filter, no wait
     r = run_lhpc(env, "stack", "start", named(env, stack), "--yes", timeout=timeout)
     assert r.returncode == 0, (f"{mark}starting {stack} failed (rc {r.returncode}): "
-                               f"{r.stdout[-2000:]}\n{r.stderr[-800:]}")
+                               f"{r.stdout[-2000:]}\n{r.stderr[-800:]}{start_log_tails(env, since)}")
     return r
 
 
