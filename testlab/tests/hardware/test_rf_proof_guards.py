@@ -660,6 +660,8 @@ def test_a_signal_ends_the_workers_whole_group_before_the_stop(tmp_path, how):
         cleanup(p, evd)
     assert p.returncode == 2 and "STOP: interrupted (signal): the recovery runs" in err, err
     assert "ALIVE" not in err, err
+    # the group's end is seen at once, also where PID 1 never reaps (the CI lane): a zombie member is no running one
+    assert "did not end" not in ((evd / "UNRESOLVED.txt").read_text() if (evd / "UNRESOLVED.txt").exists() else ""), err
 
 
 def test_a_command_that_ignores_term_is_killed_before_the_stop(tmp_path):
