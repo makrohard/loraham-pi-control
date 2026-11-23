@@ -577,3 +577,131 @@ def test_a_member_radio_below_reticulums_power_floor_is_left_out_and_the_owner_s
     # red-before (93419bfe): r4 attached at its profile's 14, the radio's POWER 1 unseen
     assert "[member] r4: not connected — r4's POWER 1 dBm is below Reticulum's minimum 2 dBm" in "\n".join(res.details)
     assert _member(box, "r4") == [] and "[[LoRa r4]]" not in _sections(box)
+
+
+# ---- a member's leave (PLAN-RETI-MEMBER-LEAVE v2): only what its start ran, the owner's clients untouched --------------
+
+def _owners_meshchat_up(box):
+    """The owner's MeshChat on its one fixed address (the manifest's 127.0.0.1:8790), up as the node runs it."""
+    from lhpc.core.probes.backends import Listener
+    box.svc._system.procfs.listeners.append(Listener(family="ipv4", ip="127.0.0.1", port=8790, inode=8790))
+
+
+def _stop(box, rid, apply=True, target="reticulum"):
+    return box.svc.stop(target, apply=apply, inst=instances.copy_of(box.svc, "reticulum", rid)[0])
+
+
+def test_a_member_stop_with_the_owners_meshchat_up_detaches_and_checks_no_client(box):
+    # red-before (e14cf5be, R-P6 run 4 13-leave.txt): the member's stop took meshchat too, met the owner's MeshChat on
+    # 8790: ENDPOINT_STILL_PRESENT, rc 1 "NOT fully verified"
+    owner = _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    _owners_meshchat_up(box)
+    res = _stop(box, "r1")
+    assert res.ok, res.summary + "\n".join(res.details)
+    assert [r.component for r in res.results] == ["rns"] and owner.poll() is None and ("--detach", "LoRa r1") in box.node.calls
+    assert not [d for d in res.details if "[kept]" in d] and _member(box, "r1") == []
+
+
+@pytest.mark.parametrize("other, want", [(None, [("868", "r4")]), ("kiss", [])])
+def test_a_member_stop_releases_its_daemon_band_unless_another_stack_needs_it(box, monkeypatch, other, want):
+    # red-before (e14cf5be): own_ok False (the owner's MeshChat on 8790), so the release was never asked: daemon@r4 stayed
+    # up (R-P6, by ps). G1 row 242: a stack still on r4's daemon keeps it. The daemon's own stop is recorded, not run.
+    import types
+
+    from lhpc.core import reticulum_members
+    from lhpc.core.service_base import ActionResult
+    _owner_up(box)
+    reticulum_members._save_intent(box.svc, "r4", "r2")
+    assert reticulum_members.attach(box.svc, "r2", "r4") == ""
+    _owners_meshchat_up(box)
+    released, real_stop, real_insts = [], ControllerService.stop, instances.running_insts
+
+    def stop(self, target, apply=False, *a, **kw):
+        if kw.get("band"):
+            released.append((kw["band"], getattr(kw.get("inst"), "rid", "")))
+            return ActionResult(True, "stopped")
+        return real_stop(self, target, apply, *a, **kw)
+    monkeypatch.setattr(ControllerService, "stop", stop)
+    monkeypatch.setattr(ControllerService, "daemon_view", lambda self, b, rid="": types.SimpleNamespace(reachable=True))
+    monkeypatch.setattr(ControllerService, "stop_dependents", lambda self, sid, bands=None: [other] if other else [])
+    monkeypatch.setattr(instances, "running_insts", lambda svc, d: [types.SimpleNamespace(rid="r4")] if d == other
+                        else real_insts(svc, d))
+    real_live = instances.live                     # the node runs on the daemon backend, as R-P6's did (this box's owner is spi)
+    monkeypatch.setattr(instances, "live", lambda svc, stack, comp: {"daemon"} if stack.id == "reticulum"
+                        else real_live(svc, stack, comp))
+    res = _stop(box, "r4")
+    assert res.ok, res.summary + "\n".join(res.details)
+    assert released == want
+
+
+def test_a_failed_leave_retried_never_touches_the_owners_node(box, monkeypatch):
+    # G1 row 242: the leave's teardown succeeds, its other own component (a record under r1) does not verify; r1 is then
+    # no member (record and intent gone), so its retry is an ordinary stop: it signals none of the owner's processes and
+    # leaves the owner's records (its MeshChat endpoint check still reads the owner's 8790, as any non-member's stop does)
+    from lhpc.core.outcomes import CompResult
+    owner = _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    _owners_meshchat_up(box)
+    real_recs, real_stop = Lifecycle.owned_records, Lifecycle.stop
+    stale = {"on": True}
+
+    def records(self, comp_id, band=None, role="", rid=None):
+        if comp_id == "meshchat" and rid == "r1" and stale["on"]:
+            return [{"component": "meshchat", "rid": "r1", "pid": 1}]
+        return real_recs(self, comp_id, band=band, role=role, rid=rid)
+
+    def lstop(self, comp, *a, **kw):
+        if comp.id == "meshchat" and stale["on"]:
+            return CompResult(component="meshchat", action="stop", outcome=Outcome.ENDPOINT_STILL_PRESENT,
+                              summary="no owned process, but readiness endpoint(s) still present: 127.0.0.1:8790")
+        return real_stop(self, comp, *a, **kw)
+    monkeypatch.setattr(Lifecycle, "owned_records", records)
+    monkeypatch.setattr(Lifecycle, "stop", lstop)
+    owners = real_recs(box.svc._lifecycle(), "rns", role=None, rid="r2")
+    first = _stop(box, "r1")
+    assert not first.ok and [r.component for r in first.results] == ["rns", "meshchat"], first.details
+    stale["on"] = False
+    _stop(box, "r1")
+    assert owner.poll() is None and real_recs(box.svc._lifecycle(), "rns", role=None, rid="r2") == owners
+
+
+def test_a_members_stop_plan_lists_its_rns_step_alone(box):
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    res = _stop(box, "r1", apply=False)
+    assert res.ok and [d for d in res.details if d.startswith("  [stop] ")] == ["  [stop] rns"], res.details
+    assert "1 component(s)" in res.summary
+
+
+def test_a_component_with_a_record_under_the_member_is_still_in_its_stop(box, monkeypatch):
+    # N1: a record under the member's own radio pulls its component in (never a silent leftover)
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    real = Lifecycle.owned_records
+
+    def records(self, comp_id, band=None, role="", rid=None):
+        if comp_id == "meshchat" and rid == "r1":
+            return [{"component": "meshchat", "rid": "r1", "pid": 1}]
+        return real(self, comp_id, band=band, role=role, rid=rid)
+    monkeypatch.setattr(Lifecycle, "owned_records", records)
+    res = _stop(box, "r1", apply=False)
+    assert [d for d in res.details if d.startswith("  [stop] ")] == ["  [stop] rns", "  [stop] meshchat"], res.details
+
+
+def test_a_component_target_on_a_member_keeps_its_own_stop(box):
+    # a25 C1: only a whole-stack target is filtered; `stop meshchat` on a member's radio is the operator's word about it
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    res = _stop(box, "r1", apply=False, target="meshchat")
+    assert [d for d in res.details if d.startswith("  [stop] ")] == ["  [stop] meshchat"], (res.summary, res.details)
+
+
+def test_a_client_stop_that_does_not_verify_says_it_released_nothing(box):
+    # plan v2 Part 2: the owner's own stop meets a MeshChat on 8790 it has no record of: not verified, nothing released
+    _owner_up(box)
+    _owners_meshchat_up(box)
+    res = _stop(box, "r2")
+    assert not res.ok
+    assert "  [kept] daemon band(s) and dependency stacks: not released (this stop did not verify)" in res.details
+    assert not [d for d in res.details if d.startswith(("  [stopped daemon]", "  [stopped dependency]"))], res.details

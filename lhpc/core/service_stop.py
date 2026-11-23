@@ -222,9 +222,6 @@ class StopOpsMixin:
                                     next_commands=[f"lhpc status {target}"])
         # Orphaned dependents are scoped to the band(s) actually being stopped.
         dependents = radio_start.daemon_dependents(self, _sid or target, (band if _daemon_band_stop else "") if target_is_daemon else None, inst, stopped_bands)
-        # systemd services lhpc doesn't own (e.g. meshtasticd) — stop them as root.
-        sysd = [f"sudo systemctl stop {c.units[0].name}"
-                for _, c in items if c.units and not c.run_argv]
         _rid = getattr(inst, "rid", "") or ""
         # B5: a node member's stop detaches it (never a signal: its process is the owner's); the owner's ends the node's
         # memberships after its verified cessation (below)
@@ -232,6 +229,12 @@ class StopOpsMixin:
             instances.member_of(self, _ri.STACK_ID, _rid) or _rm.member_record(self, _rid))
         _owner = not _member and self.stack_of(target) == _ri.STACK_ID and (_o := _rm.owner_record(self)) is not None \
             and _o.get("rid") == _rid
+        # a member's whole-stack Stop: what its start ran (rns) + its own records, never the owner's clients (MeshChat)
+        if _member and _target_is_stack:
+            items = [(s, c) for s, c in items if c.id == _ri.NODE_ID or life.owned_records(c.id, rid=_rid)]
+        # systemd services lhpc doesn't own (e.g. meshtasticd) — stop them as root.
+        sysd = [f"sudo systemctl stop {c.units[0].name}"
+                for _, c in items if c.units and not c.run_argv]
         if not apply:
             details = [f"  [stop] {comp.id}" for _, comp in items]
             for cmd in sysd:
@@ -411,6 +414,8 @@ class StopOpsMixin:
                              else f"{daemon_sid} {b} release NOT verified — {dres.summary}")))
                 details.append(f"  [{'stopped' if dres.ok else 'unverified'} daemon] "
                                f"{daemon_sid} {b}: no other stack needs it")
+        if not own_ok and not target_is_daemon and release_daemon and _target_is_stack:     # it released nothing: say so
+            details.append("  [kept] daemon band(s) and dependency stacks: not released (this stop did not verify)")
         # A verified daemon stop clears the RX/TX activity window for the band(s) it served — a
         # per-band stop clears that band (+ its dual-band collateral), a whole-daemon stop clears
         # every served band. (A client that releases a daemon band recurses here as a daemon stop.)

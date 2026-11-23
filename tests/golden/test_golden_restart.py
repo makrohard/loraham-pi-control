@@ -97,7 +97,7 @@ def test_unverified_stop_aborts_before_any_start(kiss_box, run_op, monkeypatch):
         "ok": False, "summary": "Restart aborted for 'kiss': stop was not verified.",
         "data_keys": [], "next_commands": ["lhpc status kiss"],
         "heads": ["[already_stopped] loraham-kiss-serial", "[still_running] loraham-kiss-tnc",
-                  "[aborted] not"],
+                  "[kept] daemon", "[aborted] not"],
         "outcomes": [("loraham-kiss-serial", "already_stopped"),
                      ("loraham-kiss-tnc", "still_running")]}
     assert run.phases == LOCKS + ["recheck:preflight"] + STOP_LEG[:2]

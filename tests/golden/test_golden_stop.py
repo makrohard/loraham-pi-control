@@ -91,7 +91,7 @@ def test_unowned_process_is_manual_required(kiss_box, run_op):
     assert run.fields == {
         "ok": False, "summary": "Stop for 'kiss' is NOT fully verified — see details.",
         "data_keys": [], "next_commands": ["lhpc status kiss"],
-        "heads": ["[already_stopped] loraham-kiss-serial", "[manual_required] loraham-kiss-tnc"],
+        "heads": ["[already_stopped] loraham-kiss-serial", "[manual_required] loraham-kiss-tnc", "[kept] daemon"],
         "outcomes": [("loraham-kiss-serial", "already_stopped"),
                      ("loraham-kiss-tnc", "manual_required")]}
     assert run.phases == [
@@ -114,10 +114,10 @@ def test_process_that_does_not_cease(kiss_box, run_op, monkeypatch):
     assert run.fields == {
         "ok": False, "summary": "Stop for 'kiss' is NOT fully verified — see details.",
         "data_keys": [], "next_commands": ["lhpc status kiss"],
-        "heads": ["[already_stopped] loraham-kiss-serial", "[still_running] loraham-kiss-tnc"],
+        "heads": ["[already_stopped] loraham-kiss-serial", "[still_running] loraham-kiss-tnc", "[kept] daemon"],
         "outcomes": [("loraham-kiss-serial", "already_stopped"),
                      ("loraham-kiss-tnc", "still_running")]}
-    assert run.res.details[-1] == ("  [still_running] loraham-kiss-tnc: process did not cease "
+    assert run.res.details[-2] == ("  [still_running] loraham-kiss-tnc: process did not cease "
                                    "after SIGTERM (no SIGKILL) — ownership retained")
     assert run.phases == STOP_LOCKS + SIGNAL
     assert run.files == {"added": [], "removed": [], "changed": []}
