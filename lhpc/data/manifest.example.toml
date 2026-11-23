@@ -499,8 +499,8 @@ main = "loraham-voice"
 
     [stack.component.source]
     path = "src/LoRaHAM_Voice"
-    pin_commit = "2547c4b80b81027bb74f5246c03f5fbd1dff2558"
-    pin_tag = "2547c4b"
+    pin_commit = "96c95f19eb7f1c5b8faf338ed7de2bf24e1e63c1"
+    pin_tag = "96c95f1"
     remote = "https://github.com/makrohard/LoRaHAM_Voice.git"
     branch = "main"
     local_dir = "LoRaHAM_Voice"
@@ -515,8 +515,8 @@ main = "loraham-voice"
     note = "This instance's voice UI: its GTK app or its terminal variant, never both (a busy sound device is the app's own error)."
 
     # Seeded into {runtime}/config/files/{instance_dir}loraham_voice.conf (KEY=VALUE, split on '=').
-    # LHPC writes the 433_* params and active_band=0 (Voice runs on 433 only in LHPC);
-    # the app's own save writes both bands' params into the same file.
+    # LHPC writes the 433_* params and active_band=0 (Voice runs on 433 only); the app's own save
+    # writes the same keys back (built without LORAHAM_VOICE_868 it reads and writes no 868_* key).
     [stack.component.config_file]
     path = "{runtime}/config/files/{instance_dir}loraham_voice.conf"
     fmt = "env"
@@ -693,8 +693,8 @@ main = "loraham-voice"
 
     [stack.component.source]
     path = "src/LoRaHAM_Voice"
-    pin_commit = "2547c4b80b81027bb74f5246c03f5fbd1dff2558"
-    pin_tag = "2547c4b"
+    pin_commit = "96c95f19eb7f1c5b8faf338ed7de2bf24e1e63c1"
+    pin_tag = "96c95f1"
     remote = "https://github.com/makrohard/LoRaHAM_Voice.git"
     branch = "main"
     local_dir = "LoRaHAM_Voice"

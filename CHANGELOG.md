@@ -43,6 +43,7 @@
 - meshcom-loraham-bridge: 8500df8bf -> 5c7843b3b (v0.3.1), used by meshcom-bridge
 - loraham-rns-interface: 015540bd2 -> f1961759f (v0.4.0), used by rns-lora-interface
 - MeshCom-Firmware: 4f60051ce -> bcc3b3ef8 (v4.40a.11.22-18-gbcc3b3ef), used by meshcom-firmware
+- LoRaHAM_Voice: 2547c4b80 -> 96c95f19e (96c95f1), used by loraham-voice, loraham-voice-cli
 
 Known limitations
 
