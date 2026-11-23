@@ -761,6 +761,13 @@ def pty_readiness(command: str, env: dict, expect: str, *, ready_timeout: float 
 _RNS_PEERS = ("rns", "lxmd", "meshchat", "sideband")
 
 
+def rnstatus_lists_interface(out: str, name: str) -> bool:
+    """Whether rnstatus output `out` lists the interface named `name`: both LoRa interface classes print
+    themselves as `<class>[<name>]` (rns-lora-interface daemon.py / interface.py `__str__`), so the
+    bracketed name is exact (`LoRa r1` never matches `[LoRa r10]`, nor another radio's interface)."""
+    return f"[{name}]" in out
+
+
 def reticulum_peers_snapshot(env: dict, drain: float = 3.0) -> str:
     """A Reticulum client's readiness timeout, diagnosed while everything still hangs: what is
     connected to the shared instance (`/proc/net/unix`, `/proc/net/tcp*`: the RPC and

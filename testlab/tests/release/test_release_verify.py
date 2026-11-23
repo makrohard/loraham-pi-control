@@ -45,6 +45,7 @@ from lhpc_testlab.release import (
     require_prerequisite,
     required_release_cases,
     reticulum_peers_snapshot,
+    rnstatus_lists_interface,
     stack_regression,
     start_component,
     start_log_tails,
@@ -401,8 +402,10 @@ def test_release_reticulum(env, svc):
 
     assert wait_for(_rnstatus_lists_an_interface, 120), readiness_failed(
         env, "reticulum", "rns", f"rnstatus listed no interface:\n{out[-1500:]}")
-    assert "lora" in out.lower(), (f"{stack_regression('reticulum', 'readiness')}\n"
-                                   f"rnstatus lists no LoRa interface:\n{out[-1500:]}")
+    iface = f"LoRa {named(env, 'reticulum').split('@', 1)[1]}"     # the section LHPC renders for this instance
+    assert rnstatus_lists_interface(out, iface), (
+        f"{stack_regression('reticulum', 'readiness')}\n"
+        f"rnstatus does not list this instance's interface [{iface}]:\n{out[-1500:]}")
     # Optional components of this stack: not started by the stack, so started by name.
     start_component(env, "lxmd", stack="reticulum")
     assert alive(env, "lxmd"), readiness_failed(env, "reticulum", "lxmd", "lxmd did not come up")

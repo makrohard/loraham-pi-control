@@ -1454,3 +1454,52 @@ def test_the_start_log_tails_are_the_logs_written_since(tmp_path):
     text = rel.start_log_tails(env, since)
     shown = re.findall(r"--- .*/(\S+) \(tail\) ---\ntail of \1\n", text)
     assert shown == ["start-loraham-daemon-433-r1.log", "start-meshchat-r1.log", "start-rns-433-r1.log"]
+
+
+# --- the Reticulum case names its own instance's LoRa interface ----------------------------------
+def _reticulum_interface_check(lane: Path = _RV):
+    """The lane's interface check of test_release_reticulum (the assert after the rnstatus wait, and
+    the `iface` it names), compiled on its own with the instance `reticulum@r1`: a callable of the
+    rnstatus output that raises the case's AssertionError when the check refuses it."""
+    case = next(f for f in _ast.parse(lane.read_text()).body
+                if isinstance(f, _ast.FunctionDef) and f.name == "test_release_reticulum")
+    waited = next(i for i, s in enumerate(case.body) if isinstance(s, _ast.Assert)
+                  and "wait_for" in _ast.unparse(s.test))
+    body = [s for s in case.body[waited + 1:]
+            if (isinstance(s, _ast.Assign) and _ast.unparse(s.targets[0]) == "iface")
+            or (isinstance(s, _ast.Assert) and "out" in {n.id for n in _ast.walk(s.test) if isinstance(n, _ast.Name)})]
+    fn = _ast.FunctionDef(name="check", args=_ast.arguments(posonlyargs=[], args=[_ast.arg(arg="out")],
+                          kwonlyargs=[], kw_defaults=[], defaults=[]), body=body, decorator_list=[], returns=None,
+                          type_params=[])
+    glb = {"__builtins__": __builtins__, "env": {}, "named": lambda env, s: f"{s}@r1",
+           "stack_regression": rel.stack_regression,
+           "rnstatus_lists_interface": getattr(rel, "rnstatus_lists_interface", None)}
+    code = compile(_ast.fix_missing_locations(_ast.Module(body=[fn], type_ignores=[])), str(lane), "exec")
+    exec(code, glb)  # noqa: S102 - the lane's own source
+    return glb["check"]
+
+
+_RNSTATUS = (" Shared Instance[rns/default]\n    Status    : Up\n    Serving   : 1 program\n\n"
+             " {iface}\n    Status    : Up\n    Mode      : Full\n")
+
+
+@pytest.mark.parametrize("listed", ["LoRaDaemonInterface[LoRa r1]", "LoRaSPIInterface[LoRa r1]"])
+def test_the_reticulum_case_accepts_its_own_instances_interface(listed):
+    _reticulum_interface_check()(_RNSTATUS.format(iface=listed))
+
+
+@pytest.mark.parametrize("listed", ["LoRaDaemonInterface[LoRa r2]", "LoRaDaemonInterface[LoRa r10]",
+                                    "LoRaDaemonInterface[lora r1]", "AutoInterface[Default Interface]"],
+                         ids=["another-radio", "longer-rid", "other-case", "no-lora"])
+def test_the_reticulum_case_refuses_any_other_interface(listed):
+    with pytest.raises(AssertionError) as exc:
+        _reticulum_interface_check()(_RNSTATUS.format(iface=listed))
+    text = str(exc.value)
+    assert text.splitlines()[0] == rel.stack_regression("reticulum", "readiness")
+    assert "does not list this instance's interface [LoRa r1]" in text and listed in text
+
+
+def test_the_interface_name_is_matched_whole():
+    assert rel.rnstatus_lists_interface("LoRaSPIInterface[LoRa r1]\n", "LoRa r1")
+    assert not rel.rnstatus_lists_interface("LoRaSPIInterface[LoRa r10]\n", "LoRa r1")
+    assert not rel.rnstatus_lists_interface("LoRa r1\n", "LoRa r1")
