@@ -3091,8 +3091,8 @@ readiness = "manual"
 path = "src/loraham-rns-interface"
 remote = "https://github.com/makrohard/loraham-rns-interface.git"
 branch = "main"
-pin_commit = "f1961759fc18ec219b335b096efcf80bd648506b"
-pin_tag = "v0.4.0"
+pin_commit = "6c92f2291ab06a7d9e18d03c4a1c93a74fb84c6b"
+pin_tag = "v0.4.1"
 
 [[stack.component]]
 id = "rns"
