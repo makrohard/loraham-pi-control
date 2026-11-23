@@ -18,7 +18,7 @@
   `lhpc rflog daemon@r1`).
 - Daemon parameters per radio (`lhpc config daemon@<rid> --daemon-param`) and per instance (`<stack>@<rid>.toml`,
   applied over the radio's row when it starts there).
-- LoRaHAM daemon v1.5.0 (0d1802a0): the PA over-current limit per radio (`lhpc hardware --ocp <rid> <auto|mA>`), the
+- LoRaHAM daemon v1.6.0 (d982a416): the PA over-current limit per radio (`lhpc hardware --ocp <rid> <auto|mA>`), the
   Meshstick library (a source-built daemon: see the update steps); a failing USB stick is re-opened, not fatal.
 - Reticulum: `rnode_framing` defaults to `yes` (was `no`), so LHPC boxes and RNode devices hear each other; a framed
   box and a bare box cannot.
@@ -39,6 +39,7 @@
   update (from the next self-update on).
 - meshcom-qemu-raspi: 722b5e8e5 -> b4d3bc0c2 (pin/b4d3bc0), used by meshcom-gps-relay, meshcom-qemu
 - meshcom-loraham-bridge: 8500df8bf -> 5c7843b3b (v0.3.1), used by meshcom-bridge
+- loraham-rns-interface: 015540bd2 -> f1961759f (v0.4.0), used by rns-lora-interface
 
 Known limitations
 

@@ -190,8 +190,8 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/loraham-daemon"
-    pin_commit = "0d1802a00095cff0b3bcd8d58385c0c32913a36c"
-    pin_tag = "v1.5.0"
+    pin_commit = "d982a416963cf671f0fa39a1a2a4ed6f2d30b2f3"
+    pin_tag = "v1.6.0"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "loraham-daemon-hardening"
@@ -346,8 +346,8 @@ main = "loraham-chat"
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    pin_commit = "0d1802a00095cff0b3bcd8d58385c0c32913a36c"
-    pin_tag = "v1.5.0"
+    pin_commit = "d982a416963cf671f0fa39a1a2a4ed6f2d30b2f3"
+    pin_tag = "v1.6.0"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"
@@ -3104,8 +3104,8 @@ readiness = "manual"
 path = "src/loraham-rns-interface"
 remote = "https://github.com/makrohard/loraham-rns-interface.git"
 branch = "main"
-pin_commit = "015540bd2ae95aae8f2a820d3234029e89ece9f5"
-pin_tag = "v0.3.1"
+pin_commit = "f1961759fc18ec219b335b096efcf80bd648506b"
+pin_tag = "v0.4.0"
 
 [[stack.component]]
 id = "rns"
@@ -3194,7 +3194,10 @@ announce = "[check] {source}/.venv runs the node's Reticulum wheel"
 [[stack.component.build_steps]]
 argv = ["install", "-D", "-m", "0644", "{runtime}/src/loraham-rns-interface/interfaces/LoRaSPIInterface.py", "{runtime}/state/reticulum/interfaces/LoRaSPIInterface.py"]
 [[stack.component.build_steps]]
-argv = [".venv/bin/python", "-c", "import RNS, gpiod, spidev, loraham_rns.interface, loraham_rns.node; print('reticulum venv OK', RNS.__version__)"]
+# the daemon backend's interface (`type = LoRaDaemonInterface`, backend = daemon), from the same package
+argv = ["install", "-D", "-m", "0644", "{runtime}/src/loraham-rns-interface/interfaces/LoRaDaemonInterface.py", "{runtime}/state/reticulum/interfaces/LoRaDaemonInterface.py"]
+[[stack.component.build_steps]]
+argv = [".venv/bin/python", "-c", "import RNS, gpiod, spidev, loraham_rns.interface, loraham_rns.daemon, loraham_rns.node; print('reticulum venv OK', RNS.__version__)"]
 attributable = true
 announce = "[probe] verify the built environment imports before marking it complete"
 

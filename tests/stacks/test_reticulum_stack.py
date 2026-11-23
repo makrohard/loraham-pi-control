@@ -403,6 +403,16 @@ def test_the_node_builds_the_one_wheel_the_clients_take():
     assert later and all(argvs[i][2:4] == ["-c", ".venv/lhpc-rns-constraint.txt"] for i in later), argvs
 
 
+def test_the_node_installs_the_drivers_two_interfaces():
+    # backend = daemon renders `type = LoRaDaemonInterface`, which RNS loads from <configdir>/interfaces/ like the SPI one
+    # red-before (c5c1ee32): only LoRaSPIInterface.py was installed, so a daemon-backend node had no interface to load
+    argvs = [st.get("argv") or [] for st in _comp("rns").build_steps]
+    for name in ("LoRaSPIInterface", "LoRaDaemonInterface"):
+        assert ["install", "-D", "-m", "0644", f"{{runtime}}/src/loraham-rns-interface/interfaces/{name}.py",
+                f"{{runtime}}/state/reticulum/interfaces/{name}.py"] in argvs, name
+    assert "loraham_rns.daemon" in next(a for a in argvs if a[:2] == [".venv/bin/python", "-c"])[2]
+
+
 def test_status_versions_names_a_package_that_differs(tmp_path):
     """The clients' venvs are what the operator runs; `status --versions` shows what they hold
     and names a package the stack runs in more than one version (MeshChat keeps its own set)."""
