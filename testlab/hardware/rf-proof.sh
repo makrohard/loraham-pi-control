@@ -60,23 +60,28 @@ ROWS=(
   "5  full stack Z:Z868        peer:rnode    as-is,read   -"
   "12 full stack H:HMS         peer:rnode    as-is,read   -"
   "6  full stack H:H433        Z:Z433        as-is,as-is  -"
-  "13 rns  stack H:H868        peer:rnode    as-is,read   member=H:HMS"
+  "13 rns  stack H:H868        peer:rnode    as-is,read   member=H:HMS,zero=Z:Z868"
 )
 # The worst-case frames of a row per endpoint ("A B"): frame rows one each way; row 1 the box's three console attempts, and
 # the T-Deck's one send plus its mesh's relays of those three attempts (3 frames the kit never dispatches; its sends stay one,
 # `tx R1-tdeck 1`; the box's node runs with mesh off: it repeats nothing); row 5 the box's announce (inside its MeshChat start)
-# + delivery proof + own send, the RNode's announce + message + path request (row 12 the same); row 13 ("A B member") three
-# exchanges of row 5's kind (owner, member, owner after the member's stop): the RNode 3 each; every radio of the node 3 in
-# each exchange it is in (its announce, and the proof and the send reserved on every radio: the node picks the radio).
-declare -A WORST=([1]="3 4" [2]="1 1" [3]="1 1" [4]="1 1" [5]="4 3" [6]="1 1" [12]="4 3" [13]="10 9 4")
+# + delivery proof + own send + the one retry a late cancel can let slip (LATE ends the run), the RNode's announce + message +
+# path request + its proof of the box's message (row 12 the same); row 13 ("A B member zero"): two RNode exchanges of row 5's
+# kind (owner, owner after the member's stop; no box send: rnsback "in the member leg"), the RNode 3 each; the member leg is H's
+# member <-> the Zero on 868.3 (the RNode hears neither): the owner 3 (start's announce, proof) + 5 (the announce call, the send,
+# its slip, the proof of the Zero's message: reserved on every node radio, the node picks one) + 1 (the leave's proof) = 9; the
+# member 5; the Zero 5 (its MeshChat start's announce, its send and slip, its proof of H's message).
+declare -A WORST=([1]="3 4" [2]="1 1" [3]="1 1" [4]="1 1" [5]="5 4" [6]="1 1" [12]="5 4" [13]="9 6 5 5")
 declare -A RROW=(); RIDS=
 for l in "${ROWS[@]}"; do read -r id lane kind a b pw fl <<< "$l"; RROW[$id]="$l"; RIDS="$RIDS $id"; done
 rowf() { local id lane kind a b pw fl; read -r id lane kind a b pw fl <<< "${RROW[$1]}"; case $2 in lane) echo "$lane";; kind) echo "$kind";;
   a) echo "$a";; b) echo "$b";; power) echo "$pw";; flags) echo "$fl";; esac; }
 rowname() { case $1 in 1) echo meshcom;; 2) echo "kiss + graywolf";; 3) echo meshtastic;; 4) echo meshcore;; 5) echo "reticulum + meshchat";; 6) echo chat;;
   12) echo "reticulum (daemon backend) + meshchat";; 13) echo "reticulum: two radios, one node";; *) echo daemon;; esac; }
-rmember() { local f; f=$(rowf "$1" flags); case "$f" in member=*) echo "${f#member=}";; esac; }   # a row's third endpoint (flags member=<box:KEY>)
-reps() { rowf "$1" a; rowf "$1" b; rmember "$1"; }   # every endpoint of a row: A, B, then the member
+rflag() { rowf "$1" flags | tr ',' '\n' | sed -n "s/^$2=//p"; }   # rflag <row> <name>: a row's flag value (flags a=<v>,b=<v>)
+rmember() { rflag "$1" member; }   # a row's third endpoint (flags member=<box:KEY>)
+rzero() { rflag "$1" zero; }       # row 13's fourth: the Zero's radio, the member leg's peer (flags zero=<box:KEY>)
+reps() { rowf "$1" a; rowf "$1" b; rmember "$1"; rzero "$1"; }   # every endpoint of a row: A, B, the member, the Zero
 declare -A LEGS=([13]="owner join member leave rejoin off")   # a stack row's own legs (default: box->peer peer->box)
 dirs() { if [ "$(rowf "$1" kind)" = frame ]; then echo "A->B B->A"; [ "$(rowf "$1" flags)" = same-box ] && echo stop-isolation; else echo "${LEGS[$1]:-box->peer peer->box}"; fi; }
 dirtext() { case $1 in box-\>peer) echo "box -> peer";; peer-\>box) echo "peer -> box";; owner) echo "owner both ways";; join) echo "member joins";;
@@ -86,6 +91,30 @@ dirtext() { case $1 in box-\>peer) echo "box -> peer";; peer-\>box) echo "peer -
 # A Reticulum radio on the daemon backend: its txpower as its section renders it (the panel's one function; the CLI has no read
 # of a daemon panel). A refusal (no panel, POWER below the interface's floor) prints no number: no TX.
 RTPOW_PY='import sys; from lhpc.core import radio_start; from lhpc.core.services import ControllerService; s, why = radio_start.panel_section(ControllerService(), "reticulum", sys.argv[1]); print(s.get("txpower") or "NO txpower: " + why)'
+# Row 13: an instance's OWN stored value of <key> (reticulum@<rid>.toml; "" = none), journalled before the kit saves another
+# channel: the member's dp_FREQ (MHz), the Zero's file_frequency (Hz); a blank restore clears it (renders the default).
+RTOWN_PY='import sys; from lhpc.core import commands, config as c; from lhpc.core.services import ControllerService; print("OWN", c.load_stack_config(ControllerService()._paths, "reticulum", inst=commands.Instance(sys.argv[1])).get(sys.argv[2], ""))'
+# The box's message to the PC through MeshChat's own API (meshchat.py 45f89a8 :1771, :1837), held to one frame: only with the
+# PC's path in the node's table (rnpath -t: local, no RF; else NO-PATH, exit 4), opportunistic (one packet), cancelled at t0+8 s,
+# t0 the clock BEFORE the send's POST (LXMF's next attempt comes >= 10 s after the first, which is after t0: LXMRouter.py
+# :1810); a send POST not answered within 5 s, a cancel ending after t0+9.5 s or not answered in 1.5 s is LATE (exit 5); an
+# interval timer armed at t0 kills the python at t0+9.5 s whatever it does (SIGALRM, exit 142); any exit but 0 and 4 stops the
+# node first (the runner: LXMF retries until its node is down). Prints SENT <hash>, CANCEL <s since t0> <state>.
+RTSEND_PY='import json, subprocess, sys, time, urllib.error, urllib.request as u
+from lhpc.core import reticulum_members as m
+from lhpc.core.services import ControllerService
+d, n = sys.argv[1], sys.argv[2]; s = ControllerService(); src = s._lifecycle().source_dir(m._comp(s))
+t = subprocess.run([str(src / ".venv" / "bin" / "rnpath"), "--config", str(m._config_dir(s)), "-t"], capture_output=True, text=True, timeout=30)
+if t.returncode != 0 or d not in t.stdout: print("NO-PATH: the node has no path to the PC (rnpath -t): nothing sent"); sys.exit(4)
+def post(url, body, to): return json.loads(u.urlopen(u.Request(url, json.dumps(body).encode(), {"Content-Type": "application/json"}), timeout=to).read().decode())
+t0 = time.monotonic(); import signal; signal.setitimer(signal.ITIMER_REAL, 9.5)
+try: h = post("http://127.0.0.1:8790/api/v1/lxmf-messages/send", {"delivery_method": "opportunistic", "lxmf_message": {"destination_hash": d, "content": n}}, 5)["lxmf_message"]["hash"]
+except urllib.error.HTTPError as e: print("SEND-FAILED", e.code, e.read().decode()[:200]); sys.exit(6)
+except Exception as e: print("LATE: no send answer within 5 s", type(e).__name__); sys.exit(5)
+print("SENT", h, flush=True); time.sleep(max(0.0, t0 + 8 - time.monotonic()))
+try: c = post("http://127.0.0.1:8790/api/v1/lxmf-messages/" + h + "/cancel", {}, 1.5)
+except Exception as e: print("LATE: no cancel answer", type(e).__name__); sys.exit(5)
+w = time.monotonic() - t0; print("CANCEL", "%.1f" % w, (c.get("lxmf_message") or {}).get("state")); sys.exit(5 if w > 9.5 else 0)'
 declare -A F=(
   [start]='{LH} stack start {inst} --yes'
   [stop]='{LH} stack stop {inst} --yes'
@@ -99,7 +128,10 @@ declare -A F=(
   [rt_get]="{LH} config reticulum@{rid} {k} | sed -n 's/^ *value *= *//p'"
   [rt_pget]="{LH} config reticulum@{rid} txpower | sed -n 's/^ *value *= *//p'"
   [rt_dpget]="cd {RT} && ./venv/lhpc/bin/python -c '$RTPOW_PY' {rid}"
-  [rt_send]='{LH} meshchat@{rid} send {dest} "{n}"'
+  [rt_send]="cd {RT} && timeout -k 2 60 ./venv/lhpc/bin/python -c '$RTSEND_PY' {dest} '{n}'"
+  [rt_own]="cd {RT} && ./venv/lhpc/bin/python -c '$RTOWN_PY' {rid} {k}"
+  [rt_dfreq]='{LH} config reticulum@{rid} --daemon-param FREQ={f}'
+  [rt_zfreq]='{LH} config reticulum@{rid} frequency "{hz}"'   # quoted: the undo's blank must reach the save (unquoted = a show)
   [rt_join]='{LH} stack start reticulum@{rid} --join --yes'
   [rt_announce]="python3 -c \"import urllib.request as u; print(u.urlopen('http://127.0.0.1:8790/api/v1/announce', timeout=30).read().decode()[:80])\""
   [chat_client]='{LH} stack start chat@{rid} --yes'
@@ -123,10 +155,11 @@ declare -A F=(
   [rx_mcom_app]="grep -hE -- '(^| )RX-LoRa2 [0-9]{3} : x[0-9A-Fa-f]{8} ([^ ]+ ){4}[^ >]+>[*]:{n} HW:' {RT}/src/meshcom-qemu-raspi/.run/{idx}uart-latest.log 2>/dev/null"
 )
 CHAT_READY='Ctrl-K: Konf'   # the chat client's footer
-# The forms each row needs (rt_send is optional: a Reticulum row's box -> peer is NOT RUN without it).
+# The forms each row needs (rt_send is optional in rows 5 and 12: their box -> peer is NOT RUN without it; row 13's member leg is
+# its two bounded sends, so it needs it).
 declare -A RFORMS=([1]="start stop tx_mcom rx_mcom rx_mcom_app" [2]="start stop" [3]="start stop mt_cap mt_send mt_pget rx_mt rx_mt_app" [4]="start stop mc_send mc_pget rx_mc rx_mc_app"
   [5]="start stop rt_get rt_pget rx_mchat" [6]="start stop chat_client rx_rf" [12]="start stop rt_get rt_dpget rx_mchat"
-  [13]="start stop rt_get rt_dpget rx_mchat rt_join dset rt_announce")
+  [13]="start stop rt_get rt_dpget rt_pget rx_mchat rt_join rt_own rt_dfreq rt_zfreq rt_announce rt_send")
 # The pre-step M (mcset.py, from the RF sheet's MCSET-PRESTEP-v4): per stack row, the instance settings it copies from the stack's
 # source file into <sid>@<rid> of endpoint A's radio ({band} = that radio's band). J1's value is the input MCSET_J1.
 declare -A MJOB=([1]="J1 meshcom meshcom.toml mc_callsign" [2]="J2 graywolf graywolf@{band}.toml call"
@@ -403,7 +436,7 @@ pover() { local t n nl='(power|txp|settx)[^0-9a-z]{0,3}[$`]'; t=$(pnorm "$1"); [
 # issend: rc 0 when a command (or its stdin) is a send form: the frame, Meshtastic, MeshCore and MeshChat sends, the chat
 # line, the MeshChat announce, a Reticulum row's release, the MeshCom console and Graywolf helpers, a peer's send or exchange
 issend() { local t i; t=$(pnorm "$1"); i=$(pnorm "${2:-}")
-  case "$t" in *loraf-*struct.pack*|*--sendtext*|*meshcore-cli*public*|*meshchat@r*send*|*tmuxsend-keys*|*/api/v1/announce*|*[0-9]-tx2.go*|*"::+sys.argv"*|*mt-send*|*mc-send*|*meshcom-send*|*rns-exchange*) return 0;; esac
+  case "$t" in *loraf-*struct.pack*|*--sendtext*|*meshcore-cli*public*|*meshchat@r*send*|*tmuxsend-keys*|*/api/v1/announce*|*/api/v1/lxmf-messages/send*|*[0-9]-tx2.go*|*"::+sys.argv"*|*mt-send*|*mc-send*|*meshcom-send*|*rns-exchange*) return 0;; esac
   case "$i" in *type--helpforcommands*|*/api/messages*) return 0;; esac; return 1; }
 # ---- 5. state, forms, output ------------------------------------------------------------------------------------------------
 say() { echo "$*"; }; data() { echo "data: $*"; }; ok() { echo "ok: $*"; }
@@ -573,7 +606,7 @@ frame() { echo "FRAME | $1 | $2"; drylog "FRAME $1 $2"; }
 dryframes() {   # dryframes <where> <command> <stdin>: the FRAME of a send form, from the command alone (never from a tx)
   local w=$1 c=$2 in=$3 send= base= rid='*' cls
   if [[ $c =~ LHPC_PROOF=([HZ]):[a-z]+@(r[0-9]+) ]]; then frame "${BASH_REMATCH[1]}:${BASH_REMATCH[2]}" control; return 0; fi   # the release: the box's delivery proof
-  case "$c" in *loraf-*struct.pack*|*"--sendtext"*|*meshcore-cli*" public "*|*meshchat@r*" send "*|*"tmux send-keys"*|*"/api/v1/announce"*|*" stack start meshchat@r"*|*"create_connection(('127.0.0.1',"*) send=1;; esac
+  case "$c" in *loraf-*struct.pack*|*"--sendtext"*|*meshcore-cli*" public "*|*meshchat@r*" send "*|*"tmux send-keys"*|*"/api/v1/announce"*|*"/api/v1/lxmf-messages/send"*|*" stack start meshchat@r"*|*"create_connection(('127.0.0.1',"*) send=1;; esac
   [[ $c == *meshcore-cli* ]] && base=5000; [[ $in == *"Type --help for commands"* ]] && { send=1; base=12323; }; [[ $in == *'"/api/messages"'* ]] && { send=1; base=8080; }
   [ -n "$send" ] || return 0
   if [[ $c =~ @(r[0-9]+) ]] || [[ $c =~ lora[a-z]*-(r[0-9]+)\.sock ]] || [[ $c =~ rfchat-(r[0-9]+) ]]; then rid=${BASH_REMATCH[1]}
@@ -1115,15 +1148,28 @@ rnsx() {   # rnsx <id> <tag> <box> <rid> <rnode key> <key>...: one exchange with
   hpower "$pk" "$tg-rnode-power-2.txt"; tx "$pk" 1 control --reserve; for x in "$@"; do tx "$x" 1 control --reserve; done
   tx "$pk" 1 "$n1" -- X PC "$tg-tx2-go.txt" "LHPC_PROOF=$b:meshchat@$r printf '%s\n' '$n1' > $(shq "$go")"
   [ "$MODE" = live ] || printf '%s\n' "$n1" > "$go" || stop "row $id: the dry release file"   # dry: right after its tx
-  if needs rt_send; then [ "$MODE" = dry ] || sleep 60; dest=$(cat "$pcd" 2>/dev/null || echo dry)
+  RNSNOPATH=; if [ "${RNSSEND:-1}" = 1 ] && needs rt_send; then [ "$MODE" = dry ] || sleep 60; dest=$(cat "$pcd" 2>/dev/null || echo dry)
     [ "$MODE" = dry ] || [[ "$dest" =~ ^[0-9a-f]{32}$ ]] || stop "row $id: no PC destination hash"
-    for x in "${@:2}"; do tx "$x" 1 control --reserve; done   # the node picks the radio
-    tx "$q" 1 "$n2" -- must "$b" "$tg-box-send.txt" "$(form rt_send rid="$r" dest="$dest" n="$n2")"; fi
+    tx "$pk" 1 control --reserve   # the PC's delivery proof of the box's message: an RNode frame
+    rtsend "$tg-box-send" "$b" "$r" "$dest" "$n2" "$@" || RNSNOPATH=1; fi
   reap "$pr"; RNSRC=$XRC; RNSN2=$n2
   [ "$MODE" = dry ] || grep -qxE "DELIVERED $n1 .*" "$OUT/$tg-peer.txt" || fail "row $id peer -> box: no delivery proof of '$n1' from the box ($tg-peer.txt)"
   boxrx "$b" "$tg-box-rx.txt" rx_mchat "$r" "$n1" 30 || fail "not heard: $n1"; }
-rnsback() {   # rnsback <tag>: the exchange's box -> peer word at the PC (rt_send only), else FAIL; RNSB = the REPORT's note
-  XRC=$RNSRC; if needs rt_send; then result "$1-peer.txt" "$RNSN2" || fail "not heard: $RNSN2"; RNSB=; else RNSB=" (box -> peer NOT RUN: rt_send not confirmed)"; fi; }
+rtsend() {   # rtsend <tag> <box> <node rid> <dest> <nonce> <key>...: the box's ONE bounded send (rt_send) to <dest>, the keys the
+  # node's radios (the node picks one: each reserved); rc 1 = NO-PATH (nothing sent). Any other end than SENT (LATE 5, SEND-FAILED
+  # 6, SIGALRM 142, timeout 124, ssh 255, ...) stops that box's node FIRST, whatever HTTP answered (LXMF retries until it is down)
+  local tg=$1 b=$2 r=$3 d=$4 n=$5 x; shift 5
+  for x in "$@"; do tx "$x" 1 control --reserve; done        # the one retry a late cancel can let slip (LATE ends the run)
+  for x in "${@:2}"; do tx "$x" 1 control --reserve; done    # the node picks the radio
+  tx "$1" 1 "$n" -- X "$b" "$tg.txt" "$(form rt_send dest="$d" n="$n")"
+  case "$XRC" in 0) return 0;; 4) return 1;; esac
+  X "$b" "$tg-node-stop.txt" "$(gstop "reticulum@$r")"
+  stop "$tg.txt: the box's send ended $XRC, not cancelled in time: $b's node is stopped first, no further TX"; }
+rnsback() {   # rnsback <tag> [<where>]: the exchange's box -> peer word at the PC (rt_send only), else FAIL; RNSB = the REPORT's
+  # note; <where>: this exchange sends nothing on purpose (row 13: the box -> peer proof is in that leg)
+  XRC=$RNSRC; if [ -n "${2:-}" ]; then RNSB=" (box -> peer: in $2)"; elif ! needs rt_send; then RNSB=" (box -> peer NOT RUN: rt_send not confirmed)"
+  elif [ -n "${RNSNOPATH:-}" ]; then RNSB=" (box -> peer NOT RUN: the node had no path to the PC, nothing sent)"
+  else result "$1-peer.txt" "$RNSN2" || fail "not heard: $RNSN2"; RNSB=; fi; }
 row_rns() {   # row_rns <id> <box:KEY> <backend>: Reticulum + MeshChat on one box radio (868.5 SF8, the row's backend) <-> the RNode
   local id=$1 b=${2%%:*} k=${2#*:} be=$3
   needs $(rforms "$id") || { notrun_row "$id" "form not confirmed: $NEEDS_MISSING"; return 0; }
@@ -1135,7 +1181,7 @@ row_rns() {   # row_rns <id> <box:KEY> <backend>: Reticulum + MeshChat on one bo
   rnsx "$id" "$id" "$b" "$r" "R$id-rnode" "$q"
   REPORT "$id" "$(rowname "$id")" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "peer -> box" "yes: LXMF delivered (the box's proof) and stored" "the RNode at $(getk "P_R$id-rnode" unrecorded) dBm" PASS
   leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
-  if needs rt_send; then rnsback "$id"
+  if needs rt_send && [ -z "${RNSNOPATH:-}" ]; then rnsback "$id"
     REPORT "$id" "$(rowname "$id")" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "box -> peer" yes "$(getk "P_$q" as-is) dBm (as-is)" PASS
   else notrun "$id" box-\>peer "form not confirmed: rt_send"; fi
   undo_to "$m"; }
@@ -1159,37 +1205,58 @@ rnsnode() {   # rnsnode <tag> <box> <member rid> <up|gone> [meshchat]: the node 
   [ "$(body "$1-pid.txt")" = "$(body 13-pid0.txt)" ] || fail "row 13 $1: the node's pid or start time changed ($1-pid.txt): not restart-free"
   ifis "$1-if.txt" "$3" "$4" || fail "row 13 $1: LoRa $3 is not $4 in the node ($1-if.txt)"; }
 row_13() {   # Reticulum: two radios, one node: the owner (A) opens as row 12 does, the member (flags member=) joins it restart-free
-  local b=${1%%:*} k=${1#*:} mk; mk=$(rmember 13); mk=${mk#*:}
+  local b=${1%%:*} k=${1#*:} mk zk zb zr qz o nh nz bh zh; mk=$(rmember 13); mk=${mk#*:}; zk=$(rzero 13); zb=${zk%%:*}; zk=${zk#*:}
   needs $(rforms 13) || { notrun_row 13 "form not confirmed: $NEEDS_MISSING"; return 0; }
   local m mp ro rm q qm p0 pk=R13-rnode rn="the RNode (the PC's shared rnsd)" bd="868.5 MHz, SF8"
   m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; ro=$(getk "$k"); rm=$(getk "$mk"); q="R13-$b-$ro"; qm="R13-$b-$rm"
-  rnsread 13 "$b" "$ro" daemon 0; rnsread 13 "$b" "$rm" daemon -m
-  spower "$b" rt_dpget "$ro" "$q"; spower "$b" rt_dpget "$rm" "$qm"; undo_push "$b" "$(gstop "reticulum@$ro")"
+  zr=$(getk "$zk"); qz="R13-$zb-$zr"
+  rnsread 13 "$b" "$ro" daemon 0; rnsread 13 "$b" "$rm" daemon -m; rnsread 13 "$zb" "$zr" spi -z
+  spower "$b" rt_dpget "$ro" "$q"; spower "$b" rt_dpget "$rm" "$qm"; spower "$zb" rt_pget "$zr" "$qz"; undo_push "$b" "$(gstop "reticulum@$ro")"
   hpower "$pk" 13-rnode-power.txt
   leg owner   # the leg that runs now: a FAIL from here is its FAIL (runrow)
-  rnsx 13 13-owner "$b" "$ro" "$pk" "$q"; rnsback 13-owner
+  RNSSEND=0 rnsx 13 13-owner "$b" "$ro" "$pk" "$q"; rnsback 13-owner "row 12 and the member leg"
   REPORT 13 "$(rowname 13)" "$b ($ro)" "$bd" "$rn" "$(dirtext owner)" "yes: LXMF delivered (the box's proof) and stored$RNSB" "the RNode at $(getk "P_$pk" unrecorded) dBm; $ro $(getk "P_$q" as-is) dBm (as-is)" PASS
   leg join; must "$b" 13-pid0.txt "$(rnspid)"
+  # the member on its own channel (one node's radios on one channel collide): its OWN FREQ journalled (MHz, "" = none: the
+  # undo's blank clears), then 868.300 saved (Save-only: it takes effect at the join); its undo runs after the member's stop
+  must "$b" 13-member-freq0.txt "$(form rt_own rid="$rm" k=dp_FREQ)"; o=$(sed -n 's/^OWN //p' "$OUT/13-member-freq0.txt")
+  [ "$MODE" = dry ] || [[ $o =~ ^([0-9]{3}(\.[0-9]+)?)?$ ]] || stop "row 13: $rm's own FREQ reads '$o': nothing changed"
+  undo_push "$b" "$(form rt_dfreq rid="$rm" f="$o")"; must "$b" 13-member-freq.txt "$(form rt_dfreq rid="$rm" f=868.300)"
   keep "STARTED_${b}_$rm" 1; undo_push "$b" "$(gstop "reticulum@$rm")"; must "$b" 13-join.txt "$(form rt_join rid="$rm")"
   rnsnode 13-join "$b" "$rm" up meshchat
   REPORT 13 "$(rowname 13)" "$b ($ro, $rm)" "$bd" — "$(dirtext join)" "the node's pid unchanged, LoRa $rm up, MeshChat answers" — PASS
-  # the member's exchange: the owner at the minimum (its undo first), so the RNode hears the member best; one announce call
-  # (MeshChat runs on from the owner's leg: started once, row 13's budget)
+  # the member's exchange: H's member <-> the Zero's SPI radio, both on 868.300 (the RNode, on 868.5, hears neither): the Zero's
+  # channel journalled (its own file_frequency, "" = none), set, its node + MeshChat started (MeshChat's start announces), H's
+  # announce call, then one bounded send each way; the undo stops the Zero's node first, then its MeshChat, then its channel
   leg member; mp=$(undo_mark) || stop "undo journal: unreadable (no mark)"
-  dpower "$b" "$ro" "${q}d"; p0=$(getk "P_${q}d"); [ "$MODE" = live ] || p0=${p0:-10}   # the undo restores only the recorded value
-  [ -n "$p0" ] || stop "row 13: no recorded power of $b:$ro: no undo, no set, no TX"
-  jpower "$b" "$ro" "$p0"; pset "$b" 13-set-owner.txt "$ro" "$STICK_MIN"; [ "$XRC" = 0 ] || stop "13-set-owner.txt: exit status $XRC"; dpower "$b" "$ro" "${q}m"
-  [ "$MODE" = dry ] || [ "$(getk "P_${q}m")" = "$STICK_MIN" ] || stop "row 13: $b:$ro reads back '$(getk "P_${q}m")' dBm after POWER=$STICK_MIN: no TX"
+  must "$zb" 13-zero-freq0.txt "$(form rt_own rid="$zr" k=file_frequency)"; o=$(sed -n 's/^OWN //p' "$OUT/13-zero-freq0.txt")
+  [ "$MODE" = dry ] || [[ $o =~ ^([0-9]{9})?$ ]] || stop "row 13: the Zero's own frequency reads '$o': nothing changed"
+  undo_push "$zb" "$(form rt_zfreq rid="$zr" hz="$o")"; must "$zb" 13-zero-freq.txt "$(form rt_zfreq rid="$zr" hz=868300000)"
+  XRAW=$SCRATCH/13-zero-lxmf.raw must "$zb" 13-zero-lxmf.txt "cd {RT} && src/meshchat/.venv/bin/python -c '$MCHASH_PY' state/meshchat/identity"
+  XRAW=$SCRATCH/13-member-lxmf.raw must "$b" 13-member-lxmf.txt "cd {RT} && src/meshchat/.venv/bin/python -c '$MCHASH_PY' state/meshchat/identity"
+  [ "$MODE" = live ] || { cp "$OUT/13-zero-lxmf.txt" "$SCRATCH/13-zero-lxmf.raw" && cp "$OUT/13-member-lxmf.txt" "$SCRATCH/13-member-lxmf.raw"; } || stop "row 13: the dry raw copies"
+  zh=$(sed -n 's/^LXMF //p' "$SCRATCH/13-zero-lxmf.raw" | tail -n 1); bh=$(sed -n 's/^LXMF //p' "$SCRATCH/13-member-lxmf.raw" | tail -n 1)
+  [ "$MODE" = dry ] || { [[ "$zh" =~ ^[0-9a-f]{32}$ ]] && [[ "$bh" =~ ^[0-9a-f]{32}$ ]]; } || stop "row 13: no LXMF address of a MeshChat (13-zero/member-lxmf.txt)"
+  keep "STARTED_${zb}_$zr" 1; undo_push "$zb" "$(gstop "meshchat@$zr")"; undo_push "$zb" "$(gstop "reticulum@$zr")"   # newest first: the node
+  tx "$qz" "$ANNF" control -- must "$zb" 13-zero-start.txt "$(form start inst="meshchat@$zr")"
   must "$b" 13-member-rf0.txt "$(rnslog "$rm")"
-  RNSANN=call rnsx 13 13-member "$b" "$ro" "$pk" "$q" "$qm"; rnsback 13-member
+  for x in "$qm"; do tx "$x" "$ANNF" control --reserve; done; tx "$q" "$ANNF" control -- must "$b" 13-member-announce.txt "$(form rt_announce)"
+  [ "$MODE" = dry ] || sleep 30
+  nh=$(nonce); nz=$(nonce); RNSB=
+  tx "$qz" 1 control --reserve   # the Zero's delivery proof of H's message
+  if rtsend 13-member-send "$b" "$ro" "${zh:-dry}" "$nh" "$q" "$qm"; then boxrx "$zb" 13-zero-rx.txt rx_mchat "$zr" "$nh" 60 || fail "not heard on the Zero: $nh"
+  else RNSB="$RNSB (H -> Zero NOT RUN: H's node had no path to the Zero)"; fi
+  for x in "$q" "$qm"; do tx "$x" 1 control --reserve; done   # H's delivery proof of the Zero's message (the node picks the radio)
+  if rtsend 13-zero-send "$zb" "$zr" "${bh:-dry}" "$nz" "$qz"; then boxrx "$b" 13-member-rx.txt rx_mchat "$ro" "$nz" 60 || fail "not heard on H: $nz"
+  else RNSB="$RNSB (Zero -> H NOT RUN: the Zero's node had no path to H)"; fi
   must "$b" 13-member-rf1.txt "$(rnslog "$rm")"
   # TX >= 3: the announce call's 2 frames go out on every interface; the exchange's proof or send over the member is the third
   # (the node relays nothing: enable_transport = No), so an exchange that went over the owner fails here
   [ "$MODE" = dry ] || memgrew 13-member-rf0.txt 13-member-rf1.txt || fail "row 13 member: no new RX line, or fewer than 3 new TX lines (the announce's 2 + the exchange), on $rm's own RF log (13-member-rf0/1.txt)"
-  undo_to "$mp" || stop "row 13: the owner's power restore failed (UNRESOLVED.txt)"
-  REPORT 13 "$(rowname 13)" "$b ($rm)" "$bd" "$rn" "$(dirtext member)" "yes: LXMF delivered and stored, RX and >= 3 TX (the announce's 2 + the exchange) on $rm's RF log$RNSB" "$ro at $STICK_MIN dBm (minimum, restored); $rm $(getk "P_$qm" as-is) dBm (as-is)" PASS
+  undo_to "$mp" || stop "row 13: the Zero's stop or channel restore failed (UNRESOLVED.txt)"
+  REPORT 13 "$(rowname 13)" "$b ($rm)" "868.3 MHz, SF8" "the Zero ($zb:$zr, SPI)" "$(dirtext member)" "yes: LXMF H -> Zero and Zero -> H on 868.3 MHz, stored on each side; RX and >= 3 TX (the announce's 2 + the exchange) on $rm's RF log$RNSB" "$rm $(getk "P_$qm" as-is) dBm, the Zero's $zr $(getk "P_$qz" as-is) dBm (as-is)" PASS
   leg leave; must "$b" 13-leave.txt "$(form stop inst="reticulum@$rm")"; rnsnode 13-leave "$b" "$rm" gone
-  RNSANN=known rnsx 13 13-leave "$b" "$ro" "$pk" "$q"; rnsback 13-leave
+  RNSSEND=0 RNSANN=known rnsx 13 13-leave "$b" "$ro" "$pk" "$q"; rnsback 13-leave "the member leg"
   REPORT 13 "$(rowname 13)" "$b ($ro)" "$bd" "$rn" "$(dirtext leave)" "yes: the node's pid unchanged, LoRa $rm gone, LXMF delivered over $ro$RNSB" "$ro $(getk "P_$q" as-is) dBm (as-is)" PASS
   leg rejoin; must "$b" 13-rejoin.txt "$(form rt_join rid="$rm")"; rnsnode 13-rejoin "$b" "$rm" up meshchat
   REPORT 13 "$(rowname 13)" "$b ($ro, $rm)" "$bd" — "$(dirtext rejoin)" "the node's pid unchanged, LoRa $rm up, MeshChat answers" — PASS

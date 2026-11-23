@@ -209,15 +209,17 @@ def test_the_full_lane_reports_row_12_both_ways_and_the_rns_lane_row_13_per_leg(
 
 
 def test_row_13_starts_meshchat_once_announces_once_more_and_leaves_on_the_cached_path(dry):
-    # a25 B8-fold C2: the owner's worst case 2 + 2 + 3 x (proof + send) = 10 frames fits TXMAX only with MeshChat started once
-    # red-before (da24e83c): MeshChat started at each of the three exchanges, no announce call, no `known` exchange
+    # a25 B8-fold C2: the owner's worst case (9 of TXMAX 10) fits only with H's MeshChat started once
+    # red-before (da24e83c): MeshChat started at each of the three exchanges, no announce call, no `known` exchange;
+    # (80068d70): the member leg an RNode exchange (three of them), no Zero
     d = dry("rns")
     assert d.rc == 0, d.err[-2000:]
     cmds = [ln for ln in d.lines if "[dry]" in ln]
-    assert len([c for c in cmds if "stack start meshchat@" in c]) == 1, cmds
+    starts = [c.split(" > ")[0].strip() for c in cmds if "stack start meshchat@" in c]
+    assert starts == ["[dry] H", "[dry] Z"], cmds          # H's once (the owner's leg), the Zero's once (the member leg)
     assert len([c for c in cmds if "/api/v1/announce" in c]) == 1
     ex = [c for c in cmds if "rns-exchange" in c]
-    assert [c.rstrip().endswith(" known") for c in ex] == [False, False, True], ex
+    assert [c.rstrip().endswith(" known") for c in ex] == [False, True], ex   # the owner's and the leave's: the RNode
 
 
 def test_the_whole_bench_has_no_absent_or_ambiguous_row(base):
@@ -295,18 +297,20 @@ def within_budget(d):
 
 
 def test_every_radio_stays_within_its_budget(base):
-    # rows 5 and 12 share the RNode: 3 frames each. red-before (82dc98ad): (3, 3), row 5 alone
-    assert within_budget(base)["PC:rnode"] == (6, 6)
+    # rows 5 and 12 share the RNode: 4 frames each (3 + its proof of the box's message). red-before (82dc98ad): (3, 3),
+    # row 5 alone; (80068d70): (6, 6), the box's send never sent
+    assert within_budget(base)["PC:rnode"] == (8, 8)
 
 
 def test_the_rns_lane_keeps_the_rnode_within_its_budget(dry):
-    # row 13: three exchanges (owner, member, owner after the member's stop), 3 RNode frames each; the owner is in all three
-    # (MeshChat's start 2 + the member leg's announce call 2 + 3 x 2 = TXMAX), the member in one (2 + 2); every frame
-    # dispatched is reserved at R0
-    # red-before (82dc98ad): "STOP: LANE=fast|full", rc 2 (no TX or BUDGET line); (da24e83c): 9 and 3, 1 frame per announce
+    # row 13: two RNode exchanges (owner, owner after the member's stop), 3 RNode frames each; the member leg is H's member <->
+    # the Zero on 868.3: the owner 3 + 5 (announce call, send, slip, proof: on every node radio) + 1 = 9, the member 5, the
+    # Zero 5 (its start's announce, send, slip, proof); every frame dispatched is reserved at R0
+    # red-before (82dc98ad): "STOP: LANE=fast|full", rc 2 (no TX or BUDGET line); (da24e83c): 9 and 3, 1 frame per announce;
+    # (80068d70): 9 / 10 / 4, sends reserved in every exchange but never sent
     d = dry("rns")
     assert d.rc == 0, d.err[-2000:]
-    assert within_budget(d) == {"PC:rnode": (9, 9), "H:r2": (10, 10), "H:r5": (4, 4)}
+    assert within_budget(d) == {"PC:rnode": (6, 6), "H:r2": (9, 9), "H:r5": (5, 5), "Z:r2": (5, 5)}
     assert uncovered(d.lines) == [] and unsent_tx(d.lines) == []
 
 
@@ -358,11 +362,6 @@ def test_no_send_form_is_used_outside_a_tx_call():
 
 # ---- the lhpc calls parse at this head -----------------------------------------------------------------------------------
 
-# Forms dry prints although this head's CLI has no verb for them (live reports their direction NOT RUN, "form not
-# confirmed"): rt_send, the MeshChat send of row 5's box -> peer.
-KNOWN_ABSENT = {"rt_send": re.compile(r"lhpc meshchat@r\d+ send ")}
-
-
 def test_every_lhpc_call_of_the_dry_run_parses_at_this_head(base, tmp_path):
     out = tmp_path / "full.dry.txt"
     out.write_text(base.out)
@@ -370,10 +369,8 @@ def test_every_lhpc_call_of_the_dry_run_parses_at_this_head(base, tmp_path):
     p = subprocess.run([sys.executable, "-I", str(KIT / "cliforms.py"), str(out)], capture_output=True, text=True,
                        cwd=repo, check=True, timeout=120)
     rows = [line.split("\t") for line in p.stdout.splitlines()[1:]]
-    known = [r for r in rows if any(c.match(r[5]) for c in KNOWN_ABSENT.values())]
-    assert rows and [r for r in rows if r[4] != "OK" and r not in known] == []
-    # a known-absent form must still be absent: once the CLI has the verb, drop the entry and confirm the form
-    assert known and {r[4] for r in known} == {"UNKNOWN"}
+    # red-before (80068d70): rt_send `lhpc meshchat@r2 send` UNKNOWN (now MeshChat's own API, no lhpc call)
+    assert rows and [r for r in rows if r[4] != "OK"] == []
 
 
 def test_every_lhpc_call_of_the_rns_lane_parses_at_this_head_the_join_included(dry, tmp_path):
@@ -385,7 +382,7 @@ def test_every_lhpc_call_of_the_rns_lane_parses_at_this_head_the_join_included(d
     p = subprocess.run([sys.executable, "-I", str(KIT / "cliforms.py"), str(out)], capture_output=True, text=True,
                        cwd=KIT.parents[1], check=True, timeout=120)
     rows = [line.split("\t") for line in p.stdout.splitlines()[1:]]
-    assert [r for r in rows if r[4] != "OK" and not KNOWN_ABSENT["rt_send"].match(r[5])] == []
+    assert [r for r in rows if r[4] != "OK"] == []
     assert [r[5] for r in rows if "--join" in r[5]] == ["lhpc stack start reticulum@r5 --join --yes"] * 2 and \
         {r[4] for r in rows if "--join" in r[5]} == {"OK"}
 

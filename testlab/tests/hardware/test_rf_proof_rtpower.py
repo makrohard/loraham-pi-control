@@ -48,10 +48,10 @@ def _box(tmp_path, own=None, spi=()):
     return root
 
 
-def _read(tmp_path, root, row, rid):
-    """The power-read form row `row` names (RFORMS), rendered by the script's own `form`, run on the box `root`; then the
-    script's pnum of its output: (output, pnum)."""
-    r = _sourced(tmp_path, f'f=$(rforms {row} | tr " " "\\n" | grep -E "^rt_d?pget$"); form "$f" rid={rid}')
+def _read(tmp_path, root, row, rid, form="rt_dpget"):
+    """The power-read form `form` as row `row` names it (RFORMS; none = not named), rendered by the script's own `form`, run
+    on the box `root`; then the script's pnum of its output: (output, pnum)."""
+    r = _sourced(tmp_path, f'f=$(rforms {row} | tr " " "\\n" | grep -xF {form}); form "$f" rid={rid}')
     assert r.returncode == 0 and r.stdout, r.stderr
     cmd = r.stdout.replace("{LH}", f"{root}/venv/lhpc/bin/lhpc").replace("{RT}", str(root))
     out = subprocess.run(["bash", "-c", cmd], env=_env(tmp_path, LHPC_RUNTIME_ROOT=str(root),
@@ -73,17 +73,17 @@ def test_a_daemon_rows_power_read_is_the_section_its_radio_renders(tmp_path, row
 
 def test_the_spi_rows_power_read_stays_the_config_pages_value(tmp_path):
     root = _box(tmp_path, spi=["r2"])
-    assert _read(tmp_path, root, 5, "r2") == ("14\n", "14")
+    assert _read(tmp_path, root, 5, "r2", "rt_pget") == ("14\n", "14")
 
 
 def test_a_daemon_read_without_a_panel_gives_no_number(tmp_path):
     root = _box(tmp_path, spi=["r2"])
     out, num = _read(tmp_path, root, 12, "r2")                      # r2 on spi: panel_section refuses
-    assert out.startswith("NO txpower: ") and num == ""
+    assert out == "NO txpower: reticulum@r2 uses backend spi: its radio settings are on its Config page\n" and num == ""
 
 
 @pytest.mark.parametrize("row, forms", [("5 Z:Z868", "SP rt_pget"), ("12 H:HMS", "SP rt_dpget"),
-                                        ("13 H:H868", "SP rt_dpget\nSP rt_dpget")])
+                                        ("13 H:H868", "SP rt_dpget\nSP rt_dpget\nSP rt_pget")])
 def test_each_reticulum_row_reads_its_power_with_its_backends_form(tmp_path, row, forms):
     rid, call = row.split()
     stubs = ('needs() { :; }; notrun_row() { :; }; rnsread() { :; }; undo_mark() { echo 0; }; getk() { echo r4; }; '
