@@ -231,7 +231,7 @@ def test_a_live_members_settings_are_checked_first_and_reloaded_live(box):
     res = box.svc.save_config("reticulum", {"file_frequency": "434100000"}, inst=r1)
     assert res.ok and "not connected: the node refused the new settings" in "\n".join(res.details)
     # red-before (ea51424b): only the record goes, the refused interface is never detached (plan v25 §9.2)
-    assert ("--detach", "LoRa r1") in box.node.calls and "LoRa r1 detached" in "\n".join(res.details)
+    assert ("--detach", "LoRa r1") in box.node.calls and "LoRa r1 is gone from the node" in "\n".join(res.details)
     assert _member(box, "r1") == [] and _intent(box, "r1") == "r2"
 
 
@@ -480,3 +480,15 @@ def test_a_node_started_again_after_a_crash_keeps_one_member_record_on_its_new_p
     old.wait(timeout=10)
     new = _owner_up(box)                                             # its start reconciles r1 (plan v25 §9.2)
     assert [r["pid"] for r in _member(box, "r1")] == [new.pid]
+
+
+def test_a_remove_takes_every_member_record_of_the_radio(box):
+    owner = _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    life, stk = box.svc._lifecycle(), box.svc.stack("reticulum")
+    assert life.record_launch(stk, stk.component("rns"), owner.pid, band="433",
+                              extra={"rid": "r1", "member_of": "r2"})            # a second one, however it came
+    assert len(_member(box, "r1")) == 2
+    assert box.svc.stop("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r1")[0]).ok
+    # red-before (b602baa8): the first record goes, the second stays (a25 F218 N1)
+    assert _member(box, "r1") == []

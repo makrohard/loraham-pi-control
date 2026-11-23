@@ -203,8 +203,8 @@ def teardown(svc, rid: str, clear_intent: bool = True) -> str:
     and the block and record go only once `-j` answers without it; no rnstatus is asked when the node is not running,
     nor for a radio with neither a record nor a block (a saved intent alone: the node cannot hold it). A restart's stop
     and an attach keep the intent (`clear_intent` False). "" = gone, else why (nothing changed)."""
-    rec = member_record(svc, rid)
-    if (rec is not None or _has_block(svc, rid)) and owner_record(svc) is not None:
+    recs = _member_records(svc, rid)
+    if (recs or _has_block(svc, rid)) and owner_record(svc) is not None:
         name = reticulum_node.name(rid)
         if (now := listed(svc)) is None or rid in now:
             res = rnstatus(svc, "--detach", name)
@@ -214,7 +214,7 @@ def teardown(svc, rid: str, clear_intent: bool = True) -> str:
                         + (" (the node does not answer)" if now is None else ""))
     if _node_file(svc).exists():
         _write_block(svc, rid, "")
-    if rec is not None:
+    for rec in recs:                                       # every one, however many there are (a25 F218 N1)
         svc._lifecycle()._remove_record(rec)
     if clear_intent:
         update_stack_config(svc._paths, STACK_ID, {instances.MEMBER_OF: ""}, inst=commands.Instance(rid))
@@ -292,7 +292,7 @@ def reload(svc, rid: str) -> str:
         return f"the node refused the new settings ({first}); the previous section is back and attached"
     why = f"not connected: the node refused the new settings ({first}), and the previous ones too ({second})"
     kept = teardown(svc, rid, clear_intent=False)
-    return _left(why, kept) if kept else f"{why}; {reticulum_node.name(rid)} detached"
+    return _left(why, kept) if kept else f"{why}; {reticulum_node.name(rid)} is gone from the node"
 
 
 def after_save(svc, target: str, inst) -> list[str]:
