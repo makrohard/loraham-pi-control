@@ -341,7 +341,7 @@ class StopOpsMixin:
                 cr = life.stop(comp, band=band, rid=getattr(inst, "rid", "") or None)       # item 16: `--radio rN` alone
             elif _member and comp.id == _ri.NODE_ID:
                 _was = _rm.member_record(self, _rid) is not None
-                _why = _rm.detach(self, _rid, clear_intent=_operator)   # B7: a member's restart rejoins
+                _why = _rm.teardown(self, _rid, clear_intent=_operator)   # B7: a member's restart rejoins
                 cr = CompResult(component=comp.id, stack=target, action="stop",
                                 outcome=Outcome.BLOCKED if _why else Outcome.STOPPED,
                                 summary=_why or (f"{_rid} disconnected from the Reticulum node (it keeps running)" if _was

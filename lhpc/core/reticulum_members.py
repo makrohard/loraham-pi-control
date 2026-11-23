@@ -108,6 +108,11 @@ def _node_file(svc):
     return _config_dir(svc) / "config"
 
 
+def _has_block(svc, rid: str) -> bool:
+    path = _node_file(svc)
+    return path.exists() and bool(reticulum_node.section_text(path.read_text(), rid))
+
+
 def _write_block(svc, rid: str, block: str) -> None:
     path = _node_file(svc)
     runtime_fs.atomic_write(svc._paths, path, reticulum_node.replace_section(path.read_text(), rid, block), 0o400)
@@ -162,15 +167,21 @@ def reconcile(svc, owner: str, deadline: float) -> list[tuple[str, str]]:
     return out
 
 
-def detach(svc, rid: str, clear_intent: bool = True) -> str:
-    """A member's Stop: detached (when live), its block, record and intent removed — a not-connected member's Stop is its
-    Remove (no rnstatus call); a restart's stop keeps the intent (`clear_intent` False), so its start joins again. "" =
-    done, else why (nothing changed)."""
+def teardown(svc, rid: str, clear_intent: bool = True) -> str:
+    """THE one way a member leaves the node (plan v24 §9.1): a Stop, Disconnect or Remove, a failed attach, a twice-refused
+    reload, a failed Connect. While the node runs, an interface it lists — or one it does not answer about — is detached,
+    and the block and record go only once `-j` answers without it; no rnstatus is asked when the node is not running,
+    nor for a radio with neither a record nor a block (a saved intent alone: the node cannot hold it). A restart's stop
+    and an attach keep the intent (`clear_intent` False). "" = gone, else why (nothing changed)."""
     rec = member_record(svc, rid)
-    if rec is not None and rid in (listed(svc) or set()):
-        res = rnstatus(svc, "--detach", reticulum_node.name(rid))
-        if res.returncode != 0 and rid in (listed(svc) or set()):
-            return f"the node did not detach {reticulum_node.name(rid)}: {(res.stdout or res.stderr or '').strip()}".rstrip(": ")
+    if (rec is not None or _has_block(svc, rid)) and owner_record(svc) is not None:
+        name = reticulum_node.name(rid)
+        if (now := listed(svc)) is None or rid in now:
+            res = rnstatus(svc, "--detach", name)
+            if (now := listed(svc)) is None or rid in now:
+                out = (res.stdout or res.stderr or "").strip() if res.returncode != 0 else ""
+                return (f"the node did not detach {name}" + (f": {out}" if out else "")
+                        + (" (the node does not answer)" if now is None else ""))
     if _node_file(svc).exists():
         _write_block(svc, rid, "")
     if rec is not None:
@@ -289,7 +300,7 @@ def drop_join(svc, inst) -> None:
     """A failed Connect leaves nothing behind (plan §1c): no block, no record, no intent (a restore's failure keeps the
     intent instead: `reconcile` never calls this)."""
     if member_record(svc, inst.rid) is None:
-        detach(svc, inst.rid)
+        teardown(svc, inst.rid)
 
 
 def listed_cached(svc):

@@ -31,6 +31,7 @@ class Node:
     def __init__(self, base):
         self.base, self.attached, self.calls = base, {"LoRa r2"}, []
         self.refuse_attach, self.unlisted, self.refuse_reload, self.check_line = set(), set(), set(), ""
+        self.j_down, self.j_down_after = False, set()   # `-j` unanswered (a hung or busy RPC); from the op named on
 
     def run(self, argv, timeout, cwd=None, env=None):
         tool = os.path.basename(argv[0])
@@ -45,9 +46,12 @@ class Node:
         args = argv[3:]
         self.calls.append(tuple(args))
         if args == ["-j"]:
+            if self.j_down:
+                return CommandResult(1, "", "No shared RNS instance available to get status from")
             return CommandResult(0, json.dumps({"interfaces": [{"name": f"LoRaSPIInterface[{n}]"}
                                                                for n in sorted(self.attached)]}), "")
         op, name = args
+        self.j_down = self.j_down or op in self.j_down_after
         if op == "--attach" and name not in self.refuse_attach:
             self.attached |= {name} - self.unlisted
             return CommandResult(0, f"Interface {name} was attached", "")
@@ -398,3 +402,31 @@ def test_a_joined_radios_panel_save_is_checked_first_and_reloads_it_live(box):
     res = box.svc.save_daemon_params("reticulum", {"POWER": "12"}, rid="r4")
     assert res.ok and "r4: reloaded live" in res.summary and ("--reload", "LoRa r4") in box.node.calls[calls:]
     assert box.svc.restart_required("reticulum@r4") is None and _member(box, "r4")
+
+
+# ---- row 218 fold (plan v25 §9): an unanswered `-j` is not "gone" -----------------------------------------------------
+
+def test_a_member_stop_the_node_does_not_answer_about_is_refused_and_keeps_it(box, capsys):
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    box.node.j_down = True
+    res = box.svc.stop("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r1")[0])
+    # red-before (ea51424b): stopped, no --detach asked, block + record + intent gone while the node may still run r1
+    assert not res.ok and "did not detach LoRa r1 (the node does not answer)" in "\n".join(res.details), res.details
+    assert ("--detach", "LoRa r1") in box.node.calls
+    assert (_sections(box), len(_member(box, "r1")), _intent(box, "r1")) == (["[[LoRa r2]]", "[[LoRa r1]]"], 1, "r2")
+    box.node.j_down = False
+    assert box.svc.stop("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r1")[0]).ok
+    assert (_sections(box), _member(box, "r1"), _intent(box, "r1")) == (["[[LoRa r2]]"], [], "")
+
+
+def test_a_member_of_a_node_that_is_gone_is_removed_without_asking_it(box):
+    owner = _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    owner.terminate()
+    owner.wait(timeout=10)
+    calls = len(box.node.calls)
+    res = box.svc.stop("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r1")[0])
+    # red-before (ea51424b): the dead node is asked (`-j`, `--detach`) for a member it can no longer hold
+    assert res.ok and box.node.calls[calls:] == []
+    assert (_member(box, "r1"), _intent(box, "r1")) == ([], "")
