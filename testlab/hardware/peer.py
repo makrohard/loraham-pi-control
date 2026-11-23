@@ -28,13 +28,15 @@ The runner holds an exclusive flock around every call, so two peers never act at
   peer.py mc-power      [<p>]          T-Deck Pro (BLE): tx power (with <p>: set, then the device query reads it back)
   peer.py mc-send       <nonce>        T-Deck Pro: one public-channel message
   peer.py mc-read       <nonce> <s>    T-Deck Pro: a channel or contact message with the nonce
-  peer.py rns-exchange  <nonce-in> <box-dest> <s> <dest-file> <nonce-out> <go-file>   a client of the PC's shared rnsd:
+  peer.py rns-exchange  <nonce-in> <box-dest> <s> <dest-file> <nonce-out> <go-file> [known]   a client of the PC's shared rnsd:
                                        announce, write the PC's LXMF destination hash to <dest-file>, wait for the box's announce
                                        (its display name), send <nonce-out> to it and wait for its delivery proof (the box's
                                        receipt: `DELIVERED <nonce-out> <time>`), and wait for an LXMF message carrying <nonce-in>;
                                        prints SEEN on it. The message is sent only once the runner has written
                                        <go-file> (after its TX checks passed again), and exactly once (no retry); without it:
-                                       `TX2-NOT-GATED`, NOT-SEEN
+                                       `TX2-NOT-GATED`, NOT-SEEN. `known`: no box announce is awaited; the box's path comes from
+                                       the shared rnsd's path table (a request it answers locally, no RF); not cached there:
+                                       `BOX-PATH not cached`, NOT-SEEN, and no request is sent (it would go out on the RNode)
 """
 import os
 import re
@@ -70,6 +72,8 @@ def usage_error(a):
     if not a or a[0] not in ACTIONS:
         return f"unknown action {a[0] if a else '(none)'}"
     kind, args = ACTIONS[a[0]][1], a[1:]
+    if kind == "exchange" and len(args) == 7 and args[6] == "known":     # the box's path from the shared rnsd
+        args = args[:6]
     want, ctx = ARGS[kind], os.environ.get(CTX, "")
     if kind == "power":
         if len(args) > 1 or (args and not power_ok(a[0], args[0])):
@@ -428,7 +432,7 @@ def mc_read(nonce, secs):
     return hit[0] if hit else None
 
 
-def rns_exchange(inn, box_dest, secs, dest_file, out, go_file):
+def rns_exchange(inn, box_dest, secs, dest_file, out, go_file, known=False):
     """One exchange through the PC's shared rnsd, in a scratch config removed afterwards; the local file must name the
     RNode peer (PEER_rnode) before anything is opened."""
     import shutil
@@ -437,12 +441,12 @@ def rns_exchange(inn, box_dest, secs, dest_file, out, go_file):
     instance = rns_instance()
     d = tempfile.mkdtemp(prefix="rfproof-rns-")
     try:
-        return rns_run(d, instance, inn, box_dest, secs, dest_file, out, go_file)
+        return rns_run(d, instance, inn, box_dest, secs, dest_file, out, go_file, known)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
 
-def rns_run(d, instance, inn, box_dest, secs, dest_file, out, go_file):
+def rns_run(d, instance, inn, box_dest, secs, dest_file, out, go_file, known=False):
     import LXMF
     import RNS
     with open(os.path.join(d, "config"), "w") as f:
@@ -464,6 +468,7 @@ def rns_run(d, instance, inn, box_dest, secs, dest_file, out, go_file):
 
     class Ann:
         aspect_filter = "lxmf.delivery"
+        receive_path_responses = known                       # `known`: the shared rnsd's cached announce of the box
 
         def received_announce(self, destination_hash, announced_identity, app_data):
             if destination_hash.hex() == box_dest and not box:   # the box's LXMF address; its name only for the log
@@ -473,6 +478,11 @@ def rns_run(d, instance, inn, box_dest, secs, dest_file, out, go_file):
     with open(dest_file, "w") as f:
         f.write(RNS.hexrep(me.hash, delimit=False) + "\n")
     router.announce(me.hash)
+    if known:   # only a path the shared rnsd holds: answered on the local interface, never a path request on the RNode
+        if not any(e.get("hash") == bytes.fromhex(box_dest) for e in r.get_path_table() or []):
+            print("BOX-PATH not cached: no path request sent")
+            return None
+        RNS.Transport.request_path(bytes.fromhex(box_dest))
     end = time.monotonic() + secs
     while time.monotonic() < end and not box:
         time.sleep(0.5)
@@ -529,7 +539,7 @@ def main(a):
     elif act == "mc-read":
         h = mc_read(nonce, float(a[2]))
     else:
-        h = rns_exchange(nonce, a[2], float(a[3]), a[4], a[5], a[6])
+        h = rns_exchange(nonce, a[2], float(a[3]), a[4], a[5], a[6], a[7:] == ["known"])
     if h:
         print(f"SEEN {nonce} {h}")
         return 0

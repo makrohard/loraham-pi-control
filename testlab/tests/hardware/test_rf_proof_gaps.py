@@ -71,7 +71,7 @@ def test_row_5_listens_before_the_meshchat_start_and_counts_its_announce(tmp_pat
     ex = next(i for i, x in enumerate(lines) if "rns-exchange" in x and "[dry] PC > 5-peer.txt" in x)
     st = next(i for i, x in enumerate(lines) if x.startswith("  [dry] Z > 5-start.txt:"))
     assert ex < st, "the PC does not listen before the MeshChat start"
-    assert lines[st - 1].startswith("TX | Z:r2 | 1 | control | must 5-start.txt"), lines[st - 1]
+    assert lines[st - 1].startswith("TX | Z:r2 | 2 | control | must 5-start.txt"), lines[st - 1]   # 2 frames: LXMF + audio call
     assert lines[st + 1] == "FRAME | Z:r2 | control"
     assert " 420 " in lines[ex]
     assert "/api/v1/announce" not in b and "rnode_framing yes" not in b and "rnode_framing no" not in b

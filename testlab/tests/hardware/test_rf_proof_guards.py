@@ -401,14 +401,16 @@ def _rs(tmp_path, before, after, rns, want, box_env="", extra=""):
 
 
 @pytest.mark.parametrize("after, grew", [
-    ("RX 4\\nTX 7\\n", True),     # its RX, the announce and the exchange's proof or send
-    ("RX 4\\nTX 6\\n", False),    # one TX: the announce alone, the exchange went over the owner
+    ("RX 4\\nTX 8\\n", True),     # its RX, the announce's 2 frames and the exchange's proof or send
+    ("RX 4\\nTX 7\\n", False),    # two TX: MeshChat's announce alone (LXMF + audio call), the exchange went over the owner
+    ("RX 4\\nTX 6\\n", False),    # one TX
     ("RX 3\\nTX 9\\n", False),    # no RX
     ("RX 4\\nTX x\\n", False),    # a count not a number
 ])
-def test_row_13_member_leg_needs_an_rx_and_two_tx_on_the_members_own_log(tmp_path, after, grew):
+def test_row_13_member_leg_needs_an_rx_and_a_tx_beyond_the_announce_on_the_members_own_log(tmp_path, after, grew):
+    # red-before (da24e83c): no memgrew (the leg's judge was rfgrew ... 2, met by the start's 2 announces alone)
     r, _ = source_only(tmp_path, f'printf "RX 3\\nTX 5\\n" > "$EVD/a.txt"; printf "{after}" > "$EVD/b.txt"; '
-                                 'if rfgrew a.txt b.txt 2; then echo GREW; else echo NOT; fi')
+                                 'if memgrew a.txt b.txt; then echo GREW; else echo NOT; fi')
     assert r.stdout.strip() == ("GREW" if grew else "NOT"), r.stdout + r.stderr
 
 
@@ -1210,12 +1212,13 @@ def test_a_key_matching_two_radios_is_ambiguous_not_the_first(tmp_path):
         f"NOT RUN: row {n} daemon {d}: ambiguous: radio Z868 (2 match)" for n in (8, 9, 11) for d in ("A->B", "B->A")]
 
 
-def test_row_5s_worst_case_is_three_frames_each_end(tmp_path):
-    # mutant K5: row 5 counted one frame per end (its announce, delivery proof and own send; the RNode's three)
+def test_row_5s_worst_case_is_four_frames_on_the_box_and_three_on_the_rnode(tmp_path):
+    # mutant K5: row 5 counted one frame per end (the box: MeshChat's announce of 2 frames, its delivery proof and own send;
+    # the RNode's three). red-before (da24e83c): Z:r2 3 (one frame per announce)
     r = dry(tmp_path, LANE="full", ROWS_ONLY="5", FAKE_PEER=_null_peer(tmp_path))
     assert r.returncode == 0, r.stderr
     r0 = r.stdout.split("== ROW R0", 1)[1].split("== ROW R1", 1)[0]
-    assert [line for line in r0.splitlines() if line.split(" | ")[0] == "BUDGET"] == ["BUDGET | PC:rnode | 3 | 10", "BUDGET | Z:r2 | 3 | 10"]
+    assert [line for line in r0.splitlines() if line.split(" | ")[0] == "BUDGET"] == ["BUDGET | PC:rnode | 3 | 10", "BUDGET | Z:r2 | 4 | 10"]
 
 
 def r0_budget(r):
@@ -1224,11 +1227,13 @@ def r0_budget(r):
 
 
 @pytest.mark.parametrize("row, want", [
-    ("12", ["BUDGET | H:r5 | 3 | 10", "BUDGET | PC:rnode | 3 | 10"]),                       # row 5's three each end
-    ("13", ["BUDGET | H:r2 | 9 | 10", "BUDGET | H:r5 | 3 | 10", "BUDGET | PC:rnode | 9 | 10"]),   # A, B and the member
+    ("12", ["BUDGET | H:r5 | 4 | 10", "BUDGET | PC:rnode | 3 | 10"]),                       # row 5's four and three
+    # the owner: MeshChat started once (2) + the member leg's announce call (2) + 3 exchanges x (proof + send); the RNode 3 x 3;
+    # the member: the announce call (2) + its exchange's proof and send
+    ("13", ["BUDGET | H:r2 | 10 | 10", "BUDGET | H:r5 | 4 | 10", "BUDGET | PC:rnode | 9 | 10"]),
 ])
 def test_a_reticulum_rows_worst_case_is_reserved_per_endpoint(tmp_path, row, want):
-    # red-before (82dc98ad): "STOP: ROWS_ONLY: '12' is not a row id" (and '13'), rc 2
+    # red-before (82dc98ad): "STOP: ROWS_ONLY: '12' is not a row id" (and '13'), rc 2; (da24e83c): one frame per announce
     r = dry(tmp_path, LANE="full", ROWS_ONLY=row, FAKE_PEER=_null_peer(tmp_path))
     assert r.returncode == 0, r.stderr
     assert r0_budget(r) == want
@@ -1272,6 +1277,20 @@ def test_row_13_renders_the_join_form_and_the_rehearsal_checks_it(tmp_path):
     (hw / "rf-proof.sh").write_text(planted)
     r = dry(tmp_path, hw=hw, LANE="rns")
     assert r.returncode == 2 and "STOP: dry self-check all-forms-printed: needed but never printed: rt_join" in r.stderr, r.stderr[-1500:]
+
+
+def test_a_form_a_row_prints_but_does_not_need_stops_the_dry_run(tmp_path):
+    # a form outside its row's RFORMS would run live unconfirmed (FORMS_OK checks only the needed ones)
+    # red-before (2ce2c4ca): no such self-check, rc 0
+    hw = tmp_path / "r" / "testlab" / "hardware"
+    shutil.copytree(HW, hw, ignore=shutil.ignore_patterns("*.local.env", "__pycache__"))
+    (tmp_path / "r" / "lhpc").symlink_to(HW.parents[1] / "lhpc")
+    s = (hw / "rf-proof.sh").read_text()
+    planted = s.replace(' rt_join dset rt_announce")', ' rt_join dset")')
+    assert planted != s
+    (hw / "rf-proof.sh").write_text(planted)
+    r = dry(tmp_path, hw=hw, LANE="rns")
+    assert r.returncode == 2 and "STOP: dry self-check every-form-needed: printed but not needed by its row: 13 rt_announce" in r.stderr, r.stderr[-1500:]
 
 
 def test_the_fake_box_frames_the_trackers_ack(tmp_path):

@@ -89,7 +89,7 @@ def runner_copy(tmp_path):
     return make
 
 
-SELF_CHECKS = ("no-high-power", "no-call-in-commands", "peer-calls-locked", "every-send-gated", "all-forms-printed",
+SELF_CHECKS = ("no-high-power", "no-call-in-commands", "peer-calls-locked", "every-send-gated", "all-forms-printed", "every-form-needed",
                "chat-judge", "provisioning-wait", "meshcore-power-read", "rx-mc-judge", "row3-port-judge", "state-helpers",
                "power-guards", "tx-dispatch", "rx-mcom-judge", "rx-mcom-app-judge")
 MODELS_IN_LAB = {"loraham", "meshstick-1262", "pinedio-usb-1262", "ch341-rfm98pw-433"}
@@ -208,6 +208,18 @@ def test_the_full_lane_reports_row_12_both_ways_and_the_rns_lane_row_13_per_leg(
     assert [(r[2], r[3], r[4]) for r in d.rows("COVERAGE") if r[1] == "stack"] == [("13", leg, "rehearsed") for leg in RNS_LEGS]
 
 
+def test_row_13_starts_meshchat_once_announces_once_more_and_leaves_on_the_cached_path(dry):
+    # a25 B8-fold C2: the owner's worst case 2 + 2 + 3 x (proof + send) = 10 frames fits TXMAX only with MeshChat started once
+    # red-before (da24e83c): MeshChat started at each of the three exchanges, no announce call, no `known` exchange
+    d = dry("rns")
+    assert d.rc == 0, d.err[-2000:]
+    cmds = [ln for ln in d.lines if "[dry]" in ln]
+    assert len([c for c in cmds if "stack start meshchat@" in c]) == 1, cmds
+    assert len([c for c in cmds if "/api/v1/announce" in c]) == 1
+    ex = [c for c in cmds if "rns-exchange" in c]
+    assert [c.rstrip().endswith(" known") for c in ex] == [False, False, True], ex
+
+
 def test_the_whole_bench_has_no_absent_or_ambiguous_row(base):
     assert base.rc == 0, base.err
     assert not [r for r in base.report().values() if "absent:" in r or "ambiguous:" in r]
@@ -288,12 +300,13 @@ def test_every_radio_stays_within_its_budget(base):
 
 
 def test_the_rns_lane_keeps_the_rnode_within_its_budget(dry):
-    # row 13: three exchanges (owner, member, owner after the member's stop), 3 RNode frames each; the owner is in all three,
-    # the member in one; every frame dispatched is reserved at R0
-    # red-before (82dc98ad): "STOP: LANE=fast|full", rc 2 (no TX or BUDGET line)
+    # row 13: three exchanges (owner, member, owner after the member's stop), 3 RNode frames each; the owner is in all three
+    # (MeshChat's start 2 + the member leg's announce call 2 + 3 x 2 = TXMAX), the member in one (2 + 2); every frame
+    # dispatched is reserved at R0
+    # red-before (82dc98ad): "STOP: LANE=fast|full", rc 2 (no TX or BUDGET line); (da24e83c): 9 and 3, 1 frame per announce
     d = dry("rns")
     assert d.rc == 0, d.err[-2000:]
-    assert within_budget(d) == {"PC:rnode": (9, 9), "H:r2": (9, 9), "H:r5": (3, 3)}
+    assert within_budget(d) == {"PC:rnode": (9, 9), "H:r2": (10, 10), "H:r5": (4, 4)}
     assert uncovered(d.lines) == [] and unsent_tx(d.lines) == []
 
 

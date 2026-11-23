@@ -430,6 +430,9 @@ def _fake_rns(monkeypatch, sent, box=None):
 
         def __init__(self, configdir=None, loglevel=None):
             CONFIGS.append(pathlib.Path(configdir, "config").read_text())
+
+        def get_path_table(self, max_hops=None):                 # the shared rnsd's path table (its RPC)
+            return (box or {}).get("paths", [])
     rns.Reticulum = Ret
     handlers = []
 
@@ -437,6 +440,13 @@ def _fake_rns(monkeypatch, sent, box=None):
         @staticmethod
         def register_announce_handler(h):
             handlers.append(h)
+
+        @staticmethod
+        def request_path(h):                                     # answered by the shared rnsd: a path response
+            (box or {}).setdefault("asked", []).append(h)
+            for x in handlers:
+                if getattr(x, "receive_path_responses", False):
+                    x.received_announce(h, None, b"app")
     rns.Transport = Transport
 
     class Ident:
@@ -470,7 +480,7 @@ def _fake_rns(monkeypatch, sent, box=None):
             self.incoming = cb
 
         def announce(self, h):
-            for x in handlers:                                   # the box's announce is heard at once
+            for x in handlers if not (box or {}).get("silent") else []:   # the box's announce is heard at once
                 for h in (box or {}).get("others", []):           # another node's announce, before the box's
                     x.received_announce(h, None, b"app")
                 x.received_announce(BOXH, None, b"app")
@@ -590,6 +600,28 @@ def test_a_missing_or_malformed_rns_instance_is_refused_before_anything_opens(rn
 
 def test_rns_exchange_needs_the_go_file_argument(capsys):
     assert peer.main(["rns-exchange", IN1, BOXHEX, "5", "/x/dest", OUT1]) == 2
+    assert peer.main(["rns-exchange", IN1, BOXHEX, "5", "/x/dest", OUT1, "/x/go", "cached"]) == 2   # `known` only
+
+
+@pytest.mark.parametrize("known, cached, rc, asked", [
+    (True, True, 0, [BOXH]),               # the shared rnsd holds the box's path: asked, answered locally, no announce needed
+    (True, False, peer.NOT_SEEN, []),      # not cached: no path request at all (it would go out on the RNode)
+    (False, True, peer.NOT_SEEN, []),      # without `known` the box's live announce is awaited, never a request
+])
+def test_rns_exchange_known_takes_the_boxs_path_from_the_shared_rnsd_only_when_cached(monkeypatch, tmp_path, capsys, known,
+                                                                                    cached, rc, asked):
+    # red-before (da24e83c): `known` is a usage error (rc 2): the exchange after the member's stop had no box announce to hear
+    sent, c = [], FastClock()
+    box = {"answers": True, "confirms": True, "silent": True, "paths": [{"hash": BOXH if cached else b"\0" * 16}]}
+    _fake_rns(monkeypatch, sent, box)
+    monkeypatch.setattr(peer.time, "monotonic", c.monotonic)
+    monkeypatch.setattr(peer.time, "sleep", c.sleep)
+    (tmp_path / "go").write_text("")
+    argv = ["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")] + (["known"] if known else [])
+    assert peer.main(argv) == rc
+    out = capsys.readouterr().out
+    assert box.get("asked", []) == asked and len(sent) == (1 if rc == 0 else 0)
+    assert ("BOX-PATH not cached" in out) == (known and not cached)
 
 
 def test_rns_exchange_message_sent_once_no_retries(rns_sent, tmp_path):

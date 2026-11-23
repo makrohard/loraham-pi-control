@@ -48,14 +48,20 @@ The Reticulum rows (5, 12, 13) tell the box's announce by its LXMF address, read
 exchange (its display name is only logged; the address is masked in the evidence like the passwords, and the end scan checks
 it). They prove the shipped defaults: each reads `rnode_framing` (it must be `yes`) and the radio's `backend` (row 5 `spi`,
 rows 12 and 13 `daemon`), else STOP; the kit sets neither. The PC listens before the MeshChat start, whose own announce it
-must hear (the kit asks for none; the start is counted as that send, on every radio of the node).
+must hear (the kit asks for none; the start is counted as that send: 2 frames, MeshChat's LXMF and audio-call announces,
+on every radio of the node).
 Row 5's prerequisite (an operator step before the run): save `backend = spi` on the Zero's board radio
 (`lhpc config reticulum@<rid> backend spi`); the product's default is `daemon`, and row 5 stops on it.
-Row 13 opens the node on the owner as row 12 does (one exchange), then joins the member (`lhpc stack start
-reticulum@<rid> --join`): the node keeps its pid and start time, the member's interface is up and MeshChat answers. One
-exchange over the member follows with the owner at its minimum (restored after; the member's own RF log must gain an RX
-line and at least 2 TX lines: MeshChat's announce and the exchange, which the node relays over no other radio), then the member's stop (the node keeps its pid, the member's interface is gone) and one exchange over the owner, the
-member's join again, and the owner's stop (no node process, no Reticulum instance left). The member is the row's third
+Row 13 opens the node on the owner as row 12 does (one exchange; MeshChat starts once and runs to the row's end), then
+joins the member (`lhpc stack start reticulum@<rid> --join`): the node keeps its pid and start time, the member's
+interface is up and MeshChat answers. One exchange over the member follows with the owner at its minimum (restored after),
+heard through one announce call to MeshChat (`rt_announce`); the member's own RF log must gain an RX line and at least 3
+TX lines: the announce's 2 and the exchange, which the node relays over no other radio. Then the member's stop (the node
+keeps its pid, the member's interface is gone) and one exchange over the owner without an announce: the PC takes the
+box's path from its shared rnsd, answered locally (absent: the exchange fails, no path request on air). Then the
+member's join again, and the owner's stop (no node process, no Reticulum instance left). Owner budget: 2 + 2 + 3 x 2
+(proof and send) = 10 frames, exactly TXMAX: a frame outside this count (an LXMF retry after a lost proof, MeshChat's
+auto-announce falling due, a local propagation node's third announce) ends the row FAIL at RS, after the TX. The member is the row's third
 endpoint (`member=H:HMS` in the `ROWS` flags): absent, the row is NOT RUN.
 Rows 3 and 4, peer -> box: the word must also show up inside the app on the box, not only in its radio log: a Meshtastic
 listener on the box, connected before the G2 sends (Meshtastic keeps no history to read later), and MeshCore's own message
