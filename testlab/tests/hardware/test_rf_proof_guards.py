@@ -729,6 +729,31 @@ def test_a_killed_main_shell_ends_the_worker_at_its_next_row(tmp_path):
         cleanup(p, evd)
 
 
+# runall with stand-in rows: RS marks its start and waits for the test's release file; RE marks that it was entered
+RUNALL = ('row_R0() { :; }; row_R1() { :; }; row_M() { :; }; coverage() { :; }; restable() { :; }; '
+          'row_RE() { : > "$EVD/re-entered"; }; '
+          'row_RS() { echo $BASHPID > "$EVD/wpid"; until [ -e "$EVD/go" ]; do sleep 0.05; done; }; supervise runall\n')  # wallclock: RS polls (0.05 s) for the test's release file (an event wait)
+
+
+def test_a_main_shell_killed_during_rs_never_enters_re(tmp_path):
+    # red-before (ca275287): runall had no rowgate between RS and RE, so a worker whose main shell was KILLed during RS ran RE
+    p, evd = supervised(tmp_path, RUNALL)
+    try:
+        until(lines_of(evd / "wpid", 1), "the run in RS")
+        worker = int((evd / "wpid").read_text())
+        p.kill()                       # not reaped yet: a zombie main shell is a gone one too
+        (evd / "go").touch()
+        until(lambda: not alive(worker), "the worker ending after RS", timeout=20)
+    finally:
+        cleanup(p, evd)
+    assert not (evd / "re-entered").exists(), "RE ran after the main shell was killed"
+    p, evd = supervised(tmp_path, RUNALL, name="control")   # the same run, not killed: RE is entered
+    until(lines_of(evd / "wpid", 1), "the control run in RS")
+    (evd / "go").touch()
+    _, err = p.communicate(timeout=120)
+    assert p.returncode == 0 and (evd / "re-entered").exists(), err
+
+
 def test_the_recovery_reads_the_boxes_r0_kept(tmp_path):
     r, _ = source_only(tmp_path, 'OPERATOR_CALL=N0CALL; RUN=; keep BOXES H; BOXES="H Z"; : > "$EVD/undo.list"; '
                                  'verify_set() { echo "VERIFY $BOXES"; }; recover')

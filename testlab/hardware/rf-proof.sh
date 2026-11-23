@@ -1543,7 +1543,7 @@ rowgate() { [ -n "$(pst "$$")" ] || exit 2; }   # in the worker, $$ is the main 
 runall() {   # the run's rows, in the worker
   local r; for r in R0 R1 M; do rowgate; echo "== ROW $r"; "row_$r"; done
   for r in $RUN; do rowgate; echo "== ROW $r"; runrow "$r"; done
-  rowgate; echo "== ROW RS"; row_RS; coverage; echo "== RESULT"; restable || stop "RESULT.md: not written"; echo "== ROW RE"; row_RE
+  rowgate; echo "== ROW RS"; row_RS; coverage; echo "== RESULT"; restable || stop "RESULT.md: not written"; rowgate; echo "== ROW RE"; row_RE
   [ "$MODE" = live ] || selfcheck; }
 
 # The guard's two context flags come only from tx (TXCTX) and the one setter/reader (PCTX), each local to its one call.
