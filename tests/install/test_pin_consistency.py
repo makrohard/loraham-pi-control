@@ -118,6 +118,21 @@ def test_pins_are_full_sha_and_shared_source_consumers_agree():
         assert len({c[2] for c in consumers}) == 1, f"{path}: split pin_tag {consumers}"
 
 
+_DAEMON_REMOTE = "https://github.com/makrohard/LoRaHAM_Daemon.git"
+
+
+def test_every_daemon_consumer_names_the_same_pin():
+    # The daemon and the chat client build from the daemon repo at two source paths
+    # (src/loraham-daemon, src/LoRaHAM_Daemon), so the shared-path check above never groups them:
+    # a daemon pin move must move every consumer's pin_commit AND pin_tag.
+    consumers = [(comp["id"], comp["source"]["pin_commit"], comp["source"].get("pin_tag", ""))
+                 for st in _manifest()["stack"] for comp in st.get("component", [])
+                 if (comp.get("source") or {}).get("remote") == _DAEMON_REMOTE]
+    assert len(consumers) >= 2, f"expected the daemon and the chat client as daemon consumers, got {consumers}"
+    assert len({c[1] for c in consumers}) == 1, f"split daemon pin_commit {consumers}"
+    assert len({c[2] for c in consumers}) == 1, f"split daemon pin_tag {consumers}"
+
+
 def validate_pinned_components(manifest: dict, src_root: pathlib.Path) -> dict:
     """Validate EVERY pinned component whose sibling checkout is present: the pin is a full SHA,
     resolves, and is an ancestor of its configured branch tip. Referenced scripts are an ADDITIONAL
