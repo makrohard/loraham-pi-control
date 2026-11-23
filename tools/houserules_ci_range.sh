@@ -7,7 +7,7 @@
 #   ancestor of HEAD (a fast-forward), else FLOOR..HEAD; pull_request and workflow_dispatch = FLOOR..HEAD.
 # - FLOOR not an ancestor of HEAD (e.g. a hotfix off an old main): the branch shape never fails the
 #   job; only what this event changed is checked: push = BEFORE..HEAD (an ancestor of HEAD),
-#   pull_request = PR_BASE..HEAD, otherwise HEAD^..HEAD.
+#   pull_request = merge-base(PR_BASE, HEAD)..HEAD, otherwise HEAD^..HEAD.
 set -euo pipefail
 floor=$1 event=$2 before=$3 head=$4 prbase=$5
 
@@ -25,8 +25,8 @@ fi
 echo "NOTE: HR_FLOOR $floor is not an ancestor of $head: checking only what this $event changed" >&2
 if [ "$event" = push ] && commit "$before" && anc "$before" "$head"; then
 	echo "$before..$head"
-elif [ "$event" = pull_request ] && commit "$prbase" && anc "$prbase" "$head"; then
-	echo "$prbase..$head"
+elif [ "$event" = pull_request ] && commit "$prbase" && mb=$(git merge-base "$prbase" "$head" 2>/dev/null); then
+	echo "$mb..$head"    # every commit the pull request brings, also when its base moved on since it was cut
 elif parent=$(git rev-parse --verify -q "$head^"); then
 	echo "$parent..$head"
 else

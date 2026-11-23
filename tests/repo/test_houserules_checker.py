@@ -191,6 +191,85 @@ def test_the_release_section_commit_is_not_capped(repo, case):
     assert (rc, rows["changelog"]) == (int(verdict == "HARD"), verdict)
 
 
+SECTION = "## 0.1.1\n\n- a\n- b\n- c\n\n"
+PLACED = CHANGELOG.replace("## 0.1.0\n", SECTION + "## 0.1.0\n")      # below the newer `## Unreleased`
+
+
+def _released(repo, section=SECTION, tag="v0.1.1"):
+    """A release off the base, tagged, its section on top there; the main line stays where it was."""
+    _git(repo, "checkout", "-q", "-b", "release")
+    _commit(repo, {"CHANGELOG.md": CHANGELOG.replace("## Unreleased\n\n", section)}, "0.1.1: changelog\n")
+    _git(repo, "tag", tag)
+    _git(repo, "checkout", "-q", "main")
+
+
+def test_a_released_section_copied_whole_below_a_newer_cycle_is_not_held(repo):
+    """The merge-back of a release into a `dev` that opened a newer cycle puts the released section, as tagged,
+    below that cycle: one CHANGELOG-alone commit with three bullets outside the top section. It is the release's
+    section written once, not three new entries or a correction. Red before: HARD (capped, and below the top)."""
+    _released(repo)
+    _commit(repo, {"CHANGELOG.md": PLACED}, "0.1.1: changelog (released from main)\n")
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (0, "OK")
+
+
+PLACED_NOT = {   # each one CHANGELOG commit after the tag; nothing wider than the released section copied whole passes
+    "beside-another-file": ({"CHANGELOG.md": PLACED, "notes.txt": "x\n"}, "v0.1.1"),
+    "two-sections": ({"CHANGELOG.md": CHANGELOG.replace("## 0.1.0\n", SECTION + "## 0.1.2\n\n- d\n\n## 0.1.0\n")},
+                     "v0.1.1"),
+    "a-bullet-elsewhere": ({"CHANGELOG.md": PLACED + "- late\n"}, "v0.1.1"),
+    "a-blank-line-elsewhere": ({"CHANGELOG.md": PLACED + "\n"}, "v0.1.1"),
+    "a-line-deleted": ({"CHANGELOG.md": PLACED.replace("- old entry\n", "")}, "v0.1.1"),
+    "the-heading-alone-its-bullets-appended-elsewhere": (
+        {"CHANGELOG.md": CHANGELOG.replace("## 0.1.0\n", "## 0.1.1\n\n## 0.1.0\n") + "- a\n- b\n- c\n"}, "v0.1.1"),
+    "differs-from-the-tag": ({"CHANGELOG.md": PLACED.replace("- c\n", "- c\n- d\n")}, "v0.1.1"),
+    "no-tag": ({"CHANGELOG.md": PLACED}, "v0.1.9"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(PLACED_NOT))
+def test_nothing_wider_than_the_released_section_copied_whole_passes(repo, case):
+    files, tag = PLACED_NOT[case]
+    _released(repo, tag=tag)
+    _commit(repo, files, "0.1.1: changelog (released from main)\n")
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
+@pytest.mark.parametrize("later", [PLACED.replace("- c\n", "- c\n- late\n"), PLACED.replace("- a\n", "- a edited\n")],
+                         ids=["a-bullet-added-into-it", "a-bullet-of-it-edited"])
+def test_a_later_commit_into_the_placed_section_is_held(repo, later):
+    """The placed section is exempt only as released: a later commit of the same range that adds or edits a bullet
+    in it corrects a released section and is judged so. Red before (the whole section's lines were dropped from the
+    placement rule): OK."""
+    _released(repo)
+    _commit(repo, {"CHANGELOG.md": PLACED}, "0.1.1: changelog (released from main)\n")
+    _commit(repo, {"CHANGELOG.md": later})
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
+def test_a_merge_bringing_the_placed_section_is_held(repo):
+    """A merge is never a released-section commit: its own diff against its first parent carries the section's
+    bullets and is capped."""
+    _released(repo)
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit(repo, {"CHANGELOG.md": PLACED}, "0.1.1: changelog (released from main)\n")
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, {"x.txt": "x\n"})
+    _git(repo, "merge", "-q", "--no-ff", "-m", "Merge side", "side")
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
+def test_a_second_copy_of_a_released_section_is_held(repo):
+    _released(repo)
+    _commit(repo, {"CHANGELOG.md": PLACED}, "0.1.1: changelog (released from main)\n")
+    _commit(repo, {"CHANGELOG.md": PLACED + "\n" + SECTION}, "again\n")       # one more copy, at the end
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
 @pytest.mark.parametrize("side", [{"notes.txt": "x\n"},                                  # another file
                                   {"CHANGELOG.md": CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n- a\n")}],
                          ids=["brings-in-a-file", "brings-in-a-bullet"])

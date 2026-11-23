@@ -109,7 +109,10 @@ repositories.
   module budgets); a HARD line fails it. An item that only corrects a released CHANGELOG section
   passes `--correction`. A commit holds at most two CHANGELOG bullets, except one that changes only
   `CHANGELOG.md`, inside its top section: the release's section (R10), which is not held to two
-  entries. Attribution words count in the commit messages and on every line the range adds, moved or not
+  entries; nor is one that copies a released section whole (as at tag `v<version>`, CHANGELOG alone) to
+  wherever it sits, as a merge-back to a `dev` that opened a newer cycle does. A pull request is judged on its
+  own head, so a pull request into `dev` lands by fast-forward to that head only: a squash lands the section
+  with the other files in one commit and `dev` goes red. Attribution words count in the commit messages and on every line the range adds, moved or not
   (a file renamed unchanged adds none); the row names the file and line of each.
   It checks form, not truth: a PASS says nothing about whether a
   stated red-before ran, a CHANGELOG line is precise or a claim in a report holds. Another own

@@ -99,8 +99,11 @@ jobs:
           EVENT: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
+          # a pull request is judged on its own head, which is what lands (dev takes a fast-forward); GITHUB_SHA
+          # is GitHub's synthetic merge there, which never lands and carries every bullet of the PR at once
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          range=$(bash tools/houserules_ci_range.sh "$HR_FLOOR" "$EVENT" "$BEFORE" "$GITHUB_SHA" "$PR_BASE")
+          range=$(bash tools/houserules_ci_range.sh "$HR_FLOOR" "$EVENT" "$BEFORE" "${PR_HEAD:-$GITHUB_SHA}" "$PR_BASE")
           echo "house rules range: ${range:-none}"
           if [ -n "$range" ]; then python tools/check_houserules.py "$range"; fi
 

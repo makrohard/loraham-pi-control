@@ -389,6 +389,57 @@ def release_section_commit(sha: str) -> bool:
             and all(old is not None and old[0] <= n < old[1] for n in deleted_lines(diff)))
 
 
+def section_span(lines: list[str], version: str) -> tuple[int, int] | None:
+    """The `## <version>` section of CHANGELOG lines: (its heading's line, the line after its end, at the next `## `
+    heading or the end); None without that heading."""
+    starts = [i + 1 for i, line in enumerate(lines) if line.startswith("## ") and line[3:].strip() == version]
+    if not starts:
+        return None
+    return starts[0], next((i + 1 for i in range(starts[0], len(lines)) if lines[i].startswith("## ")),
+                           len(lines) + 1)
+
+
+def section_text(text: str | None, version: str) -> str | None:
+    """The `## <version>` section of a CHANGELOG text, stripped; None without that heading."""
+    lines = lf_lines(text or "")
+    span = section_span(lines, version)
+    return "\n".join(lines[span[0] - 1:span[1] - 1]).strip() if span else None
+
+
+def placed_section_commit(sha: str) -> str | None:
+    """The version of the RELEASED section a commit copies whole into CHANGELOG, wherever it sits (a merge-back below
+    a newer cycle), else None. Not a merge, it modifies CHANGELOG alone and deletes none of its lines, its non-blank
+    added lines are exactly one `## <v>` section's (blank ones only inside it or just above its heading), its parent
+    has no `## <v>`, and the section equals `## <v>` at tag `v<v>`. The cap of two bullets and the placement rule do
+    not hold it: it is the release's section, written once and reviewed at the release."""
+    if not CHANGELOG or len(git("rev-list", "--parents", "-n", "1", sha).split()) != 2:
+        return None
+    if name_status(own_diff(sha, "--name-status", "-z")) != [["M", CHANGELOG]]:
+        return None
+    diff = own_diff(sha)
+    added = [(n, t) for path, n, t in added_lines(diff) if path == CHANGELOG]
+    if deleted_lines(diff) or not added:
+        return None
+    lines = lf_lines(show(sha, CHANGELOG) or "")
+    new = [n for n, t in added if t.startswith("## ")]
+    if len(new) != 1:
+        return None
+    start, version = new[0], lines[new[0] - 1][3:].strip()
+    end = next((i + 1 for i in range(start, len(lines)) if lines[i].startswith("## ")), len(lines) + 1)
+    if sorted(n for n, t in added if t.strip()) != [n for n in range(start, end) if lines[n - 1].strip()]:
+        return None
+    if any(not start - 1 <= n < end for n, _ in added):
+        return None
+    if section_text(show(f"{sha}^1", CHANGELOG), version) is not None:
+        return None
+    tag = subprocess.run(["git", "rev-parse", "-q", "--verify", f"refs/tags/v{version}^{{commit}}"],
+                         capture_output=True, check=False)
+    if tag.returncode or section_text(show(f"refs/tags/v{version}", CHANGELOG), version) != \
+            section_text("\n".join(lines), version):
+        return None
+    return version
+
+
 def marks_of(fn) -> dict[str, str | None]:
     """The pytest marks a function's decorators apply, from their AST (G1-TR1-C B2): `@pytest.mark.<name>` or
     `@mark.<name>`, bare or called; the value is the first argument when it is a non-blank string, else None.
@@ -501,7 +552,16 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
     # is still one bullet
     second, top = changelog_sections(head)
     bullets, below = changelog_bullets(added, second)
-    release = {sha for sha, _, _ in commits if release_section_commit(sha)}
+    copies = {sha: v for sha, _, _ in commits if (v := placed_section_commit(sha))}
+    placed = set(copies.values())
+    release = {sha for sha, _, _ in commits if sha in copies or release_section_commit(sha)}
+    if placed:      # a released section copied whole sits where its version belongs: its lines are not "below"
+        lines = lf_lines(show(head, CHANGELOG) or "")
+        # only while <head>'s section is still the tag's: a later commit's bullet or edit in it is judged as any
+        spans = [span for v in placed if (span := section_span(lines, v))
+                 and section_text(show(head, CHANGELOG), v) == section_text(show(f"refs/tags/v{v}", CHANGELOG), v)]
+        _, below = changelog_bullets([a for a in added if a[0] != CHANGELOG
+                                      or not any(lo <= a[1] < hi for lo, hi in spans)], second)
     most = max((len(changelog_bullets(added_lines(own_diff(sha)), second)[0])
                 for sha, _, _ in commits if sha not in release), default=0) if CHANGELOG else 0
     long_bullet = any(b > 2 for b in bullets)
@@ -511,7 +571,9 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
          else "WARN" if below else "OK")
     rows.append(("changelog", f"+{len(bullets)} bullets, at most {most} in a commit (limit 2 per commit, each "
                               f"≤ 2 lines; longest {max(bullets, default=0)}), top section {top} lines"
-                              + (f"; {len(release)} release-section commit(s) not capped" if release else ""), v))
+                              + (f"; {len(release)} release-section commit(s) not capped" if release else "")
+                              + (f", released section(s) {', '.join(sorted(placed))} placed whole" if placed else ""),
+                 v))
 
     # docs
     docs = sorted(p for p in changed if (p.startswith("docs/") and p.endswith(".md")) or p == "README.md")
