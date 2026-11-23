@@ -112,7 +112,10 @@ repositories.
   entries; nor is one that copies a released section whole (as at tag `v<version>`, CHANGELOG alone) to
   wherever it sits, as a merge-back to a `dev` that opened a newer cycle does. A pull request is judged on its
   own head, so a pull request into `dev` lands by fast-forward to that head only: a squash lands the section
-  with the other files in one commit and `dev` goes red. Attribution words count in the commit messages and on every line the range adds, moved or not
+  with the other files in one commit and `dev` goes red. An entry's place is judged per commit, against the
+  CHANGELOG that commit saw: a bullet below its own top section, or a `## ` heading added below its parent's
+  top heading, or a removed `## ` heading, is a misplaced entry; a newer section opened above it later moves
+  nothing. Attribution words count in the commit messages and on every line the range adds, moved or not
   (a file renamed unchanged adds none); the row names the file and line of each.
   It checks form, not truth: a PASS says nothing about whether a
   stated red-before ran, a CHANGELOG line is precise or a claim in a report holds. Another own

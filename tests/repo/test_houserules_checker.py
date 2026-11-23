@@ -191,6 +191,126 @@ def test_the_release_section_commit_is_not_capped(repo, case):
     assert (rc, rows["changelog"]) == (int(verdict == "HARD"), verdict)
 
 
+def test_a_bullet_stays_placed_when_a_later_commit_opens_a_newer_section_above_it(repo):
+    """A bullet written into the then-top section is placed; a later release-section commit opening a newer section
+    above it does not misplace it. Judged against <head>'s sections every bullet of the old cycle in range read
+    "below", so the first new section after the floor (the release bot's candidate) failed CI. Red before: HARD."""
+    _commit(repo, {"CHANGELOG.md": CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n- x\n"), "n.txt": "x\n"})
+    log = (repo / "CHANGELOG.md").read_text()
+    _commit(repo, {"CHANGELOG.md": log.replace("## Unreleased\n", "## 0.2.0\n\n- y\n\n## Unreleased\n")},
+            "0.2.0: changelog\n")
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (0, "OK")
+
+
+def test_a_bullet_below_its_own_top_section_stays_misplaced_after_a_newer_section(repo):
+    _commit(repo, {"CHANGELOG.md": CHANGELOG + "- late\n", "n.txt": "x\n"})
+    log = (repo / "CHANGELOG.md").read_text()
+    _commit(repo, {"CHANGELOG.md": log.replace("## Unreleased\n", "## 0.2.0\n\n- y\n\n## Unreleased\n")},
+            "0.2.0: changelog\n")
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
+def _current(repo):
+    """Two current entries in the top section, written before the range (the base tag moves past them)."""
+    _commit(repo, {"CHANGELOG.md": CHANGELOG.replace("## Unreleased\n", "## Unreleased\n\n- a\n- b\n")})
+    _git(repo, "tag", "-f", "base")
+    return (repo / "CHANGELOG.md").read_text()
+
+
+def test_a_heading_inside_the_top_section_is_misplaced(repo):
+    """A commit that adds only a `## ` heading inside the top section re-files the current entries under an older-
+    looking section; no bullet is added, so only the heading shows it. Red before: OK (no added bullet below)."""
+    log = _current(repo)
+    _commit(repo, {"CHANGELOG.md": log.replace("## Unreleased\n\n", "## Unreleased\n\n## 0.0.9\n\n")})
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
+def test_a_heading_inside_the_top_section_is_misplaced_also_when_the_top_heading_is_renamed(repo):
+    """The parent's top heading is found by its text; a commit that also renames it must not hide a heading it adds
+    inside the top section. Red before: OK (the renamed heading was not found, so no added heading counted)."""
+    log = _current(repo)
+    _commit(repo, {"CHANGELOG.md": log.replace("## Unreleased\n", "## Unreleased (dev)\n").replace(
+        "- a\n- b\n", "- a\n\n## 0.0.9\n\n- b\n")})
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
+@pytest.mark.parametrize("options, verdict", [((), "HARD"), (("--correction",), "WARN")])
+def test_a_removed_heading_is_misplaced(repo, options, verdict):
+    """Removing the top `## ` heading files its entries under the released section below it; no line is added, so
+    only the heading count shows it. Red before: OK."""
+    log = _current(repo)
+    _commit(repo, {"CHANGELOG.md": log.replace("## Unreleased\n\n", "")})
+    rc, rows = _run(repo, *options)
+    assert rows["changelog"] == verdict, rows
+
+
+def test_a_removed_heading_is_misplaced_also_when_a_new_one_keeps_the_count(repo):
+    """Removing a released heading files its entries under the section above; adding a newer section on top in the
+    same commit keeps the number of headings, so the count alone missed it. Red before: OK."""
+    log = _current(repo)
+    _commit(repo, {"CHANGELOG.md": log.replace("## 0.1.0\n\n", "").replace("## Unreleased\n",
+                                                                           "## 0.2.0\n\n## Unreleased\n")})
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
+def test_a_removed_copy_of_a_duplicated_heading_is_misplaced(repo):
+    """Headings are counted, not only looked up: with "## 0.1.0" twice, removing the lower one re-files its entries
+    though the text is still there. Red before: OK."""
+    log = _current(repo).replace("## Unreleased\n", "## 0.1.0\n\n## Unreleased\n")
+    _commit(repo, {"CHANGELOG.md": log})
+    _git(repo, "tag", "-f", "base")
+    _commit(repo, {"CHANGELOG.md": "".join(log.rsplit("## 0.1.0\n\n", 1))})     # the lower copy removed
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
+@pytest.mark.parametrize("options, verdict", [((), "HARD"), (("--correction",), "WARN")])
+def test_a_renamed_heading_counts_as_removed(repo, options, verdict):
+    """A renamed heading re-files its entries as another section's, as a removed one does. Red before: OK."""
+    log = _current(repo)
+    _commit(repo, {"CHANGELOG.md": log.replace("## Unreleased\n", "## Unreleased (dev)\n"), "n.txt": "x\n"})
+    rc, rows = _run(repo, *options)
+    assert rows["changelog"] == verdict, rows
+
+
+def test_the_release_section_commit_may_rename_its_top_heading(repo):
+    """The release names its section once, in its CHANGELOG-alone commit: not held, as before."""
+    log = _current(repo)
+    _commit(repo, {"CHANGELOG.md": log.replace("## Unreleased\n", "## 0.2.0\n").replace("- b\n", "- b\n- c\n")},
+            "0.2.0: changelog\n")
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (0, "OK")
+
+
+def test_a_heading_that_makes_current_entries_look_released_is_not_a_released_section(repo):
+    """The same heading-only commit, the section it forms equal to a tag's: not the released section copied whole
+    (none of its bullets is added), so the heading is misplaced. Red before: OK."""
+    log = _current(repo)
+    refiled = log.replace("## Unreleased\n\n", "## Unreleased\n\n## 0.0.9\n\n")
+    _git(repo, "checkout", "-q", "-b", "release")
+    _commit(repo, {"CHANGELOG.md": refiled}, "0.0.9: changelog\n")
+    _git(repo, "tag", "v0.0.9")
+    _git(repo, "checkout", "-q", "main")
+    _commit(repo, {"CHANGELOG.md": refiled})
+    rc, rows = _run(repo)
+    assert (rc, rows["changelog"]) == (1, "HARD")
+
+
+def test_headings_written_where_the_parent_had_none_are_not_misplaced(repo):
+    """A parent without a `## ` heading has no top section a heading could be filed under: the first sections
+    written are placed."""
+    _commit(repo, {"CHANGELOG.md": "# Changelog\n"})
+    _git(repo, "tag", "-f", "base")
+    _commit(repo, {"CHANGELOG.md": "# Changelog\n\n## 0.2.0\n\n- a\n\n## 0.1.0\n"})
+    rc, rows = _run(repo)
+    assert rows["changelog"] == "OK", rows
+
+
 SECTION = "## 0.1.1\n\n- a\n- b\n- c\n\n"
 PLACED = CHANGELOG.replace("## 0.1.0\n", SECTION + "## 0.1.0\n")      # below the newer `## Unreleased`
 
@@ -317,11 +437,11 @@ def test_a_pure_rename_into_changelog_counts_the_bullets_it_brings(repo):
     assert (rc, rows["changelog"]) == (1, "HARD")
 
 
-@pytest.mark.parametrize("before, text", [({}, CHANGELOG.replace("- old entry\n", "")),
-                                          (TOP_ONE, CHANGELOG),       # an item's bullet, then that bullet deleted
-                                          ({}, "# Changelog\n")],
+@pytest.mark.parametrize("before, text, rc", [({}, CHANGELOG.replace("- old entry\n", ""), 0),
+                                              (TOP_ONE, CHANGELOG, 0),   # an item's bullet, then that bullet deleted
+                                              ({}, "# Changelog\n", 1)],  # headings removed: misplaced (HARD)
                          ids=["older-section-deletion", "top-section-deletion", "every-heading-deleted"])
-def test_a_commit_without_an_added_bullet_is_not_a_release_section_commit(repo, before, text):
+def test_a_commit_without_an_added_bullet_is_not_a_release_section_commit(repo, before, text, rc):
     """It adds no bullet, so the cap passes it anyway; it is not named as exempt either. Red before: the row
     said "1 release-section commit(s) not capped"."""
     if before:
@@ -330,7 +450,7 @@ def test_a_commit_without_an_added_bullet_is_not_a_release_section_commit(repo, 
     p = subprocess.run([sys.executable, str(CHECKER), "base..HEAD"], cwd=repo, capture_output=True, text=True,
                        check=False)
     row = next(line for line in p.stdout.splitlines() if line.startswith("changelog"))
-    assert p.returncode == 0 and "release-section" not in row
+    assert p.returncode == rc and "release-section" not in row
 
 
 def test_a_bullet_grown_over_two_commits_past_two_lines_fails(repo):

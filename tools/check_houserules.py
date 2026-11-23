@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+from collections import Counter
 import fnmatch
 import io
 import os
@@ -440,6 +441,30 @@ def placed_section_commit(sha: str) -> str | None:
     return version
 
 
+def misplaced(sha: str) -> bool:
+    """Whether commit `sha` puts a CHANGELOG entry below the top section it saw: a bullet below its own top
+    section, or a `## ` heading anywhere but above all of its parent's (which would file current entries under
+    an older-looking section), or a `## ` heading of its parent removed or renamed (its entries would read as
+    another section's; a release-section commit renaming its top heading is not judged here). Judged per commit, so a bullet written into the then-top section stays
+    placed when a later commit opens a newer one above it. A parent without a `## ` heading constrains no heading."""
+    added = added_lines(own_diff(sha))
+    second, _ = changelog_sections(sha)
+    if changelog_bullets(added, second)[1]:
+        return True
+    lines = lf_lines(show(sha, CHANGELOG) or "")
+    old_top = top_section(f"{sha}^1") if len(git("rev-list", "--parents", "-n", "1", sha).split()) > 1 else None
+    if old_top is None:
+        return False
+    old_lines = lf_lines(show(f"{sha}^1", CHANGELOG) or "")
+    # a heading removed (or renamed): its entries now read as another section's
+    if Counter(line for line in old_lines if line.startswith("## ")) - Counter(
+            line for line in lines if line.startswith("## ")):
+        return True
+    old_heading = old_lines[old_top[0] - 1]
+    first_old = lines.index(old_heading) + 1
+    return any(p == CHANGELOG and t.startswith("## ") and n > first_old for p, n, t in added)
+
+
 def marks_of(fn) -> dict[str, str | None]:
     """The pytest marks a function's decorators apply, from their AST (G1-TR1-C B2): `@pytest.mark.<name>` or
     `@mark.<name>`, bare or called; the value is the first argument when it is a non-blank string, else None.
@@ -548,20 +573,14 @@ def check(base: str, head: str, facts: list[str], correction: bool = False) -> l
                      "WARN" if changed == {".houserules.toml"} and not loose else "HARD"))
 
     # changelog: the count per commit (one item each, against its first parent), except a release-section commit;
-    # each bullet's length and place over the range, against <head>'s sections, so a bullet grown over two commits
-    # is still one bullet
+    # each bullet's length over the range, so a bullet grown over two commits is still one bullet; its place per
+    # commit, against the sections that commit saw (`misplaced`): a later, newer section above it moves nothing
     second, top = changelog_sections(head)
-    bullets, below = changelog_bullets(added, second)
+    bullets, _ = changelog_bullets(added, second)
     copies = {sha: v for sha, _, _ in commits if (v := placed_section_commit(sha))}
     placed = set(copies.values())
     release = {sha for sha, _, _ in commits if sha in copies or release_section_commit(sha)}
-    if placed:      # a released section copied whole sits where its version belongs: its lines are not "below"
-        lines = lf_lines(show(head, CHANGELOG) or "")
-        # only while <head>'s section is still the tag's: a later commit's bullet or edit in it is judged as any
-        spans = [span for v in placed if (span := section_span(lines, v))
-                 and section_text(show(head, CHANGELOG), v) == section_text(show(f"refs/tags/v{v}", CHANGELOG), v)]
-        _, below = changelog_bullets([a for a in added if a[0] != CHANGELOG
-                                      or not any(lo <= a[1] < hi for lo, hi in spans)], second)
+    below = any(misplaced(sha) for sha, _, _ in commits if sha not in release) if CHANGELOG else False
     most = max((len(changelog_bullets(added_lines(own_diff(sha)), second)[0])
                 for sha, _, _ in commits if sha not in release), default=0) if CHANGELOG else 0
     long_bullet = any(b > 2 for b in bullets)
