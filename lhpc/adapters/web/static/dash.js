@@ -327,8 +327,9 @@
   // A box's open-state persists across ORDINARY reloads too (the id-keyed sessionStorage restore above only survives
   // dash.js's own signature reloads, and wins over the stored choice): the Webserver box (rendered collapsed) and,
   // each radio card (rendered open; key lhpc:radiobox-<rid or band>). The stored "1" opens, "0"
-  // closes. The toggle listener is attached after the restore; the restore's own toggle event only writes the state
-  // the box now shows. Mirrors the System box's localStorage contract.
+  // closes. The toggle listener is attached after the restore and stores only a change from the state the box showed
+  // then: the restore's own queued toggle event never writes this tab's older snapshot over a newer choice another
+  // tab stored. Mirrors the System box's localStorage contract.
   function remember(box, KEY) {
     if (!box) return;
     if (!snapshot[box.id]) {
@@ -337,7 +338,10 @@
         if (v === "1" || v === "0") box.open = v === "1";
       } catch (e) { /* private mode */ }
     }
+    var shown = box.open;
     box.addEventListener("toggle", function () {
+      if (box.open === shown) return;
+      shown = box.open;
       try { localStorage.setItem(KEY, box.open ? "1" : "0"); } catch (e) { /* private mode */ }
     });
   }
