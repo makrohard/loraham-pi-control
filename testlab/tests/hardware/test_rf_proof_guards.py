@@ -881,7 +881,7 @@ def test_the_setter_keeps_a_models_lower_cap(tmp_path):
     assert not (evd / "ran").exists()
 
 
-@pytest.mark.parametrize("name", ["mt_pget", "rt_pget", "mt_cap", "radios", "caps"])
+@pytest.mark.parametrize("name", ["mt_pget", "rt_pget", "rt_dpget", "mt_cap", "radios", "caps"])
 def test_the_reader_runs_its_fixed_read_forms(tmp_path, name):
     r, evd = source_only(tmp_path, f'sshrun() {{ touch "$EVD/ran"; }}; pread H read.txt {name} r2')
     assert r.returncode == 0, r.stderr
@@ -1633,7 +1633,7 @@ def test_a_power_set_under_the_readers_context_is_a_stop(tmp_path, cmd):
     assert not (evd / "ran").exists()
 
 
-@pytest.mark.parametrize("name", ["radios", "caps", "mt_pget", "rt_pget", "mt_cap"])
+@pytest.mark.parametrize("name", ["radios", "caps", "mt_pget", "rt_pget", "rt_dpget", "mt_cap"])
 def test_the_readers_own_forms_pass_its_check(tmp_path, name):
     r, evd = source_only(tmp_path, f'sshrun() {{ touch "$EVD/ran"; }}; pread H f.txt {name} r1')
     assert r.returncode == 0, r.stderr

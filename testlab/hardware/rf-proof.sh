@@ -83,6 +83,9 @@ dirtext() { case $1 in box-\>peer) echo "box -> peer";; peer-\>box) echo "peer -
   member) echo "member both ways";; leave) echo "member stops";; rejoin) echo "member joins again";; off) echo "owner stops";; *) echo "$1";; esac; }
 
 # ---- 3. FORMS: the box-side commands ({RT} = the box's runtime path, {LH} = its lhpc) ---------------------------------------
+# A Reticulum radio on the daemon backend: its txpower as its section renders it (the panel's one function; the CLI has no read
+# of a daemon panel). A refusal (no panel, POWER below the interface's floor) prints no number: no TX.
+RTPOW_PY='import sys; from lhpc.core import radio_start; from lhpc.core.services import ControllerService; s, why = radio_start.panel_section(ControllerService(), "reticulum", sys.argv[1]); print(s.get("txpower") or "NO txpower: " + why)'
 declare -A F=(
   [start]='{LH} stack start {inst} --yes'
   [stop]='{LH} stack stop {inst} --yes'
@@ -95,6 +98,7 @@ declare -A F=(
   [mt_cap]="{LH} config meshtastic@{rid} max_power | sed -n 's/^ *value *= *//p'"
   [rt_get]="{LH} config reticulum@{rid} {k} | sed -n 's/^ *value *= *//p'"
   [rt_pget]="{LH} config reticulum@{rid} txpower | sed -n 's/^ *value *= *//p'"
+  [rt_dpget]="cd {RT} && ./venv/lhpc/bin/python -c '$RTPOW_PY' {rid}"
   [rt_send]='{LH} meshchat@{rid} send {dest} "{n}"'
   [rt_join]='{LH} stack start reticulum@{rid} --join --yes'
   [rt_announce]="python3 -c \"import urllib.request as u; print(u.urlopen('http://127.0.0.1:8790/api/v1/announce', timeout=30).read().decode()[:80])\""
@@ -121,8 +125,8 @@ declare -A F=(
 CHAT_READY='Ctrl-K: Konf'   # the chat client's footer
 # The forms each row needs (rt_send is optional: a Reticulum row's box -> peer is NOT RUN without it).
 declare -A RFORMS=([1]="start stop tx_mcom rx_mcom rx_mcom_app" [2]="start stop" [3]="start stop mt_cap mt_send mt_pget rx_mt rx_mt_app" [4]="start stop mc_send mc_pget rx_mc rx_mc_app"
-  [5]="start stop rt_get rt_pget rx_mchat" [6]="start stop chat_client rx_rf" [12]="start stop rt_get rt_pget rx_mchat"
-  [13]="start stop rt_get rt_pget rx_mchat rt_join dset rt_announce")
+  [5]="start stop rt_get rt_pget rx_mchat" [6]="start stop chat_client rx_rf" [12]="start stop rt_get rt_dpget rx_mchat"
+  [13]="start stop rt_get rt_dpget rx_mchat rt_join dset rt_announce")
 # The pre-step M (mcset.py, from the RF sheet's MCSET-PRESTEP-v4): per stack row, the instance settings it copies from the stack's
 # source file into <sid>@<rid> of endpoint A's radio ({band} = that radio's band). J1's value is the input MCSET_J1.
 declare -A MJOB=([1]="J1 meshcom meshcom.toml mc_callsign" [2]="J2 graywolf graywolf@{band}.toml call"
@@ -515,7 +519,7 @@ rnsinst() {   # rnsinst <name> <the key's fields>: the RNS shared instance of an
 pread() {   # pread <box|PC> <file> <name> [<rid>]: THE one power reader: a fixed read form, rendered here from its name
   local w=$1 f=$2 n=$3 r=${4:-} c PCTX=read PAUTH=   # PAUTH: the one command the guard lets through under PCTX
   case "$n" in
-    mt_pget|rt_pget|mt_cap) c=$(form "$n" rid="$r");;
+    mt_pget|rt_pget|rt_dpget|mt_cap) c=$(form "$n" rid="$r");;
     radios) c="cd {RT} && ./venv/lhpc/bin/python -c '$RADIOS_PY'";;
     caps) c="cd {RT} && ./venv/lhpc/bin/python -c '$CAPS_PY'";;
     hpower) w=PC; c="python3 -I $(shq "$SCRATCH/hpower.py") $(shq "$RNSCFG") $(shq "$(dirname "$VRNS")/rnstatus")";;
@@ -1125,7 +1129,7 @@ row_rns() {   # row_rns <id> <box:KEY> <backend>: Reticulum + MeshChat on one bo
   needs $(rforms "$id") || { notrun_row "$id" "form not confirmed: $NEEDS_MISSING"; return 0; }
   local m r q; m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; r=$(getk "$k"); q="R$id-$b-$r"
   rnsread "$id" "$b" "$r" "$be" 0
-  spower "$b" rt_pget "$r" "$q"; undo_push "$b" "$(gstop "reticulum@$r")"
+  spower "$b" "$([ "$be" = daemon ] && echo rt_dpget || echo rt_pget)" "$r" "$q"; undo_push "$b" "$(gstop "reticulum@$r")"
   hpower "R$id-rnode" "$id-rnode-power.txt"
   leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   rnsx "$id" "$id" "$b" "$r" "R$id-rnode" "$q"
@@ -1160,7 +1164,7 @@ row_13() {   # Reticulum: two radios, one node: the owner (A) opens as row 12 do
   local m mp ro rm q qm p0 pk=R13-rnode rn="the RNode (the PC's shared rnsd)" bd="868.5 MHz, SF8"
   m=$(undo_mark) || stop "undo journal: unreadable (no mark)"; ro=$(getk "$k"); rm=$(getk "$mk"); q="R13-$b-$ro"; qm="R13-$b-$rm"
   rnsread 13 "$b" "$ro" daemon 0; rnsread 13 "$b" "$rm" daemon -m
-  spower "$b" rt_pget "$ro" "$q"; spower "$b" rt_pget "$rm" "$qm"; undo_push "$b" "$(gstop "reticulum@$ro")"
+  spower "$b" rt_dpget "$ro" "$q"; spower "$b" rt_dpget "$rm" "$qm"; undo_push "$b" "$(gstop "reticulum@$ro")"
   hpower "$pk" 13-rnode-power.txt
   leg owner   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   rnsx 13 13-owner "$b" "$ro" "$pk" "$q"; rnsback 13-owner
