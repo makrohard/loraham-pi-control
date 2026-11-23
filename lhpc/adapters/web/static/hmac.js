@@ -47,9 +47,11 @@
   }
 
   function render(d) {
+    if (reloaded) return;                           // a reload once sent is never sent again by a later tick
     var st = d.state || {};
     if (st.absent || st.unsafe) return;
     if (d.run_id && d.run_id !== runId) {          // a NEW run took over
+      reloaded = true;
       window.location.reload();
       return;
     }
