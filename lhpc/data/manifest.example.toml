@@ -2149,9 +2149,9 @@ main = "meshcom-qemu"
     # configures the radio with what the firmware reports), so LHPC sets it: `--txpower N`, N = the POWER this instance
     # applies to its daemon (`{daemon:power}`: its own set over the radio row's over the default). The LINE form: each
     # template matches whole reply lines only (G2 B2-B4). `--info`'s power line (`--lora` prints to the UART only, never
-    # to the console; command_functions.cpp:7648) gives the node's value, and two different ones prove nothing; equal ->
-    # no send (it persists in NVS); different -> send. The ACK line `set txpower to N dBm` (:5809) counts only once a
-    # fresh `--info` reports N; the firmware's refusal line (:5803; a Meshstick's 21/22 against 0..20) is named; a
+    # to the console; command_functions.cpp:7968) gives the node's value, and two different ones prove nothing; equal ->
+    # no send (it persists in NVS); different -> send. The ACK line `set txpower to N dBm` (:5992) counts only once a
+    # fresh `--info` reports N; the firmware's refusal line (:5986; a Meshstick's 21/22 against 0..20) is named; a
     # refusal or a cut reply ends `unverified`. The bridge's --max-power (the same POWER) gives a node
     # above it no radio meanwhile. It keeps the callsign's full window: the callsign's flash rewrite (~1 min frozen on a
     # Zero 2 W) or a guest reboot can fall into it. Both windows together size the required post-start bound
@@ -2339,8 +2339,8 @@ main = "meshcom-qemu"
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
     # The setup step fetches from this remote (--src), and a repo test keeps the two identical.
     path = "src/MeshCom-Firmware"
-    pin_commit = "4f60051ce4ef2810df81d42a21df98de5228bbc9"
-    pin_tag = "v4.40a.10.28-31-g4f60051c"
+    pin_commit = "bcc3b3ef8ba19314dc37bdbd68d98734b48a3a11"
+    pin_tag = "v4.40a.11.22-18-gbcc3b3ef"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
