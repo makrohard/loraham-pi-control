@@ -311,7 +311,9 @@ What a machine enforces today. The checker's other rows (changelog, docs, attrib
 | `tests/conftest.py`, `pyproject.toml` | a fake called in a way the real signature refuses (D4); an unknown marker (F1); an unhandled exception in a test's thread (C8) | test |
 | ruff | `ruff check lhpc testlab`; `ruff check tests --select F,E9` | CI |
 
-CI runs the checker from the floor commit in `.github/workflows/ci.yml` (`HR_FLOOR`) over the pushed range.
+CI runs the checker from the floor commit in `.github/workflows/ci.yml` (`HR_FLOOR`) over the pushed range. The floor moves, in a
+commit of its own, to a commit that changes the checker: the checker at a range's base is the authoritative one,
+so the change is judged by the old checker first and rules the ranges after it.
 
 ### I. How a cleanup is done
 

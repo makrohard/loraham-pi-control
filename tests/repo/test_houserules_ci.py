@@ -220,3 +220,13 @@ def test_a_pull_request_cut_before_the_floor_is_judged_on_every_commit_it_brings
     p = _hr_step(s, "pull_request", _git(r, "rev-parse", "HEAD"), pr_head=head, pr_base=floor)
     assert f"house rules range: {old}..{head}" in p.stdout, p.stdout + p.stderr
     assert p.returncode == 1 and re.search(r"^changelog .* HARD$", p.stdout, re.MULTILINE), p.stdout
+
+
+def test_the_floor_is_a_checker_that_knows_the_changelog_placement_rules():
+    """The checker at HR_FLOOR is authoritative for every range from it: a floor before the per-commit placement and
+    the released-section rules still judged the old way, so the first new CHANGELOG section after it was HARD.
+    Red before: the floor ceaad012."""
+    floor = re.search(r"^ +HR_FLOOR: ([0-9a-f]{40})$", WORKFLOW.read_text(), re.MULTILINE)[1]
+    checker = subprocess.run(["git", "show", f"{floor}:tools/check_houserules.py"], cwd=repo_paths.REPO,
+                             capture_output=True, text=True, check=True).stdout
+    assert "def misplaced(" in checker and "def placed_section_commit(" in checker
