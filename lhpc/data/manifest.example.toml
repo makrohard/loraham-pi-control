@@ -358,7 +358,7 @@ main = "loraham-chat"
     fmt = "env"
       [[stack.component.config_file.param]]
       name = "call"
-      card_ident = 1   # F30: shown in the Home card's stack title
+      card_ident = 1   # F30: shown in the Home card's Running on line
       validator = "callsign"
       key = "CALL"
       default = "{callsign}"
@@ -525,7 +525,7 @@ main = "loraham-voice"
       # are NOT hidden under "Advanced config" — they are shown inline with the basic ones.
       [[stack.component.config_file.param]]
       name = "callsign"
-      card_ident = 1   # F30: shown in the Home card's stack title
+      card_ident = 1   # F30: shown in the Home card's Running on line
       validator = "callsign_voice"
       key = "callsign"
       default = "{callsign}"
@@ -1083,7 +1083,7 @@ main = "graywolf"
     # passcode from this callsign itself, so no passcode is ever stored by LHPC.
     [[stack.component.param]]
     name = "call"
-    card_ident = 1   # F30: shown in the Home card's stack title
+    card_ident = 1   # F30: shown in the Home card's Running on line
     kind = "str"
     validator = "callsign"
     arg = "--callsign"
@@ -1348,14 +1348,14 @@ main = "meshtastic"
     label = "LoRa region (sets TX legality; required for TX)"
     [[stack.component.param]]
     name = "node_name"
-    card_ident = 1   # F30: shown in the Home card's stack title
+    card_ident = 1   # F30: shown in the Home card's Running on line
     validator = "node_long"
     kind = "str"
     default = ""
     label = "Node name (long, max 39 bytes) — required; local, never the operator callsign"
     [[stack.component.param]]
     name = "node_short"
-    card_ident = 2   # F30: shown in the Home card's stack title
+    card_ident = 2   # F30: shown in the Home card's Running on line
     validator = "node_short"
     kind = "str"
     default = ""
@@ -2236,7 +2236,7 @@ main = "meshcom-qemu"
     # operator callsign. Applied via the net-console after boot (see post_start).
     [[stack.component.param]]
     name = "mc_callsign"
-    card_ident = 1   # F30: shown in the Home card's stack title
+    card_ident = 1   # F30: shown in the Home card's Running on line
     validator = "callsign_meshcom"
     kind = "str"
     default = "{callsign}"
@@ -2474,7 +2474,7 @@ main = "meshcore-node"
       label = "Enable TX (off = RX-only)"
       [[stack.component.config_file.param]]
       name = "node_name"
-      card_ident = 1   # F30: shown in the Home card's stack title
+      card_ident = 1   # F30: shown in the Home card's Running on line
       validator = "node"
       key = "name"
       section = "companion"
@@ -2596,7 +2596,7 @@ main = "meshcore-node"
       label = "Mode — chat: companion node only; chat+repeater: repeater hosting the companion; repeater: repeater only (no chat GUI/CLI)"
       [[stack.component.config_file.param]]
       name = "repeater_name"
-      card_ident = 2   # F30: shown in the Home card's stack title
+      card_ident = 2   # F30: shown in the Home card's Running on line
       validator = "repeater_name"
       key = "name"
       section = "repeater"

@@ -1428,7 +1428,7 @@ def relocate_card_interfaces(rows: list) -> list:
 
 
 def card_ident(svc, stk, inst) -> str:
-    """F30: the name / call LHPC sets for instance `inst` of `stk`, for the Home card's stack title: the values of the
+    """F30: the name / call LHPC sets for instance `inst` of `stk`, for the Home card's Running on line: the values of the
     stack's `card_ident` params in their order, empty ones dropped, joined with " · ", each the instance's own saved
     value (the operator callsign fallback and openHop's own file included: `_resolved_param_value`). MeshCore follows
     its RUNNING mode: the chat node's name only while the companion runs, the repeater's name only in repeater modes.

@@ -995,7 +995,7 @@ def _parse_param(p: dict, cid: str) -> RunParam:
 
 
 def _card_ident(p: dict, cid: str) -> int:
-    """F30: a param shown in the Home card's stack title: a positive int (its order), else absent (0)."""
+    """F30: a param shown in the Home card's Running on line: a positive int (its order), else absent (0)."""
     v = p.get("card_ident", 0)
     if isinstance(v, bool) or not isinstance(v, int) or v < 0:
         raise ManifestError(f"{cid}: param {p.get('name', '?')!r}: card_ident must be a positive int, got {v!r}")

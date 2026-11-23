@@ -16,6 +16,8 @@
   Reticulum on a 433 radio; afterwards they have no instance there (their old settings files stay unused).
 - Stack instances: every stack runs as `<stack>@<rid>` on each radio of its bands (Reticulum once per box), started,
   stopped and restored alone; ports base + 133 × (n − 1), r1 keeps today's.
+- Home radio cards: "Running on rN" names the stacks running on that radio with their call or node name ("Running on
+  r1 MeshCom (QEMU) DJ0CHE-11"; the daemon alone: "Running on r1 LoRaHAM daemon"); a stack's title no longer shows it.
 - Every stack verb, `lhpc kill` and the console's Kill name the instance; `--band` is gone (`lhpc config kiss@r2 …`,
   `lhpc rflog daemon@r1`).
 - Daemon parameters per radio (`lhpc config daemon@<rid> --daemon-param`) and per instance (`<stack>@<rid>.toml`,

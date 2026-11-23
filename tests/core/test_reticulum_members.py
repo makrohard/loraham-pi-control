@@ -404,6 +404,12 @@ def _home(box, web):
     return client, client.get("/", headers={"Host": "localhost:8443"}).get_data(as_text=True)
 
 
+def _running_on(html, rid):
+    """The text of radio `rid`'s "Running on" line."""
+    head = html.split(f'id="runon-{rid}"', 1)[1].split("</h3>", 1)[0].split("<h3>", 1)[1]
+    return " ".join(head.split())
+
+
 def _forms(html, target):
     """[(op, button)] of the rendered forms posting `target`."""
     return re.findall(rf'name="op" value="([a-z]+)">\s*<input type="hidden" name="target" value="{re.escape(target)}">'
@@ -417,9 +423,11 @@ def test_a_connected_radios_card_shows_its_node_and_disconnect(box, web):
     # red-before (f4ff210c): r1 has no card (the one-node stack gives Home its owner only)
     assert "Connected to the Reticulum node on r2" in html
     assert ("stop", "Disconnect") in _forms(html, "reticulum@r1")
+    assert _running_on(html, "r1") == "Running on r1 Reticulum (RNS)"         # a connected member is named
     box.node.attached.discard("LoRa r1")                                     # the record stays, the node lost it
     _c, html = _home(box, web)
     assert "Not connected — not attached — see the Reticulum log" in html   # live = the record AND the node's list
+    assert _running_on(html, "r1") == "Running on r1"                        # not connected: not named
 
 
 def test_a_not_connected_radios_card_names_why_and_offers_connect_and_remove(box, web):

@@ -299,7 +299,7 @@ class RunParam:
                                  # own titled block (e.g. "Network exposure") in the config panel
     # The manifest's default when it carries instance tokens; `default` is its template value (no radio). "" = none.
     default_template: str = ""
-    card_ident: int = 0           # F30: >0 = shown in the Home card's stack title (order), e.g. a node name or call
+    card_ident: int = 0           # F30: >0 = shown in the Home card's Running on line (order), e.g. a node name or call
 
 
 def emit_param(p: RunParam, value) -> list[str]:
@@ -361,7 +361,7 @@ class FileParam:
     default_template: str = ""
     radio_power: bool = False    # a TX power: its default is at most the instance radio's model default (USB 14, SPI 17)
     panel_power: bool = False    # hidden, derived: the instance's daemon-panel POWER (radio_start.post_power), never stored
-    card_ident: int = 0          # F30: >0 = shown in the Home card's stack title (order), e.g. a node name
+    card_ident: int = 0          # F30: >0 = shown in the Home card's Running on line (order), e.g. a node name
     from_backend: tuple = ()     # hidden, derived: ((backend, value), …) — the value for the instance's `backend` param
     # reti B2: a daemon-panel PARAM (FREQ…): on the daemon backend the value is that panel row's (radio_start.
     # panel_section), never stored here; on spi a shown one is the Config page's own, a hidden one is left out.

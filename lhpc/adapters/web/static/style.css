@@ -311,7 +311,6 @@ a.iface { text-decoration: none; color: var(--brand); }
 .radio-col details.runstack > summary.stitle::before { content: "▸ "; color: var(--muted); }
 .radio-col details.runstack[open] > summary.stitle::before { content: "▾ "; }
 .radio-col details.runstack:not([open]) > summary.stitle { margin-bottom: .1rem; }
-.radio-col details.runstack > summary.stitle .sident { margin-left: .3rem; }          /* F30: the name / call */
 .radio-col details.runstack > summary.stitle .lic { cursor: help; }                   /* F32: the licence mark */
 .radio-col details.runon > summary.ronsum { cursor: pointer; list-style: none; }       /* Running on / Start a stack */
 .radio-col details.runon > summary.ronsum::-webkit-details-marker { display: none; }
