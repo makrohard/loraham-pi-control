@@ -593,6 +593,41 @@ def test_fake_daemon_txbusy_refuses_before_the_air_and_txcadtimeout_flags_the_ok
     assert results[:3] == ["CHANNEL_BUSY", "CHANNEL_BUSY", "OK"] and results[-2:] == ["CHANNEL_BUSY", "OK"]
 
 
+@pytest.mark.wallclock("waits for the fake's capture of a raw TX (no reply on the raw socket), bounded")
+def test_fake_daemon_txbusy_is_per_band_and_framed_only(fake_daemon, tmp_path):
+    """txbusy_868 armed: the 433 fake's framed TX stays OK with flags 0x01; on 868 a raw TX does not take the
+    count (no TX_RESULT there to say so) and the next framed TX is refused CHANNEL_BUSY, then OK."""
+    import socket as _s
+    import struct as _st
+    flags = {"txbusy_868": 1}
+    sockdir, root = fake_daemon(band="433", flags=flags)
+    fake_daemon(band="868", flags=flags)
+
+    def framed(band):
+        f = _s.socket(_s.AF_UNIX)
+        f.settimeout(FAKE_HANG_S)
+        f.connect(str(sockdir / f"lora{band}f.sock"))
+        _conf(sockdir, band, b"SET TXRESULT=1")
+        return f
+
+    def tx(f):
+        f.sendall(b"\x02" + _st.pack("<H", 5) + b"hello")
+        return _st.unpack("<BBH", _frame_of(f, "TX_RESULT frame")[3:7])
+    assert tx(framed("433")) == (0, 0x01, 1)
+    raw = _s.socket(_s.AF_UNIX)
+    raw.connect(str(sockdir / "lora868.sock"))
+    raw.sendall(b"raw-1")
+    tx_log = root / "state" / "testlab" / "tx.jsonl"
+    deadline = time.monotonic() + FAKE_HANG_S
+    while '"text": "raw-1"' not in (tx_log.read_text() if tx_log.exists() else ""):
+        assert time.monotonic() < deadline, "the raw TX was never captured"
+    f868 = framed("868")
+    assert [tx(f868), tx(f868)] == [(2, 0x01, 1), (0, 0x01, 2)]
+    by_text = [(r["band"], r["text"], r["result"]) for r in map(json.loads, tx_log.read_text().splitlines())]
+    assert by_text == [("433", "hello", "OK"), ("868", "raw-1", "OK"), ("868", "hello", "CHANNEL_BUSY"),
+                       ("868", "hello", "OK")]
+
+
 @pytest.mark.slow
 def test_a_queued_rx_record_is_never_read_half_written(fake_daemon, tmp_path):
     """The writer's unsafe moment, forced: while 0001's write is paused after its leaf exists, a sentinel 0000 is

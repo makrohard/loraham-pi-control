@@ -16,7 +16,7 @@ SOCK_STREAM sockets and speaks the daemon's protocol:
 Scenario coupling (state/testlab/ under the runtime root, derived from
 LORAHAM_RUNTIME_DIR): scenario.json's radio_{band} drives RADIO=READY|FAILED per reply;
 rx-queue/{band}/*.json files are delivered EXACTLY ONCE, in name order, to all
-connected data clients; every TX is appended to tx.jsonl. txbusy_{band} = N: the next N framed or raw TXs
+connected data clients; every TX is appended to tx.jsonl. txbusy_{band} = N: the next N framed TXs
 are refused CHANNEL_BUSY before the air (a changed value arms it again); txcadtimeout_{band}: a TX_RESULT OK
 carries flag 0x04 (MANAGED sent after its CAD wait timed out) with 0x01. scenario.json's "air" (a list of
 bands) makes this band a virtual air: a TX that succeeds is also delivered once, as RX, to every
@@ -195,13 +195,13 @@ class Fake:
 
     # -- TX --------------------------------------------------------------------------
 
-    def transmit(self, payload):
+    def transmit(self, payload, framed=False):
         if self.radio_state() != "READY":
             self.n["TXERR"] += 1
             self.last = "RADIO_NOT_READY"
             self.capture_tx(payload, "RADIO_NOT_READY")
             return 3
-        if self.busy_left > 0:                         # scenario txbusy: refused before the air
+        if framed and self.busy_left > 0:              # scenario txbusy (framed: a TX_RESULT says so)
             self.busy_left -= 1
             self.last = "CHANNEL_BUSY"
             self.capture_tx(payload, "CHANNEL_BUSY")
@@ -318,7 +318,7 @@ def _consume(fake, c, conns):
             if ftype != 0x02:
                 _send(c, b"\x03" + struct.pack("<H", 18) + b"unknown frame type")
                 continue
-            status = fake.transmit(payload)
+            status = fake.transmit(payload, framed=True)
             _air(fake, conns, c, payload, status)
             if fake.set_["TXRESULT"] == "1":
                 body = struct.pack("<BBH", status, 0x05 if status == 0 and fake.cad_timeout else 0x01, fake.seq)
