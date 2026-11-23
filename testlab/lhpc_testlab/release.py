@@ -930,7 +930,11 @@ def _web_ui_wrong(url: str, page, api, ctx) -> str:
         doc = json.loads(body)
     except ValueError:
         return f"{path} answered no JSON"
-    return "" if predicate(doc) else f"{path} answered {json.dumps(doc)[:300]}"
+    try:                              # a starting server's interim answer may have another shape
+        ok = predicate(doc)
+    except (KeyError, TypeError, AttributeError):
+        ok = False
+    return "" if ok else f"{path} answered {json.dumps(doc)[:300]}"
 
 
 def assert_web_ui(env: dict, stack: str, component: str, url: str, *, timeout: float, page=None,
@@ -956,6 +960,46 @@ def assert_web_ui(env: dict, stack: str, component: str, url: str, *, timeout: f
     while (wrong := _web_ui_wrong(url, page, api, ctx)) and time.monotonic() < deadline:
         time.sleep(every)
     assert not wrong, readiness_failed(env, stack, component, f"{component}'s web UI {url} {wrong}")
+
+
+# What each web UI serves as its own page. The packaged bundles' titles (lhpc/data/meshcore-webui-dist,
+# lhpc/data/meshchat-dist; pinned by a unit test) and openHop's at its pin (repeater/web/html/index.html).
+MESHCORE_WEBUI_TITLE = "<title>MeshCore</title>"
+MESHCHAT_TITLE = "<title>Reticulum MeshChat</title>"
+REPEATER_DASHBOARD_TITLE = "<title>Repeater Dashboard</title>"
+
+
+def meshcore_webui_healthy(doc: dict) -> bool:
+    """meshcore-webui's public `/api/health/deep`: its database and its companion radio link."""
+    return doc.get("db") == "ok" and doc.get("radio") == "connected"
+
+
+def openhop_set_up(doc: dict) -> bool:
+    """openHop's public `/api/needs_setup`: LHPC provisioned it (the handler's own error answer
+    also says `needs_setup: false`, so an `error` key is not a pass)."""
+    return doc.get("needs_setup") is False and "error" not in doc
+
+
+def meshchat_attached(doc: dict) -> bool:
+    """MeshChat's `/api/v1/app/info`: it runs on the stack's shared Reticulum instance."""
+    return doc.get("app_info", {}).get("is_connected_to_shared_instance") is True
+
+
+def version_is(want: str):
+    """A predicate for graywolf's public `/api/version`: the version the manifest fetched (an
+    upstream release build may report it with a leading `v`)."""
+    return lambda doc: str(doc.get("version", "")).removeprefix("v") == want
+
+
+def fetch_argv(script: str) -> tuple:
+    """`(owning component id, argv)` of the ONE build step of the packaged manifest that runs
+    `script` — where a fetched component's pinned version is stated."""
+    from lhpc.core.manifest import default_manifest_path, load_manifest
+    found = [(c.id, tuple(str(a) for a in st["argv"]))
+             for s in load_manifest(default_manifest_path()) for c in s.components for st in c.build_steps
+             if len(st.get("argv", ())) > 1 and str(st["argv"][1]).endswith(script)]
+    assert len(found) == 1, f"the manifest declares {len(found)} build steps running {script}, not one"
+    return found[0]
 
 
 def gui_startable(svc, stack_id: str, comp_id: str) -> bool:

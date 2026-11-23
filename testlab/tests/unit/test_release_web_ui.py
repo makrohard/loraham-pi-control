@@ -211,3 +211,81 @@ def test_without_tls_a_self_signed_endpoint_is_not_trusted(lab, served, tls_dir)
     passing above is the flag's doing."""
     url, _log = served({"/": [(200, PAGE)]}, tls_dir)
     assert "answered nothing" in _failure(lab, url, page=PAGE)
+
+
+# --- a starting server's interim answer of another shape keeps the poll going (C1 reader k1) --------------
+
+
+def test_a_json_answer_of_another_shape_is_polled_past(lab, served):
+    url, log = served({"/": [(200, PAGE)], "/api/health/deep": [(200, b"[1, 2]"), (200, json.dumps(GOOD).encode())]})
+    _check(lab, url, page=PAGE, api=("/api/health/deep", _health), timeout=60, every=0.01)
+    assert log.count("/api/health/deep") == 2
+
+
+def test_a_predicate_that_cannot_read_the_answer_is_a_failed_check_not_a_crash(lab, served):
+    url, _log = served({"/": [(200, PAGE)], "/a": [(200, b"{}")], "/b": [(200, b"[1, 2]")]})
+    assert "/a answered {}" in _failure(lab, url, page=PAGE, api=("/a", lambda d: d["radio"] == "connected"))
+    assert "/b answered [1, 2]" in _failure(lab, url, page=PAGE, api=("/b", _health))
+
+
+# --- the release cases' predicates, on the answers each upstream gives at its pin --------------------------
+
+
+def test_meshcore_webui_is_healthy_only_with_its_db_and_its_radio():
+    # meshcore-webui@94dcc3d backend/app/main.py:468-509 (`vapid` rides along)
+    assert rel.meshcore_webui_healthy({"radio": "connected", "db": "ok", "vapid": "missing"})
+    assert not rel.meshcore_webui_healthy({"radio": "disconnected", "db": "ok", "vapid": "loaded"})
+    assert not rel.meshcore_webui_healthy({"radio": "connected", "db": "error", "vapid": "loaded"})
+
+
+def test_openhop_is_set_up_only_on_a_clean_false():
+    # openhop_repeater@72266e2 repeater/web/api_endpoints.py:1351-1373: the handler's error path also says false
+    assert rel.openhop_set_up({"needs_setup": False, "reasons": {"default_name": True}})
+    assert not rel.openhop_set_up({"needs_setup": True, "reasons": {}})
+    assert not rel.openhop_set_up({"needs_setup": False, "error": "config unreadable"})
+    assert not rel.openhop_set_up({"reasons": {}})                  # no answer to the question is not "set up"
+
+
+def test_meshchat_is_attached_only_to_the_shared_instance():
+    # reticulum-meshchat@45f89a8 meshchat.py:941-956
+    assert rel.meshchat_attached({"app_info": {"is_connected_to_shared_instance": True}})
+    assert not rel.meshchat_attached({"app_info": {"is_connected_to_shared_instance": False}})
+    assert not rel.meshchat_attached({"app_info": {}})
+
+
+def test_graywolf_reports_the_fetched_version_with_or_without_a_v():
+    # graywolf v0.14.14 pkg/webapi/version.go (`version`), .goreleaser.yml `-X main.Version={{.Version}}`
+    check = rel.version_is("0.14.14")
+    assert check({"version": "0.14.14", "commit": "b589e68", "platform": "linux/arm64"})
+    assert check({"version": "v0.14.14"})
+    assert not check({"version": "0.14.13"})
+    assert not check({"commit": "b589e68"})
+
+
+# --- the constants come from the files the lane serves or fetches -------------------------------------------
+
+
+def _data(name):
+    from pathlib import Path
+
+    import lhpc
+    return (Path(lhpc.__file__).parent / "data" / name / "index.html").read_text()
+
+
+def test_the_bundled_titles_are_the_packaged_bundles_own():
+    assert rel.MESHCORE_WEBUI_TITLE in _data("meshcore-webui-dist")
+    assert rel.MESHCHAT_TITLE in _data("meshchat-dist")
+
+
+def test_the_graywolf_version_checked_is_the_one_the_manifest_fetches_and_marks():
+    owner, argv = rel.fetch_argv("graywolf-fetch.sh")
+    assert owner == "graywolf" and re.fullmatch(r"\d+\.\d+\.\d+", argv[3]), argv
+    from lhpc.core.manifest import default_manifest_path, load_manifest
+    marker = next(c.build_marker for s in load_manifest(default_manifest_path()) for c in s.components
+                  if c.id == owner)
+    assert marker.endswith(f".lhpc-built-{argv[3]}"), marker   # the same pin, stated twice by the manifest
+
+
+def test_a_fetch_step_that_is_not_declared_exactly_once_is_refused():
+    with pytest.raises(AssertionError, match=re.escape("declares 0 build steps running no-such-fetch.sh")):
+        rel.fetch_argv("no-such-fetch.sh")

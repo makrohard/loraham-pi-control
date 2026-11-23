@@ -13,18 +13,27 @@ import pytest
 from lhpc_testlab.release import (
     GRAYWOLF_UI,
     KISS_TCP,
+    MESHCHAT_TITLE,
     MESHCHAT_UI,
     MESHCOM_UI,
     MESHCORE_COMPANION,
     MESHCORE_WEBUI,
+    MESHCORE_WEBUI_TITLE,
     MESHTASTIC_API,
+    MESHTASTIC_WEB,
     REPEATER_DASHBOARD,
+    REPEATER_DASHBOARD_TITLE,
     alive,
     assert_plugin_manager_running,
+    assert_web_ui,
     binaries_at_the_pins,
     binaries_installed,
+    fetch_argv,
     gui_startable,
     install_build,
+    meshchat_attached,
+    meshcore_webui_healthy,
+    openhop_set_up,
     plugin_manager_markers,
     plugin_manager_pids,
     pty_readiness,
@@ -35,8 +44,8 @@ from lhpc_testlab.release import (
     stack_regression,
     start_component,
     stop,
+    version_is,
     wait_for,
-    wait_http,
     wait_tcp,
 )
 from lhpc_testlab.testing import named, port_of, run_lhpc
@@ -167,13 +176,14 @@ def test_release_kiss(env, svc):
 
 
 def test_release_graywolf(env, svc):
-    """Graywolf on the running KISS chain: its own web UI answers."""
+    """Graywolf on the running KISS chain: its own web UI answers, and its public version API
+    reports the version the manifest fetched."""
     require_prerequisite(env, "kiss", left_by="test_release_kiss")
     install_build(env, svc, "graywolf")
     _start(env, "graywolf", timeout=900)
-    assert wait_http(f"http://127.0.0.1:{port_of(env, 'graywolf', GRAYWOLF_UI)}/", 120,
-                     accept=(200, 401, 403)) in (200, 401, 403), \
-        readiness_failed(env, "graywolf", "graywolf", "graywolf web UI never answered on 8080")
+    _owner, argv = fetch_argv("graywolf-fetch.sh")
+    assert_web_ui(env, "graywolf", "graywolf", f"http://127.0.0.1:{port_of(env, 'graywolf', GRAYWOLF_UI)}/",
+                  timeout=120, api=("/api/version", version_is(argv[3])))
     assert alive(env, "graywolf"), readiness_failed(
         env, "graywolf", "graywolf", "LHPC does not report graywolf running")
     stop(env, "graywolf")
@@ -290,24 +300,35 @@ def test_release_meshcore_chat(env, svc):
         env, "meshcore", "meshcore-node", "MeshCore companion never opened TCP 5000")
     assert alive(env, "meshcore-node"), readiness_failed(
         env, "meshcore", "meshcore-node", "LHPC does not report meshcore-node running")
-    start_component(env, "meshcore-webui", stack="meshcore")
-    assert wait_http(f"http://127.0.0.1:{port_of(env, 'meshcore', MESHCORE_WEBUI)}/", 180,
-                     accept=(200, 401, 403)) in (200, 401, 403), \
-        readiness_failed(env, "meshcore", "meshcore-webui", "MeshCore Web UI never answered")
-    assert alive(env, "meshcore-webui"), readiness_failed(
-        env, "meshcore", "meshcore-webui", "LHPC does not report meshcore-webui running")
+    _assert_meshcore_webui(env)
     stop(env, "meshcore")
 
 
+def _assert_meshcore_webui(env) -> None:
+    """The optional Web UI, started by name, serves its bundle and reaches the companion radio."""
+    start_component(env, "meshcore-webui", stack="meshcore")
+    assert_web_ui(env, "meshcore", "meshcore-webui", f"http://127.0.0.1:{port_of(env, 'meshcore', MESHCORE_WEBUI)}/",
+                  timeout=180, page=MESHCORE_WEBUI_TITLE, api=("/api/health/deep", meshcore_webui_healthy))
+    assert alive(env, "meshcore-webui"), readiness_failed(
+        env, "meshcore", "meshcore-webui", "LHPC does not report meshcore-webui running")
+
+
+def _assert_repeater_dashboard(env) -> None:
+    """openHop's dashboard serves its own page, and LHPC's provisioning closed first-run setup."""
+    assert_web_ui(env, "meshcore", "meshcore-node",
+                  f"http://127.0.0.1:{port_of(env, 'meshcore', REPEATER_DASHBOARD)}/", timeout=240,
+                  page=REPEATER_DASHBOARD_TITLE, api=("/api/needs_setup", openhop_set_up))
+
+
 def test_release_meshcore_chat_repeater(env):
-    """The repeater hosting the companion: BOTH the dashboard and the companion answer."""
+    """The repeater hosting the companion: the dashboard, the companion and the chat Web UI on
+    that hosted companion all answer."""
     _meshcore_mode(env, "chat+repeater")
     _start(env, "meshcore", timeout=900)
-    assert wait_http(f"http://127.0.0.1:{port_of(env, 'meshcore', REPEATER_DASHBOARD)}/", 240,
-                     accept=(200, 401, 403)) in (200, 401, 403), \
-        readiness_failed(env, "meshcore", "meshcore-node", "repeater dashboard silent")
+    _assert_repeater_dashboard(env)
     assert wait_tcp(port_of(env, "meshcore", MESHCORE_COMPANION), 180), readiness_failed(
         env, "meshcore", "meshcore-node", "hosted companion never opened TCP 5000")
+    _assert_meshcore_webui(env)
     _assert_plugin_manager_running(env)
     stop(env, "meshcore")
     _assert_plugin_manager_gone(env)
@@ -321,9 +342,7 @@ def test_release_meshcore_repeater(env):
     """
     _meshcore_mode(env, "repeater")
     _start(env, "meshcore", timeout=900)
-    assert wait_http(f"http://127.0.0.1:{port_of(env, 'meshcore', REPEATER_DASHBOARD)}/", 240,
-                     accept=(200, 401, 403)) in (200, 401, 403), \
-        readiness_failed(env, "meshcore", "meshcore-node", "repeater dashboard silent")
+    _assert_repeater_dashboard(env)
     # Unmarked: mode wiring between LHPC's config and the upstream repeater, not one of the
     # four phases — a freeze would be the wrong remedy.
     assert not wait_tcp(port_of(env, "meshcore", MESHCORE_COMPANION), 20), \
@@ -390,8 +409,8 @@ def test_release_reticulum(env, svc):
     start_component(env, "meshchat", stack="reticulum")
     # 200, not "any answer": the bundled UI requires no authentication of its own — the proxy is
     # where auth lives — so a 401/403 here would mean something other than MeshChat replied.
-    assert wait_http(f"http://127.0.0.1:{MESHCHAT_UI}/", 180, accept=(200,)) == 200, \
-        readiness_failed(env, "reticulum", "meshchat", "MeshChat did not serve its UI")
+    assert_web_ui(env, "reticulum", "meshchat", f"http://127.0.0.1:{MESHCHAT_UI}/", timeout=180,
+                  page=MESHCHAT_TITLE, api=("/api/v1/app/info", meshchat_attached))
     assert alive(env, "meshchat"), readiness_failed(
         env, "reticulum", "meshchat", "LHPC does not report meshchat running")
     # Sideband is a release deliverable of this stack, and the lane runs against a real X
@@ -451,12 +470,17 @@ def test_release_meshtastic(env, svc):
     assert info.returncode == 0, (f"{stack_regression('meshtastic', 'readiness')}\n"
                                   f"the node did not answer its own CLI (rc {info.returncode}): "
                                   f"{info.stdout[-1500:]}\n{info.stderr[-800:]}")
-    _web_client_is_the_pinned_one(env)
+    web = _web_client_is_the_pinned_one(env)
+    # meshtasticd serves that installed client itself, over its own self-signed TLS, and the
+    # client's own poll path answers (PiWebServer.cpp at the firmware pin: no login on either).
+    assert_web_ui(env, "meshtastic", "meshtastic", f"https://127.0.0.1:{port_of(env, 'meshtastic', MESHTASTIC_WEB)}/",
+                  timeout=180, page=(web / "index.html").read_bytes(), api=("/api/v1/fromradio?all=false", None),
+                  tls=True)
     _artifact_records_the_manifest_inputs(svc, "meshtastic")
     stop(env, "meshtastic")
 
 
-def _web_client_is_the_pinned_one(env) -> None:
+def _web_client_is_the_pinned_one(env) -> Path:
     """The browser UI is LHPC's OWN pin, moved independently of the firmware: the binary install
     of meshtastic fetches it as the `meshtastic-web` component (selector `binary`). So the version
     that ends up installed must be the version the manifest names — otherwise a moved web pin
@@ -471,16 +495,10 @@ def _web_client_is_the_pinned_one(env) -> None:
     the step belongs to the `meshtastic-web` component (its own component since Track F C3,
     with a static marker: the provenance file is the one statement of the installed version).
     """
-    comps = [c for s in load_manifest(default_manifest_path()) for c in s.components]
-    steps = [st for c in comps for st in c.build_steps
-             if len(st.get("argv", ())) > 1
-             and str(st["argv"][1]).endswith("meshtastic-web-assets.sh")]
-    assert len(steps) == 1, "the manifest no longer declares exactly one web-client fetch step"
-    argv = steps[0]["argv"]
+    owner, argv = fetch_argv("meshtastic-web-assets.sh")
     assert len(argv) == 5, f"the web-client fetch step's argv changed shape: {argv}"
-    dest, want_version, want_sha = str(argv[2]), str(argv[3]), str(argv[4])
-    owner = next(c for c in comps if steps[0] in c.build_steps)
-    assert owner.id == "meshtastic-web", f"the web-client fetch step moved to {owner.id}"
+    dest, want_version, want_sha = argv[2], argv[3], argv[4]
+    assert owner == "meshtastic-web", f"the web-client fetch step moved to {owner}"
 
     prov = Path(dest.replace("{runtime}", env["LHPC_RUNTIME_ROOT"])).parent / "web.provenance"
     assert prov.exists(), f"no web-client provenance at {prov}"
@@ -489,18 +507,21 @@ def _web_client_is_the_pinned_one(env) -> None:
         f"the installed web client is {got.get('web_version')}, the manifest pins {want_version}")
     assert got.get("web_sha256") == want_sha, (
         f"the installed web client hashes {got.get('web_sha256')}, the manifest pins {want_sha}")
+    return Path(dest.replace("{runtime}", env["LHPC_RUNTIME_ROOT"]))
 
 
 def test_release_meshcom(env, svc):
     """The emulated MeshCom node from the published artifact: its web UI answers once the
-    firmware has booted (502 until then — that wait is the point)."""
+    firmware has booted (502 until then — that wait is the point), titled with the node call
+    LHPC set (the firmware writes `<node call> - Meshcom`, web_functions.cpp at its pin)."""
     stop(env, "kiss", "graywolf", require=False)
     install_build(env, svc, "meshcom", timeout=2400)
     _artifact_intact(svc, "meshcom")
     _start(env, "meshcom", timeout=1200)
-    assert wait_http(f"http://127.0.0.1:{port_of(env, 'meshcom', MESHCOM_UI)}/", 900, accept=(200,)) == 200, \
-        readiness_failed(env, "meshcom", "meshcom-qemu",
-                         "MeshCom web UI never reached 200 — the firmware did not finish booting")
+    inst = instances.resolve(svc, named(env, "meshcom"))[1]
+    call = svc._resolved_param_value("meshcom", "run", "meshcom-qemu", "mc_callsign", inst=inst)
+    assert_web_ui(env, "meshcom", "meshcom-qemu", f"http://127.0.0.1:{port_of(env, 'meshcom', MESHCOM_UI)}/",
+                  timeout=900, page=f"<title>{call} - Meshcom</title>")
     stop(env, "meshcom")
 
 
