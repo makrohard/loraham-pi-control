@@ -18,13 +18,12 @@ pytestmark = pytest.mark.needs_session
 STOP_LOCKS = ["lock:claim.loraham.daemon-socket.r1", "lock:claim.loraham.radio.r1",
               "lock:claim.tcp.port.8001", "lock:lifecycle.kiss"]
 SIGNAL = ["mutate:signal:loraham-kiss-serial", "mutate:signal:loraham-kiss-tnc"]
-# reti B1: Reticulum is a daemon client by default (backend = daemon), so the daemon release locks its node too
+# Reticulum runs on 868 only: the 433 daemon's release locks no Reticulum node
 RELEASE_DAEMON = ["lock:claim.tcp.port.12323", "lock:claim.tcp.port.18083",
-                  "lock:claim.tcp.port.37428", "lock:claim.tcp.port.37429", "lock:claim.tcp.port.4242",   # reti B1
                   "lock:claim.tcp.port.7000",
                   "lock:claim.tcp.port.8080", "lock:claim.voice.ui-r1",       # DEC-W351: voice's UI claim; K8f: voice@r1's own
                   "lock:lifecycle.chat", "lock:lifecycle.daemon",
-                  "lock:lifecycle.graywolf", "lock:lifecycle.meshcom", "lock:lifecycle.reticulum",   # reti B1
+                  "lock:lifecycle.graywolf", "lock:lifecycle.meshcom",
                   "lock:lifecycle.voice",
                   "mutate:signal:loraham-daemon", "mutate:feed-floor:433"]
 FINAL = ["final:clear-restart-marker:kiss@r1", "final:stop-intent:['kiss@r1']"]      # K5: per instance

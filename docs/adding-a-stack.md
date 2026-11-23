@@ -220,7 +220,8 @@ The web console has the same actions per stack.
 
 1. Copy a similar `[[stack]]` block and rename `id` / `name` / `main`.
 2. Give each component the sections above, plus `requires_daemon_tx` and `band` (and `bands = ["433", "868"]`
-   for one that may run on either band; [TX safety](operations.md#tx-safety)).
+   for one that may run on either band; [TX safety](operations.md#tx-safety); a new band or a band taken away:
+   [adding a band](adding-a-band.md)).
 3. `lhpc install <id> --check` → `lhpc install <id> --source pinned --yes` → `lhpc build <id>` → `lhpc stack start <id>@<rid>`; read the typed
    outcomes.
 

@@ -16,8 +16,8 @@ from lhpc.core.services import ControllerService
 from seams import seed_framing_driver
 
 
-def _svc(tmp_path, r2=radios_fixture.R2):
-    radios_fixture.write(tmp_path, (radios_fixture.R1, r2))          # r1 on 433, r2 on 433 unless named
+def _svc(tmp_path, r2=radios_fixture.R2, r1=radios_fixture.R1):
+    radios_fixture.write(tmp_path, (r1, r2))                         # r1 on 433, r2 on 433 unless named
     seed_framing_driver(tmp_path)                                     # a Reticulum node built at the pins
     return ControllerService(system=FakeSystem().system, paths=Paths(runtime_root=tmp_path))
 
@@ -154,9 +154,12 @@ def test_a_post_record_whose_main_two_instances_claim_is_shown_for_neither(tmp_p
 
 def test_the_reticulum_internet_verdict_of_a_start_is_its_own_instances(tmp_path):
     # reticulum@r1 has the Internet interface off, @r2 on with a network name and no passphrase: a start of r2 is
-    # refused on r2's own settings, r1 plans. red on f6c9fe2c: both judged by the band's fallback instance (r1, off)
+    # refused on r2's own settings, r1 plans. red on f6c9fe2c: both judged by the band's fallback instance (r1, off).
+    # Two SPI boards on 868: Reticulum runs on 868 only.
+    from lhpc.core import radios
     from lhpc.core import reticulum_interfaces as ri
-    svc = _svc(tmp_path)
+    svc = _svc(tmp_path, r1=radios.Radio("r1", "a", "uputronics", "868", ce="ce0"),
+               r2=radios.Radio("r2", "b", "uputronics", "868", ce="ce1"))
     r1 = instances.parse_target(svc, "reticulum@r1", "start")[1]
     r2 = instances.parse_target(svc, "reticulum@r2", "start")[1]
     assert svc.save_config_bundle("reticulum", values={

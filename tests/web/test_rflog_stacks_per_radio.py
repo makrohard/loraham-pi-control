@@ -74,7 +74,7 @@ def test_without_any_radio_the_tree_rf_log_opens_r1s_file(tmp_path, web, sid, wr
 def test_reticulum_opens_each_radios_own_file(tmp_path, web):
     # OPEN-B (pick: as is): one node; B3b: each of its interfaces writes its own radio's file, like meshcore's
     c, _svc = _client(web, tmp_path)
-    assert _tree_rf_log(c, "reticulum")[1] == "r1/rf-reticulum.log"   # B3b: RF log per radio (plan reti v21 §1)
+    assert _tree_rf_log(c, "reticulum")[1] == "r2/rf-reticulum.log"   # its first radio: 868 only (r1 is 433)
     assert _tree_rf_log(c, "reticulum", "r2") == ("/logs/rns", "r2/rf-reticulum.log", "r2")   # B3b: RF log per radio (plan reti v21 §1)
 
 

@@ -230,10 +230,10 @@ def test_tx_identity_resolves_per_band(tmp_path):
     # a band-scoped local identity must identify the TX test on ITS band.
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
-    assert svc.stack_bands("voice") == ("433", "868")         # genuinely band-switchable
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/P"}, band="433").ok
-    assert svc.effective_identity("voice", "433") == "XX0XXA/P"
-    assert svc.effective_identity("voice", "868") == "XX0XXA"  # other band inherits global
+    assert svc.stack_bands("graywolf") == ("433", "868")      # genuinely band-switchable (Voice is 433-only)
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-1"}, band="433").ok
+    assert svc.effective_identity("graywolf", "433") == "XX0XXA-1"
+    assert svc.effective_identity("graywolf", "868") == "XX0XXA"  # other band inherits global
 
 
 # ===== external-audit regressions =====
@@ -355,20 +355,20 @@ def test_global_change_marks_running_inherited_stacks_restart_required(tmp_path,
 
 def test_start_identity_follows_the_implicit_launch_band(tmp_path, monkeypatch):
     # enforcement read the raw band argument while the launch resolved the
-    # running-band marker — voice with per-band identities was judged on the wrong band.
+    # running-band marker — a stack with per-band identities was judged on the wrong band (Graywolf, 433 + 868).
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "launch_band",
-                        lambda self, sid, default="": "868" if sid == "voice" else default)
+                        lambda self, sid, default="": "868" if sid == "graywolf" else default)
     # identity only on 433, running band 868, no global -> the 868 launch must REFUSE
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/P"},
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-1"},
                                   band="433").ok
-    res = svc.start("voice", apply=True)
+    res = svc.start("graywolf", apply=True)
     assert not res.ok and res.data.get("enforce_fields"), res.summary
     # reverse: identity on the RUNNING band -> enforcement passes (any later refusal is
     # not an identity refusal)
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/M"},
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-2"},
                                   band="868").ok
-    res = svc.start("voice", apply=True)
+    res = svc.start("graywolf", apply=True)
     assert "callsign is required" not in res.summary
     assert not res.data.get("enforce_fields")
 
@@ -452,13 +452,13 @@ def test_refusal_remedy_targets_the_refusing_band(tmp_path, monkeypatch):
     # same refusal repeated.
     svc = _svc(tmp_path)
     monkeypatch.setattr(type(svc), "launch_band",
-                        lambda self, sid, default="": "868" if sid == "voice" else default)
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/P"},
+                        lambda self, sid, default="": "868" if sid == "graywolf" else default)
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-1"},
                                   band="433").ok
-    res = svc.start("voice", apply=True)
+    res = svc.start("graywolf", apply=True)
     assert not res.ok and res.data.get("enforce_fields")
     assert [c.split("   #", 1)[0] for c in res.next_commands] == [
-        "lhpc config voice@r2 callsign YOURCALL"], res.next_commands   # the instance's key (K5; K8: no --band)
+        "lhpc config graywolf@r2 call YOURCALL-10"], res.next_commands   # the instance's key (K5; K8: no --band)
     # a bandless stack's hint stays without --band
     assert not any("--band" in c for c in svc._identity_config_hints("meshtastic"))
 
@@ -473,33 +473,30 @@ def _lite_voice_marker(svc, band="868"):
 def test_lite_interactive_marker_keeps_a_bandless_start_on_its_band(tmp_path, monkeypatch):
     # the interactive marker is Voice-on-Lite's only band record; a bandless
     # second start must judge identity AND plan daemon/locks/feed on that band — and a
-    # stale marker must never override a usable desktop GTK main.
+    # stale marker must never override a usable desktop GTK main. Voice runs on 433 only, so the marker's band is 433.
     svc = _svc(tmp_path)                                        # no GTK -> fallback active
-    _lite_voice_marker(svc, "868")
-    assert svc._launch_band_hint("voice", "") == "868"          # marker drives the hint
+    _lite_voice_marker(svc, "433")
+    assert svc._launch_band_hint("voice", "") == "433"          # marker drives the hint
     assert svc._launch_band_hint("voice", "433") == "433"       # explicit still wins
-    # identity judged on 868: a 433-only local value refuses; an 868 value passes
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/P"},
-                                  band="433").ok
+    # identity judged on 433: none refuses; a 433 value passes
     cleared = []
     monkeypatch.setattr(type(svc), "clear_daemon_feed",
                         lambda self, b, *a, **kw: cleared.append(b) or 0, raising=False)
     res = svc.start("voice", apply=True)
-    assert not res.ok and res.data.get("enforce_fields")        # refused ON 868
-    assert [c.split()[2] for c in res.next_commands if c.split()[:2] == ["lhpc", "config"]] == ["voice@r2"], \
-        res.next_commands                                                                       # 868's instance
+    assert not res.ok and res.data.get("enforce_fields")        # refused ON 433
+    assert [c.split()[2] for c in res.next_commands if c.split()[:2] == ["lhpc", "config"]] == ["voice@r1"], \
+        res.next_commands                                                                       # 433's instance
     assert cleared == []                                        # refusal before feed work
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/M"},
-                                  band="868").ok
+                                  band="433").ok
     res = svc.start("voice", apply=True)
     assert "callsign is required" not in res.summary
-    assert "433" not in cleared                                 # feed/locks scoped to 868
+    assert "868" not in cleared                                 # feed/locks never on 868
     # stale-marker guard: with a USABLE desktop GTK main the marker is ignored
     svc_d = _svc(tmp_path / "desk")
     monkeypatch.setattr(type(svc_d), "gui_fallback_active", lambda self, st: False)
-    _lite_voice_marker(svc_d, "868")
+    _lite_voice_marker(svc_d, "433")
     assert svc_d._launch_band_hint("voice", "") == ""           # falls back to primary
-
 
 def test_pending_journal_is_recovered_before_global_mutation_reads(tmp_path):
     # the setter previously read/patched a partially-written local.toml BEFORE
@@ -542,7 +539,7 @@ def test_global_change_sees_the_lite_fallback_and_preserves_build_markers(tmp_pa
     import json
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
-    _lite_voice_marker(svc, "868")                              # voice inheriting, marker 868
+    _lite_voice_marker(svc, "433")                              # voice inheriting, marker 433 (its one band)
     # chat: running with a PRE-EXISTING build marker
     monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: sid == "chat")
     mp = restart_required.marker_path(svc._paths, "chat@r1")
@@ -553,9 +550,9 @@ def test_global_change_sees_the_lite_fallback_and_preserves_build_markers(tmp_pa
     r = svc.set_operator_identity(callsign="XX0XXB")
     assert r.ok
     # voice fallback detected, band preserved in the warning
-    assert any("voice" in d and "868" in d for d in r.details), r.details
+    assert any("voice" in d and "433" in d for d in r.details), r.details
     assert svc.restart_required("voice") is not None
-    assert svc.restart_required("voice")["band"] == "868"
+    assert svc.restart_required("voice")["band"] == "433"
     # chat's build marker MERGED, not replaced: build > restart, params unioned, band kept
     m = svc.restart_required("chat")
     assert m["mode"] == "build" and m["band"] == "433"
@@ -620,15 +617,15 @@ def test_legacy_correction_executes_through_the_real_cli_on_the_refusing_band(tm
     cfgmod2.save_operator_config(Paths(runtime_root=tmp_path), "XX0XXA-12")   # legacy global
     svc._invalidate_config()
     monkeypatch.setattr(type(svc), "launch_band",
-                        lambda self, sid, default="": "868" if sid == "voice" else default)
-    ok, _f, msg = svc.enforce_identity("voice", svc._launch_band_hint("voice", ""))
+                        lambda self, sid, default="": "868" if sid == "graywolf" else default)
+    ok, _f, msg = svc.enforce_identity("graywolf", svc._launch_band_hint("graywolf", ""))
     assert ok is False
-    m = re.search(r"\((lhpc config voice@r2 \S+ \S+)\)", msg)
+    m = re.search(r"\((lhpc config graywolf@r2 \S+ \S+)\)", msg)
     assert m, msg                                               # the refusing band's instance IN the text (K8)
     monkeypatch.setenv("LHPC_RUNTIME_ROOT", str(tmp_path))
     assert main(m.group(1).split()[1:]) == 0                    # executed through the real CLI
     svc._invalidate_config()
-    assert svc.enforce_identity("voice", "868")[0] is True      # the refusal clears
+    assert svc.enforce_identity("graywolf", "868")[0] is True   # the refusal clears
 
 
 # ===== closure RE-audit regressions (@b3f42bb findings) =====
@@ -639,9 +636,9 @@ def test_marker_dismissed_mid_start_cannot_move_the_operation_band(tmp_path, mon
     # the band everything was planned/locked/cleared for. The resolved CONCRETE band now
     # travels into _start_impl.
     svc = _svc(tmp_path)
-    _lite_voice_marker(svc, "868")
+    _lite_voice_marker(svc, "433")                              # Voice's one band
     assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/P"},
-                                  band="868").ok                # identity ONLY on 868
+                                  band="433").ok                # identity ONLY on 433, no global
     seen = {}
     real_impl = type(svc)._start_impl
 
@@ -655,8 +652,8 @@ def test_marker_dismissed_mid_start_cannot_move_the_operation_band(tmp_path, mon
         return real_impl(self, target, apply=apply, **kw)
     monkeypatch.setattr(type(svc), "_start_impl", impl_after_dismiss)
     res = svc.start("voice", apply=True)
-    assert seen.get("band") == "868"                            # immutable resolved band
-    # identity was approved on 868 and MUST NOT be re-refused on the primary after the
+    assert seen.get("band") == ""        # immutable resolved band: Voice has one band, so none is carried
+    # identity was approved on 433 and MUST NOT be re-refused after the
     # marker vanished (any later failure is not an identity refusal)
     assert "callsign is required" not in res.summary
     assert not res.data.get("enforce_fields"), res.summary
@@ -798,7 +795,7 @@ def test_restart_panel_and_restart_agree_on_the_band_with_a_stale_marker(tmp_pat
     # unresolved "" — public start()'s dry-run branch returns before the operation band is resolved,
     # and _start_impl resolves it itself — so the plan is anchored on its rendered band as well.
     assert "868" not in seen, seen
-    assert seen[-1] == "433", seen                                 # the LAUNCH band, resolved once
+    assert seen[-1] == "", seen          # the LAUNCH band, resolved once: Voice has one band, so none is carried
     assert "868" not in " ".join(plan.details), plan.details
     assert svc._stored_param_value("voice", "file", "loraham-voice",
                                    "callsign", "868") == "XX0XXA/868"   # NOT cleared
@@ -810,11 +807,11 @@ def test_restart_band_is_resolved_under_admission_not_before(tmp_path, monkeypat
     # operation started the stack on 868 in that window, the identity was saved on the primary 433
     # while the inner restart re-resolved 868 and stopped/preflighted/launched there — store,
     # operator request and on-air identity all disagreeing. The band is now resolved ONCE, under
-    # admission, and carried concretely.
+    # admission, and carried concretely. (Graywolf, 433 + 868: Voice is 433-only.)
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
-    b433 = svc._paths.runtime_root / "config" / "stacks" / "voice@r1.toml"      # K6: voice@r1's own (433)
-    assert svc.save_config_bundle("voice", values={"file_sf": "7"}, band="433").ok and b433.is_file()   # a real file
+    b433 = svc._paths.runtime_root / "config" / "stacks" / "graywolf@r1.toml"   # K6: graywolf@r1's own (433)
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-4"}, band="433").ok and b433.is_file()   # a real file
     seen = {}
     real_guard = type(svc)._admission_guard
     def guard(self, op, target=""):
@@ -833,7 +830,7 @@ def test_restart_band_is_resolved_under_admission_not_before(tmp_path, monkeypat
         return real_impl(self, target, **kw)
     monkeypatch.setattr(type(svc), "_start_impl", impl)
     before = b433.read_bytes() if b433.exists() else None
-    assert not svc.restart("voice", apply=True).ok  # the daemon is not installed here: the start leg fails
+    assert not svc.restart("graywolf", apply=True).ok  # the daemon is not installed here: the start leg fails
     assert seen["stop"] == "868", seen        # the band the operation runs on is the one it stops
     assert seen["launch"] == "868", seen      # ...and the same band it launches
     assert (b433.read_bytes() if b433.exists() else None) == before   # 433 byte-identical
@@ -972,17 +969,17 @@ def test_marker_is_written_when_the_stack_goes_live_while_the_save_waits(tmp_pat
 
 def test_a_change_on_another_band_does_not_mark_the_live_band(tmp_path, monkeypatch):
     # AUDIT-FOUND: Voice live on 868, the 433 store edited -> a marker was written for 433 although
-    # the configuration the live instance reads did not change at all.
+    # the configuration the live instance reads did not change at all. (Graywolf, 433 + 868: Voice is 433-only.)
     svc = _svc(tmp_path)
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/868"}, band="868").ok
-    monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: sid == "voice")
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-8"}, band="868").ok
+    monkeypatch.setattr(type(svc), "stack_running", lambda self, sid: sid == "graywolf")
     monkeypatch.setattr("lhpc.core.instances.instance_runs", lambda svc, comp, inst, band: inst.band == "868")   # K6: an instance is live by its own process
     monkeypatch.setattr(type(svc), "launch_band", lambda self, sid, d="": "868")
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/433"}, band="433").ok
-    assert svc.restart_required("voice") is None, "the live 868 config did not change"
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-4"}, band="433").ok
+    assert svc.restart_required("graywolf") is None, "the live 868 config did not change"
     # ...while a change on the LIVE band still marks
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/8"}, band="868").ok
-    m = svc.restart_required("voice")
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-9"}, band="868").ok
+    m = svc.restart_required("graywolf")
     assert m is not None and m["band"] == "868", m
 
 
@@ -1391,17 +1388,17 @@ def test_a_stored_placeholder_identity_is_refused_by_the_plan(tmp_path):
 
 
 def test_web_start_judges_the_instances_own_store(tmp_path, monkeypatch):
-    # W2: a dashboard POST names its instance and is judged on that radio's store: voice@r2 (868) with a 433-only
+    # W2: a dashboard POST names its instance and is judged on that radio's store: graywolf@r2 (868) with a 433-only
     # identity is refused and the Settings row of that instance is marked.
     svc = _svc(tmp_path)
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/P"},
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-1"},
                                   band="433").ok                # 433-only identity
     client, tok = _web(svc, monkeypatch)
-    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice@r2"})
-    assert resp.status_code == 302 and "bad=f_callsign" in resp.location
+    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "graywolf@r2"})
+    assert resp.status_code == 302 and "bad=c_call" in resp.location
     assert "radio=r2" in resp.location                     # the refused store, not the primary
-    assert svc.identity_resolution("voice", "433")[0]["source"] == "local"
-    assert svc.identity_resolution("voice", "868")[0]["source"] == "missing"
+    assert svc.identity_resolution("graywolf", "433")[0]["source"] == "local"
+    assert svc.identity_resolution("graywolf", "868")[0]["source"] == "missing"
 
 
 def test_web_restart_identity_refusal_happens_before_any_stop(tmp_path, monkeypatch):
@@ -1416,14 +1413,12 @@ def test_web_restart_identity_refusal_happens_before_any_stop(tmp_path, monkeypa
 
 @pytest.mark.slow                   # timed wait (M0: most of its time is a real wait)
 def test_web_instance_restart_is_one_band_end_to_end(tmp_path, monkeypatch):
-    # W2: a Web restart of voice@r2 runs on r2's 868 — the 433 store (voice@r1's) is untouched.
+    # W2: a Web restart of graywolf@r2 runs on r2's 868 — the 433 store (graywolf@r1's) is untouched.
     svc = _svc(tmp_path)
     assert svc.set_operator_identity(callsign="XX0XXA").ok
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/868",
-                                                   "file_sf": "11"}, band="868").ok
-    assert svc.save_config_bundle("voice", values={"file_callsign": "XX0XXA/433",
-                                                   "file_sf": "7"}, band="433").ok
-    b433 = svc._paths.runtime_root / "config" / "stacks" / "voice@r1.toml"      # K6: voice@r1's own (433)
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-8"}, band="868").ok
+    assert svc.save_config_bundle("graywolf", values={"call": "XX0XXA-4"}, band="433").ok
+    b433 = svc._paths.runtime_root / "config" / "stacks" / "graywolf@r1.toml"   # K6: graywolf@r1's own (433)
     before = b433.read_bytes()
     seen = {}
     real_impl = type(svc)._start_impl
@@ -1432,7 +1427,7 @@ def test_web_instance_restart_is_one_band_end_to_end(tmp_path, monkeypatch):
         return real_impl(self, target, **kw)
     monkeypatch.setattr(type(svc), "_start_impl", impl)
     client, tok = _web(svc, monkeypatch)
-    resp = client.post("/action", data={"_csrf": tok, "op": "restart", "target": "voice@r2"})
+    resp = client.post("/action", data={"_csrf": tok, "op": "restart", "target": "graywolf@r2"})
     assert resp.status_code == 302                                # runs directly
     assert seen.get("launch") == "868", seen
     assert b433.read_bytes() == before                            # 433 byte-identical
@@ -1450,11 +1445,11 @@ def test_a_confirmed_form_names_its_instance_never_a_band(tmp_path, monkeypatch)
                         started.append((band, rid, plan_hash)) or (f"web-{op}-{target}-{rid}.log", "admitted", ""))
     client, tok = _web(svc, monkeypatch)
     for op, extra in (("start", {}), ("restart", {"cascade": "yes"})):
-        resp = client.post("/action", data={"_csrf": tok, "op": op, "target": "voice@r1", "band": "433",
+        resp = client.post("/action", data={"_csrf": tok, "op": op, "target": "graywolf@r1", "band": "433",
                                             "confirmed": "yes", **extra})
         assert resp.status_code == 400, op
     assert started == []
-    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "voice@r2", "confirmed": "yes",
+    resp = client.post("/action", data={"_csrf": tok, "op": "start", "target": "graywolf@r2", "confirmed": "yes",
                                         "plan_hash": "h"})
     assert resp.status_code == 302 and started == [("", "r2", "h")]      # G4-web: its radio, no band; the confirmed plan
 

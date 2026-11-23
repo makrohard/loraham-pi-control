@@ -1,6 +1,7 @@
 """The Reticulum node's config is node-wide (plan reti v21 §1d, B3 design note v2): one `[[LoRa <rid>]]` section per
 interface — the owner's, enabled, and each intended member's (its saved `member_of`), rendered disabled from its OWN
-settings and band — and one section of every other kind. A radio that is a member never starts as an owner. Box H:
+settings — and one section of every other kind; a 433 radio is never one (Reticulum runs on 868 only). A radio that
+is a member never starts as an owner. Box H:
 r1 loraham 433, r2 loraham 868 (SPI), r3 CH341-RFM98 433 and r4 PineDio 868 (USB)."""
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ import pytest
 import radios_fixture
 
 from lhpc.adapters.cli import main as cli
-from lhpc.core import instances
+from lhpc.core import instances, radios
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ActionResult, ControllerService
@@ -59,14 +60,14 @@ def test_members_render_disabled_from_their_own_settings_and_band(tmp_path):
     svc = _svc(tmp_path, (*BOX_H[:2], dataclasses.replace(BOX_H[2], enabled=False), BOX_H[3]))
     _save(tmp_path, "r4", member_of="r2", dp_FREQ="868.300")             # r4 (868, USB, daemon): a member of r2; B2: its
     #                                                                      radio values are its own daemon panel's
-    _save(tmp_path, "r1", member_of="r2")                                   # r1 (433): a member on the other band
+    _save(tmp_path, "r1", member_of="r2")                                   # r1 (433): absent, Reticulum runs on 868 only
     _save(tmp_path, "r3", member_of="r2")                                   # r3: disabled radio -> absent
     text = _render(tmp_path, svc)
     # red-before (466de981): no member section at all
-    assert _sections(text) == ["LoRa r2", "LoRa r1", "LoRa r4", "Client access", "Internet"]
-    owner, r1, r4 = _keys(text, "r2"), _keys(text, "r1"), _keys(text, "r4")
-    assert (owner["enabled"], r1["enabled"], r4["enabled"]) == ("yes", "no", "no")
-    assert (r1["band"], r1["frequency"], r4["band"], r4["frequency"]) == ("433", "434500000", "868", "868300000")
+    assert _sections(text) == ["LoRa r2", "LoRa r4", "Client access", "Internet"]
+    owner, r4 = _keys(text, "r2"), _keys(text, "r4")
+    assert (owner["enabled"], r4["enabled"]) == ("yes", "no")
+    assert (r4["band"], r4["frequency"]) == ("868", "868300000")
     assert owner["frequency"] == "868500000" and r4["type"] == "LoRaDaemonInterface"
     assert text.count("# Attach point for external clients") == 1            # the next section's comment stays its own
 
@@ -90,13 +91,14 @@ def test_every_daemon_interface_the_node_renders_has_the_keys_the_interface_requ
 
 
 def test_a_member_of_another_node_or_an_spi_member_on_a_usb_radio_is_absent(tmp_path):
-    svc = _svc(tmp_path)
-    _save(tmp_path, "r3", member_of="r2")                                   # the one eligible member
-    _save(tmp_path, "r1", member_of="r3")                                   # another owner's member
-    _save(tmp_path, "r4", member_of="r2", backend="spi")                    # spi on a USB radio: not eligible (C2)
+    usb868 = [radios.Radio(r, f"pine {r}", "pinedio-usb-1262", "868", usb_serial=f"PINE000{r[1]}") for r in ("r5", "r6")]
+    svc = _svc(tmp_path, (*BOX_H, *usb868))                                 # 868 radios: Reticulum runs on 868 only
+    _save(tmp_path, "r4", member_of="r2")                                   # the one eligible member
+    _save(tmp_path, "r5", member_of="r4")                                   # another owner's member
+    _save(tmp_path, "r6", member_of="r2", backend="spi")                    # spi on a USB radio: not eligible (C2)
     _save(tmp_path, "r2", member_of="r2")                                   # the owner itself (C1 b)
     # red-before (466de981): no member section at all
-    assert _sections(_render(tmp_path, svc)) == ["LoRa r2", "LoRa r3", "Client access", "Internet"]
+    assert _sections(_render(tmp_path, svc)) == ["LoRa r2", "LoRa r4", "Client access", "Internet"]
 
 
 @pytest.fixture
@@ -140,9 +142,9 @@ def test_one_interface_block_is_swapped_removed_or_added_and_nothing_else_moves(
 
 def test_each_interface_writes_its_own_radios_rf_log(tmp_path):
     svc = _svc(tmp_path)
-    _save(tmp_path, "r1", member_of="r2")
+    _save(tmp_path, "r4", member_of="r2")                                   # r4 (868, daemon): Reticulum runs on 868 only
     text = _render(tmp_path, svc)
     # red-before (f429a19c): every section named the node's one file logs/rf-reticulum.log
     assert _keys(text, "r2")["rf_log_path"] == f"{tmp_path}/logs/r2/rf-reticulum.log"
-    assert _keys(text, "r1")["rf_log_path"] == f"{tmp_path}/logs/r1/rf-reticulum.log"
-    assert (tmp_path / "logs" / "r2").is_dir() and (tmp_path / "logs" / "r1").is_dir()   # the interface opens, never makes it
+    assert _keys(text, "r4")["rf_log_path"] == f"{tmp_path}/logs/r4/rf-reticulum.log"
+    assert (tmp_path / "logs" / "r2").is_dir() and (tmp_path / "logs" / "r4").is_dir()   # the interface opens, never makes it

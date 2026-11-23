@@ -474,11 +474,11 @@ class StopOpsMixin:
                                       cascade=cascade, inst=inst)
         # A non-daemon restart with NO explicit band restarts on the band it is ACTUALLY running on
         # (not the configured default) — resolve it BEFORE the guard so locking and the restart use
-        # the same band (KISS/Voice on 868, restart no-band → lock 868 only, not 433). It uses THE
+        # the same band (KISS on 868, restart no-band → lock 868 only, not 433). It uses THE
         # ONE resolver — the same explicit → running → ACTIVE-fallback-marker → primary rule as
         # start() and the identity form (never `_effective_band`, which takes an interactive
-        # marker UNCONDITIONALLY: a stopped Voice with a stale 868 marker would read the 433
-        # identity on the panel and write it to the 868 store — persisted config drift).
+        # marker UNCONDITIONALLY: a stopped Voice with a stale pre-0.14.0 868 marker would read the
+        # 433 identity on the panel and write it to the 868 store — persisted config drift).
         # Hold saved configuration STABLE from PREFLIGHT through the whole stop→start transition, so
         # a valid target is never stopped and then rejected by a concurrently-mutated config (LOCK
         # ORDER: config guard BEFORE the lifecycle/resource lock; re-entrant with _restart_impl).

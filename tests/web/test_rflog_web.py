@@ -281,30 +281,30 @@ def test_the_dashboard_links_the_bands_rf_logs(tmp_path, web, monkeypatch, daemo
                                       ("/rflog/clear-all", {})])
 def test_the_radio_follows_from_the_dashboard_through_the_page_and_its_bottom_forms(tmp_path, web, csrf,
                                                                                     url, data, daemon_record, monkeypatch):
-    """W4: Reticulum declares both bands and defaults to 868. Running on 433 (r1), its RF-log link on r1's card,
-    the page it opens, and every bottom action's redirect stay on r1 — the radio is carried, never re-guessed."""
+    """W4: Reticulum runs on 868 only (r2 on the default list). Running on r2, its RF-log link on r2's card, the page
+    it opens, and every bottom action's redirect stay on r2 — the radio is carried."""
     def factory():
         svc = ControllerService(
-            system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["loraham-rns-node", "--config", "x"]},
-                              unix_replies={"/tmp/loraconf-r1.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
+            system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "868", "--id", "r2"], 200: ["loraham-rns-node", "--config", "x"]},
+                              unix_replies={"/tmp/loraconf-r2.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
             paths=Paths(runtime_root=tmp_path))
         # The band a running instance gives (K6: no band marker; a real start needs a radio)
-        svc.launch_band = lambda sid, d="": "433" if sid == "reticulum" else d   # K6: its running band (13.12.5: no marker)
+        svc.launch_band = lambda sid, d="": "868" if sid == "reticulum" else d   # K6: its running band (13.12.5: no marker)
         return svc
-    daemon_record("r1", "433")                   # the RF link sits in r1's recorded daemon row
-    real = instances.recorded_bands               # B3b: r1's launch record (433): its link is its file, like meshtastic's
-    monkeypatch.setattr(instances, "recorded_bands", lambda svc, sid: {"r1": "433"} if sid == "reticulum" else real(svc, sid))
+    daemon_record("r2", "868")                   # the RF link sits in r2's recorded daemon row
+    real = instances.recorded_bands               # B3b: r2's launch record (868): its link is its file, like meshtastic's
+    monkeypatch.setattr(instances, "recorded_bands", lambda svc, sid: {"r2": "868"} if sid == "reticulum" else real(svc, sid))
     c = web(service_factory=factory)
-    col433 = parse(c.get("/").get_data(as_text=True)).find("div", **{"data-radio-band": "433"})[0]
-    link = _links(parse(c.get("/").get_data(as_text=True)).within(col433), "rns", "r1/rf-reticulum.log", "r1")   # B3b: RF log per radio (plan reti v21 §1)
+    col868 = parse(c.get("/").get_data(as_text=True)).find("div", **{"data-radio-band": "868"})[0]
+    link = _links(parse(c.get("/").get_data(as_text=True)).within(col868), "rns", "r2/rf-reticulum.log", "r2")   # B3b: RF log per radio (plan reti v21 §1)
     assert len(link) == 1
     doc = parse(c.get(link[0]["href"]).get_data(as_text=True))
-    assert [a.text for a in _row(doc, "RF log radios").find("a", **{"aria-current": "page"})] == ["r1 · 433"]
-    assert doc.within(doc.by_id("rflog-switch")).field_default("radio") == "r1"
-    r = c.post(url, data={"_csrf": csrf(c), "job": "r1/rf-reticulum.log", "radio": "r1", **data})   # B3b: RF log per radio (plan reti v21 §1)
+    assert [a.text for a in _row(doc, "RF log radios").find("a", **{"aria-current": "page"})] == ["r2 · 868"]
+    assert doc.within(doc.by_id("rflog-switch")).field_default("radio") == "r2"
+    r = c.post(url, data={"_csrf": csrf(c), "job": "r2/rf-reticulum.log", "radio": "r2", **data})   # B3b: RF log per radio (plan reti v21 §1)
     loc = urlsplit(r.headers["Location"])
     assert r.status_code == 302 and loc.path == "/logs/rns"
-    assert parse_qs(loc.query) == {"job": ["r1/rf-reticulum.log"], "radio": ["r1"]}   # B3b: RF log per radio (plan reti v21 §1)
+    assert parse_qs(loc.query) == {"job": ["r2/rf-reticulum.log"], "radio": ["r2"]}   # B3b: RF log per radio (plan reti v21 §1)
 
 
 # ---- the viewer's records and the Decrypt toggle -----------------------------------------------
@@ -419,3 +419,37 @@ def test_a_running_stacks_rf_log_link_and_page_name_the_radio_it_runs_on(tmp_pat
     assert len(_links(doc, "rns", "r2/rf-reticulum.log", "r2")) == 1   # B3b: RF log per radio (plan reti v21 §1)
     page = parse(c.get("/logs/rns?job=r2/rf-reticulum.log").get_data(as_text=True))   # B3b: RF log per radio (plan reti v21 §1)
     assert [a.text for a in _row(page, "RF log radios").find("a", **{"aria-current": "page"})] == ["r2 · 868"]
+
+
+@pytest.mark.parametrize("url,data", [("/stacks/meshtastic/rflog", {"value": "on", "from": "logs"}),
+                                      ("/rflog/all", {"value": "on"}), ("/logs/meshtastic/clear", {}),
+                                      ("/rflog/clear-all", {})])
+def test_a_stack_on_its_non_default_band_keeps_its_radio_through_the_page_and_its_bottom_forms(tmp_path, web, csrf,
+                                                                                               url, data,
+                                                                                               daemon_record,
+                                                                                               monkeypatch):
+    """W4: Meshtastic declares both bands and defaults to 868. Running on 433 (r1), its RF-log link on r1's card,
+    the page it opens, and every bottom action's redirect stay on r1 — the radio is carried, never re-guessed toward
+    the stack default (the case Reticulum carried before it ran on 868 only)."""
+    def factory():
+        svc = ControllerService(
+            system=FakeSystem(cmdlines_data={100: ["loraham_daemon", "--radio", "433", "--id", "r1"], 200: ["meshtasticd"]},
+                              unix_replies={"/tmp/loraconf-r1.sock": b"STATUS RADIO=READY TXMODE=MANAGED\n"}).system,
+            paths=Paths(runtime_root=tmp_path))
+        launch_band_fixture.set_launch_band(svc, "meshtastic", "433")   # K6: its running band (13.12.5: no marker)
+        return svc
+    real = instances.recorded_bands
+    monkeypatch.setattr(instances, "recorded_bands",   # meshtastic@r1's launch record (433): its link is its file
+                        lambda svc, sid: {"r1": "433"} if sid == "meshtastic" else real(svc, sid))
+    daemon_record("r1", "433")                   # the RF link sits in r1's recorded daemon row
+    c = web(service_factory=factory)
+    col433 = parse(c.get("/").get_data(as_text=True)).find("div", **{"data-radio-band": "433"})[0]
+    link = _links(parse(c.get("/").get_data(as_text=True)).within(col433), "meshtastic", "r1/rf-meshtastic.log", "r1")
+    assert len(link) == 1
+    doc = parse(c.get(link[0]["href"]).get_data(as_text=True))
+    assert [a.text for a in _row(doc, "RF log radios").find("a", **{"aria-current": "page"})] == ["r1 · 433"]
+    assert doc.within(doc.by_id("rflog-switch")).field_default("radio") == "r1"
+    r = c.post(url, data={"_csrf": csrf(c), "job": "r1/rf-meshtastic.log", "radio": "r1", **data})
+    loc = urlsplit(r.headers["Location"])
+    assert r.status_code == 302 and loc.path == "/logs/meshtastic"
+    assert parse_qs(loc.query) == {"job": ["r1/rf-meshtastic.log"], "radio": ["r1"]}

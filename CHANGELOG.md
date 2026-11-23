@@ -12,6 +12,8 @@
   the keys of its loraham_kiss_tnc.conf.example (sf, bw, cr, syncword, ldro, TX timings) are unread: shipped defaults.
 - A stick next to the board's radio: two radios on one band each run their own daemon: address one by its radio id
   (`lhpc stack stop daemon@rN`).
+- Voice runs on 433 radios only and Reticulum on 868 radios only. Before upgrading, stop Voice on an 868 radio and
+  Reticulum on a 433 radio; afterwards they have no instance there (their old settings files stay unused).
 - Stack instances: every stack runs as `<stack>@<rid>` on each radio of its bands (Reticulum once per box), started,
   stopped and restored alone; ports base + 133 × (n − 1), r1 keeps today's.
 - Every stack verb, `lhpc kill` and the console's Kill name the instance; `--band` is gone (`lhpc config kiss@r2 …`,

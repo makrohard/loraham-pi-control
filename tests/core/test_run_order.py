@@ -728,7 +728,7 @@ def test_daemon_stop_cascade_stops_dependents_before_daemon(tmp_path, monkeypatc
 # --- A2: client stop releases the ACTUAL daemon band ----------------------------------------
 
 @pytest.mark.parametrize("stack,band,sock,other", [
-    pytest.param("voice", "868", "/tmp/loraconf-r2.sock", "433", id="voice-ran-on-868"),
+    pytest.param("kiss", "868", "/tmp/loraconf-r2.sock", "433", id="kiss-ran-on-868"),     # Voice is 433-only
     pytest.param("kiss", "433", "/tmp/loraconf-r1.sock", "868", id="kiss-ran-on-433"),
 ])
 def test_client_release_actual_band(tmp_path, stack, band, sock, other):
@@ -896,9 +896,9 @@ def test_kiss_868_restart_locks_868(tmp_path):
     assert "claim.loraham.radio.r2" in _keys(svc, "restart", "kiss", band="868")
 
 
-def test_voice_433_restart_to_868_locks_both(tmp_path):
-    svc = _svc(tmp_path); launch_band_fixture.set_launch_band(svc, "voice", "433")
-    keys = _keys(svc, "restart", "voice", band="868")
+def test_kiss_433_restart_to_868_locks_both(tmp_path):
+    svc = _svc(tmp_path); launch_band_fixture.set_launch_band(svc, "kiss", "433")     # Voice is 433-only
+    keys = _keys(svc, "restart", "kiss", band="868")
     assert "claim.loraham.radio.r1" in keys and "claim.loraham.radio.r2" in keys
 
 
@@ -956,9 +956,9 @@ def test_daemon_cascade_both_bands_no_inner_release(tmp_path, monkeypatch):
 def test_standalone_client_releases_daemon_once(tmp_path, monkeypatch):
     svc = ControllerService(system=FakeSystem(
         unix_replies={"/tmp/loraconf-r2.sock": _RDYP1}).system, paths=Paths(runtime_root=tmp_path))
-    launch_band_fixture.set_launch_band(svc, "voice", "868")
+    launch_band_fixture.set_launch_band(svc, "kiss", "868")                      # Voice is 433-only
     calls = _spy_stop(monkeypatch)
-    assert svc.stop("voice", apply=True).ok
+    assert svc.stop("kiss", apply=True).ok
     assert [c for c in calls if c[0] == "daemon"] == [("daemon", "868", True)]   # released once, on 868
 
 

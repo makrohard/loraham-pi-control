@@ -42,7 +42,7 @@ def test_restart_reraises_optional_components_that_were_running(tmp_path, monkey
     calls = _isolate(monkeypatch, svc, ["meshchat"])
     res = svc.restart("reticulum", apply=True)
     assert res.ok, res.summary
-    assert calls == [("stop", "reticulum"), ("start", "reticulum", "868"), ("start", "meshchat", "868")]
+    assert calls == [("stop", "reticulum"), ("start", "reticulum", ""), ("start", "meshchat", "")]   # one band: none carried
     assert "meshchat" in res.summary
     assert any("[optional] meshchat: was running" in d for d in res.details)
 
@@ -77,8 +77,8 @@ def test_restart_reraises_only_what_the_stack_start_did_not_bring_back(tmp_path,
                         lambda self, t: seq.pop(0) if seq else [])
     res = svc.restart("reticulum", apply=True)
     assert res.ok, res.summary
-    assert calls == [("stop", "reticulum"), ("start", "reticulum", "868"),
-                     ("start", "sideband", "868")]
+    assert calls == [("stop", "reticulum"), ("start", "reticulum", ""),          # one band (868): none carried
+                     ("start", "sideband", "")]
 
 
 def test_the_plan_lists_running_optional_components(tmp_path, monkeypatch):

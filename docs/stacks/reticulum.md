@@ -1,9 +1,9 @@
 # Stack: Reticulum (RNS)
 
-A [Reticulum](https://reticulum.network) node on its radio's band (868 or 433 MHz), reaching the radio through
+A [Reticulum](https://reticulum.network) node on its radio's 868 MHz band (Reticulum runs on 868 only), reaching the radio through
 the LoRaHAM daemon (`backend = daemon`, the default, any radio) or driving an SPI radio directly (`backend =
 spi`). No rnoded, no RNode firmware, no KISS layer: one LoRa packet is one RNS packet. The interfaces are
-[loraham-rns-interface](https://github.com/makrohard/loraham-rns-interface)'s. One node per box; further radios
+[loraham-rns-interface](https://github.com/makrohard/loraham-rns-interface)'s. One node per box; further 868 radios
 join it — [Radios of one node](#radios-of-one-node).
 
 | | |
@@ -14,7 +14,7 @@ join it — [Radios of one node](#radios-of-one-node).
 | Run | `.venv/bin/loraham-rns-node --config <runtime>/state/reticulum --interface "LoRa <rid>" --ready-file <runtime>/state/reticulum/ready --client-allow <allow-list>` — it exits rather than staying up without a radio |
 | Endpoints | shared instance `127.0.0.1:37428` · instance control `:37429` · client access `:4242` · optional outbound TCP to an internet peer (no listener) · MeshChat `127.0.0.1:8790` (via the LHPC proxy) · readiness = the `ready` file, written only after the node owns the instance **and** the radio is online |
 | Config | `<runtime>/state/reticulum/config` (0400) from `lhpc/data/bases/reticulum.conf`, regenerated on every start — change it through lhpc. Read-only even to its owner, so a client that offers to edit interfaces cannot; lhpc replaces it by rename |
-| Resources | `tcp.port.37428` / `.37429` / `.4242` / `.8790` exclusive; `daemon`: `loraham.daemon-socket.<radio>` consumer; `spi`: `loraham.radio.868` + `.433` exclusive · `spi.bus.0` cooperative · `spi.bus.0.unlocked` exclusive |
+| Resources | `tcp.port.37428` / `.37429` / `.4242` / `.8790` exclusive; `daemon`: `loraham.daemon-socket.<radio>` consumer; `spi`: `loraham.radio.868` exclusive · `spi.bus.0` cooperative · `spi.bus.0.unlocked` exclusive |
 | System | with `backend = spi`: `/dev/spidev0.0` (soft chip selects) or `/dev/spidev0.0`/`0.1` (kernel chip selects, [deps](../cli.md#deps)); `spi` + `gpio` groups; `python3-libgpiod`, `python3-spidev` |
 | State | `state/reticulum` (transport identity, path tables, config), `state/meshchat`, `state/nomadnet`, `state/lxmd`, `state/sideband` (their LXMF identities = the addresses contacts know). Updates and `uninstall` keep them; `lhpc clean reticulum --purge` removes them, so a reinstall gets new addresses |
 | Install channel | source only |
@@ -38,11 +38,11 @@ join it — [Radios of one node](#radios-of-one-node).
 | setting | default | notes |
 |---|---|---|
 | `backend` | `daemon` | per radio: `daemon` (through the LoRaHAM daemon, any radio) or `spi` (the direct driver, SPI radios only); a save is refused while that radio's interface runs and for `spi` on a USB radio; it takes effect at the next start |
-| `frequency` | 868 500 000 Hz / 434 500 000 Hz | `backend = spi` only (these four rows): with `backend = daemon` the radio's values are on its **Daemon radio parameters** panel ([daemon](daemon.md)); per band — see [Band limits](#band-limits) |
+| `frequency` | 868 500 000 Hz | `backend = spi` only (these four rows): with `backend = daemon` the radio's values are on its **Daemon radio parameters** panel ([daemon](daemon.md)); see [Band limits](#band-limits) |
 | `bandwidth` · `spreadingfactor` · `codingrate` | 125 000 Hz · 8 · 5 | BW 62.5–500 kHz, SF 7–12 (SF6 needs implicit-header mode, unsupported), CR 4/5–4/8 |
-| `txpower` | 14 dBm (868) / 10 dBm (433) | the driver refuses anything above the band policy: 14 dBm on 868, 10 dBm on 433 |
+| `txpower` | 14 dBm | the driver refuses anything above the band policy: 14 dBm on 868 |
 | `rnode_framing` | yes | the RNode firmware's air format, so LHPC boxes and RNode devices hear each other: the driver adds the RNode header byte to every frame, splits packets at 254 bytes and programs the RNode preamble for the SF/BW (18 at SF8/BW125; an SX127x hears an RNode only with at least that). A framed box and a bare box cannot hear each other: every box of a link uses the same setting (`no` = the bare format of LHPC before 0.14.0). The start refuses, before anything is stopped, while the built driver predates the switch (`lhpc update reticulum --source pinned --yes` + `lhpc build reticulum --yes`). In the RF log a split packet is two lines; Decrypt strips and reassembles them |
-| `airtime_limit_short` / `airtime_limit_long` | 868: 33 % (15 s) / 1 % (1 h) · 433: 33 % / 10 % | advanced — the short window is a burst guard (Reticulum's RNode example value); the long one is the legal duty cycle |
+| `airtime_limit_short` / `airtime_limit_long` | 33 % (15 s) / 1 % (1 h) | advanced — the short window is a burst guard (Reticulum's RNode example value); the long one is the legal duty cycle |
 | `rns_allow` | `127.0.0.1` | client-access allow-list; drives the managed firewall |
 | `enable_transport` | `No` | relay OTHER nodes' traffic between this node's interfaces — see [Internet and transport](#internet-and-transport) |
 | `rf_log` | on | `logs/rf-reticulum.log` at the shared LoRa interface (MeshChat's and relayed traffic included; no separate MeshChat log): every packet received (RSSI/SNR) or sent (`ok` on the radio's TX-done; `unconfirmed` when the window elapsed — the airtime was charged and it may have gone out; a duty-dropped packet writes nothing). Raw Reticulum packets: sizes, timing and signal, not contents. Read at the next start; Decrypt: [maintenance](../maintenance.md#rf-logs) |
@@ -63,7 +63,7 @@ come from `lhpc hardware`, not settings: a wrong PA or TCXO value can damage the
 
 ## Radios of one node
 
-The radio Reticulum is started on owns the node (`[[LoRa <rid>]]` in its config). A Start on another radio while
+The radio Reticulum is started on owns the node (`[[LoRa <rid>]]` in its config). A Start on another 868 radio while
 the node runs asks to connect it instead — live, no restart: `lhpc stack start reticulum@<rid> --join --yes`, or
 Connect on the radio's card. Its card then says "Connected to the Reticulum node on <owner>"; its Stop
 (Disconnect) detaches it and the node keeps running. A radio that should be connected and is not says "Not
@@ -78,9 +78,9 @@ The direct driver's (`backend = spi`) boards; with `backend = daemon` the radio 
 
 | `lhpc hardware` | bands | chip | driver profile |
 |---|---|---|---|
-| `loraham` | 433 + 868 | SX1278 / SX1276 | RESET wired (GPIO 5 / 6); tested on the air |
-| `uputronics` (and `-433` / `-868`) | 433 / 868 | SX127x | no RESET line — soft reset; tested on the air |
-| `waveshare-433` | 433 | SX1262 | tested on the air |
+| `loraham` | 868 (its 433 module: not usable for Reticulum) | SX1278 / SX1276 | RESET wired (GPIO 5 / 6); tested on the air |
+| `uputronics` (and `-868`) | 868 (433 modules and `-433`: not usable for Reticulum) | SX127x | no RESET line — soft reset; tested on the air |
+| `waveshare-433` | 433: not usable for Reticulum | SX1262 | |
 | `waveshare-868` | 868 | SX1262 | the same pins and profile as `waveshare-433` |
 
 **SX1262 (Waveshare LoRaWAN Node HAT).** The LF and HF boards are pin-identical (CS 21, IRQ 16,
@@ -216,11 +216,8 @@ persisted by the LoRa interface, so it is queued or dropped at the limit.
 | band | default | limit | licence |
 |---|---|---|---|
 | 868 | 868.500 MHz | 25 mW ERP (14 dBm), duty per sub-band | none (SRD) |
-| 433 | 434.500 MHz | **10 mW ERP (10 dBm)**, 10 % duty | none (SRD / LPD433) |
 
-The 433 default stays clear of the LoRaHAM APRS channel (433.775/433.900) and MeshCom (433.175)
-inside 433.050–434.790 MHz. 10 mW is ERP, antenna gain included: 10 dBm into a unity-gain whip is
-just inside; with a gain antenna turn the power down.
+25 mW is ERP, antenna gain included: with a gain antenna turn the power down.
 
 **Permitted segments** (driver `PERMITTED_SEGMENTS`, BNetzA Vfg. 91/2025 / ERC 70-03). The driver
 refuses anything else; an operator limit may only tighten a ceiling:

@@ -99,7 +99,7 @@ def test_two_hand_saved_pages_on_derived_ports_push_both_unsaved_ones_to_distinc
     assert _bulk(svc)[0]
     got = _saved(svc)
     assert (got["graywolf@r2"], got["meshtastic@r2"]) == (8445, 8447)    # a saved port is never moved
-    assert got["meshcom@r1"] == 8446 and got["meshtastic@r1"] == 8448 and got["reticulum@r1"] == 8449
+    assert got["meshcom@r1"] == 8446 and got["meshtastic@r1"] == 8448 and got["reticulum@r2"] == 8581   # r2: 868 only
     assert len(set(got.values())) == len(got)
 
 

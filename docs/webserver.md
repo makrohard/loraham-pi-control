@@ -154,7 +154,7 @@ lhpc webserver apply
 - `--port`: `0` = not proxied (omitted: the saved port is kept). An unsaved page `<page>@rN` is suggested
   8444 + its kind's index + 133 × (N − 1), the kinds graywolf 0, meshcom 1, meshcore 2, meshtastic 3, reticulum 4,
   meshcore-meshcore-node 5 (r1 on 433, r2 on 868: graywolf@r1 `8444`, meshcom@r1 `8445`, meshtastic@r1 `8447`,
-  reticulum@r1 `8448`, graywolf@r2 `8577`, meshcore@r2 `8579`, meshtastic@r2 `8580`, meshcore-meshcore-node@r2
+  graywolf@r2 `8577`, meshcore@r2 `8579`, meshtastic@r2 `8580`, reticulum@r2 `8581`, meshcore-meshcore-node@r2
   `8582`); a taken port moves it to the next free one, and none free is refused by name. A saved port never
   moves; any free port ≥ 1024 works.
 - `--access-mode` (alias `--auth`) takes the console's values and the same client certificates.

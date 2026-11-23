@@ -23,8 +23,8 @@ DAEMON = ("daemon", "loraham-daemon")
 RNS = ("reticulum", "rns")
 ARGV = {"loraham-daemon": lambda rid, band: ["loraham_daemon", "--radio", band, "--id", rid],
         "rns": lambda rid, band: ["loraham-rns-node"]}
-SPI_CLAIMS = [("loraham.radio.{radio:868}", "exclusive"), ("loraham.radio.{radio:433}", "exclusive"),
-              ("spi.bus.0", "cooperative"), ("spi.bus.0.unlocked", "exclusive")]   # rns's radio claims at d8e330cc
+SPI_CLAIMS = [("loraham.radio.{radio:868}", "exclusive"),
+              ("spi.bus.0", "cooperative"), ("spi.bus.0.unlocked", "exclusive")]   # rns's radio claims (868 only)
 SPI_REQUIRES = ["/dev/spidev0.0", "spi,gpio", "/var/lib/dpkg/info/python3-libgpiod.list",
                 "/var/lib/dpkg/info/python3-spidev.list"]
 
@@ -132,8 +132,7 @@ def test_the_daemon_backend_runs_with_the_daemon_and_makes_no_spi_claim(tmp_path
     ids = [c.id for _s, c in order]
     # red-before (d8e330cc): no loraham-daemon in the order, the four SPI claims and requirements
     assert "loraham-daemon" in ids and ids.index("loraham-daemon") < ids.index("rns")
-    assert _radio_side(_rns(order)) == [
-        ("loraham.daemon-socket.{radio:433}", "consumer"), ("loraham.daemon-socket.{radio:868}", "consumer")]
+    assert _radio_side(_rns(order)) == [("loraham.daemon-socket.{radio:868}", "consumer")]   # Reticulum runs on 868 only
     assert [_req(q) for q in _rns(order).requires] == []
 
 

@@ -204,7 +204,7 @@ def test_every_home_form_posts_its_instance(tmp_path, monkeypatch, web):
         assert not names & {"band", "rid"}, names
         options = [o["value"] for o in w.find("option")] if w.find("select", name="target") else []
         targets += options or [w.field_default("target")]
-    assert {"daemon@r1", "daemon@r2", "kiss@r1", "chat@r1", "voice@r2"} <= set(targets), targets
+    assert {"daemon@r1", "daemon@r2", "kiss@r1", "chat@r1", "voice@r1", "reticulum@r2"} <= set(targets), targets
     assert all(re.fullmatch(r"[\w-]+@r[12]", t) for t in targets), targets
     heads = [h.text.strip() for h in doc.find("h3")]
     assert {"Running on r1", "Start a stack on r1", "Start a stack on r2"} <= set(heads), heads   # a radio, not a band

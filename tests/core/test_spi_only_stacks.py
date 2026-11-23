@@ -26,9 +26,11 @@ USB_ONLY = BOX_H[2:]                                            # r3, r4: no SPI
 TWO_SPI_868 = (radios.Radio("r2", "a", "uputronics", "868", ce="ce0"), radios.Radio("r5", "b", "uputronics", "868", ce="ce1"))
 
 
-def why(target, rid, kind="USB-CH341", alts=("r1", "r2")):
+def why(target, rid, kind="USB-CH341", alts=None):
     sid = target.partition("@")[0]
     owner = "meshtastic" if sid.startswith("meshtastic") else "reticulum"
+    if alts is None:                                            # F34: Reticulum runs on 868 only, r1 is 433
+        alts = ("r1", "r2") if owner == "meshtastic" else ("r2",)
     who = owner if owner == "meshtastic" else "reticulum with backend spi"
     tail = ("use " + " or ".join(f"{owner}@{r}" for r in alts)) if alts else "add an SPI radio on the Hardware page"
     return f"{owner}@{rid}: {who} drives SPI radios only, {rid} is a {kind} radio: {tail}"
@@ -114,15 +116,16 @@ def test_t13_an_unknown_empty_or_usb_model_is_refused_for_an_spi_stack_only(tmp_
 
 def test_t2_eligibility_is_the_spi_radios_the_inventory_is_unchanged(tmp_path):
     svc = _svc(tmp_path)
-    for sid in ("reticulum", "meshtastic"):
-        assert instances.eligible(svc.stack(sid), svc) == ("r1", "r2")
-        assert instances.radios_of(svc.stack(sid), svc._paths) == ("r1", "r2", "r3", "r4")
+    assert instances.eligible(svc.stack("meshtastic"), svc) == ("r1", "r2")
+    assert instances.radios_of(svc.stack("meshtastic"), svc._paths) == ("r1", "r2", "r3", "r4")
+    assert instances.eligible(svc.stack("reticulum"), svc) == ("r2",)               # F34: 868 only, r2 the SPI one
+    assert instances.radios_of(svc.stack("reticulum"), svc._paths) == ("r2", "r4")
     assert instances.eligible(svc.stack("kiss"), svc) == ("r1", "r2", "r3", "r4")
     assert [i.rid for i in commands.stack_instances(svc.stack("meshtastic"), svc._paths)] == ["r1", "r2", "r3", "r4"]
-    assert [i.rid for i in commands.stack_instances(svc.stack("reticulum"), svc._paths)] == ["r1"]   # singleton rule
+    assert [i.rid for i in commands.stack_instances(svc.stack("reticulum"), svc._paths)] == ["r2"]   # singleton rule, 868
     with _running(svc, "r4", "868"):
         assert [i.rid for i in commands.stack_instances(svc.stack("reticulum"), svc._paths)] == ["r4"]
-        assert instances.eligible(svc.stack("reticulum"), svc) == ("r1", "r2")
+        assert instances.eligible(svc.stack("reticulum"), svc) == ("r2",)
 
 
 def test_t2_two_spi_radios_on_one_band_stay_addressable_and_a_band_start_names_them(tmp_path):
@@ -192,7 +195,7 @@ def test_t7_a_bare_start_names_the_radios_it_may_start_on(box):
     # red-before (aa4a88c8): "reticulum can run on r1 or r2 or r3 or r4: …"
     rc, out, calls = box("stack", "start", "reticulum", "--yes")
     assert (rc, calls) == (1, []) and \
-        out.err == "ERR   reticulum can run on r1 or r2: use reticulum@r1 or reticulum@r2\n"
+        out.err == "ERR   reticulum can run on r2: use reticulum@r2\n"          # F34: 868 only
 
 
 @pytest.mark.parametrize("target", ["reticulum@r2", "meshtastic@r1", "kiss@r4"])
@@ -222,7 +225,7 @@ def test_t9_a_running_instance_whose_radio_became_usb_is_stopped_and_its_start_r
         rc, _out, calls = box("stack", "stop", "reticulum@r2", "--yes", write=False)
         assert rc == 0 and calls[-1] == ("stop", "reticulum", "r2")
         rc, out, _calls = box("stack", "start", "reticulum@r2", "--yes", write=False)
-        assert rc == 1 and out.err == f"ERR   {why('reticulum', 'r2', alts=('r1',))}\n"
+        assert rc == 1 and out.err == f"ERR   {why('reticulum', 'r2', alts=())}\n"   # r1 is 433
 
 
 # ---- the web (T3, T4, T5, T12, the Settings Run) ----------------------------------------------------------------
@@ -247,7 +250,9 @@ def test_t3_home_offers_the_spi_stacks_on_the_spi_rows_only(tmp_path, web):
     svc = _svc(tmp_path)
     sel = _selects(_page(web, svc, "/"), "Stack to start on")
     for rid in ("r1", "r2"):
-        assert {f"reticulum@{rid}", f"meshtastic@{rid}"} <= set(sel[f"Stack to start on {rid}"])
+        assert f"meshtastic@{rid}" in sel[f"Stack to start on {rid}"]
+    assert "reticulum@r2" in sel["Stack to start on r2"]
+    assert "reticulum@r1" not in sel["Stack to start on r1"]                        # F34: Reticulum runs on 868 only
     for rid in ("r3", "r4"):
         offered = sel[f"Stack to start on {rid}"]
         assert not {v.partition("@")[0] for v in offered} & {"reticulum", "meshtastic"}, offered
@@ -264,7 +269,7 @@ def test_t4_the_stacks_run_line_starts_on_spi_radios_and_stops_what_runs(tmp_pat
             radios_fixture.write(tmp_path, BOX_H[:3])
         doc = _page(web, svc, "/stacks?open=reticulum")
         for label in ("Start nomadnet on radio", "Run reticulum on radio", "Restart reticulum on radio"):
-            assert _selects(doc, label)[label] == [f"{label.split()[1]}@r1", f"{label.split()[1]}@r2"], label
+            assert _selects(doc, label)[label] == [f"{label.split()[1]}@r2"], label   # F34: 868 only, r2 the SPI one
         assert "reticulum@r4" in _selects(doc, "Stop reticulum on radio")["Stop reticulum on radio"]   # Stop: as today
 
 

@@ -29,6 +29,7 @@
         8577,
         8579,
         8580,
+        8581,
         8582,
         8446,
         8449,
@@ -75,7 +76,7 @@
             "visibility": "private"
         },
         "8448": {
-            "label": "stackweb proxy reticulum@r1 (8444 + kind + 133 x (n - 1))",
+            "label": "stackweb proxy (a page saved on the old positional default)",
             "visibility": "private"
         },
         "8577": {
@@ -88,6 +89,10 @@
         },
         "8580": {
             "label": "stackweb proxy meshtastic@r2 (8444 + kind + 133 x (n - 1))",
+            "visibility": "private"
+        },
+        "8581": {
+            "label": "stackweb proxy reticulum@r2 (8444 + kind + 133 x (n - 1))",
             "visibility": "private"
         },
         "8582": {

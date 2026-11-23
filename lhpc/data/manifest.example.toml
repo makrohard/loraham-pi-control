@@ -415,7 +415,7 @@ main = "loraham-chat"
 id = "voice"
 name = "LoRaHAM Voice"
 license = "ham"   # F32: the Home card's licence mark (README "Free to use" column)
-summary = "Daemon-backed Codec2 voice over LoRa: GTK app on a desktop, ncurses terminal UI on a headless/Lite box. Configurable callsign, audio devices and per-band radio params."
+summary = "Daemon-backed Codec2 voice over LoRa: GTK app on a desktop, ncurses terminal UI on a headless/Lite box. Configurable callsign, audio devices and 433 MHz radio params."
 main = "loraham-voice"
 
   [[stack.component]]
@@ -423,7 +423,6 @@ main = "loraham-voice"
   name = "LoRaHAM Voice"
   kind = "service"
   band = "433"
-  bands = ["433", "868"]
   # GUI-OPTIONAL: on a headless/Lite box (GTK dev chain absent) the GUI preflight drops
   # this component and the stack stays fully usable through the terminal variant below.
   # NOT plain `optional` — that would also remove it from default stack-start seeding,
@@ -516,7 +515,7 @@ main = "loraham-voice"
     note = "This instance's voice UI: its GTK app or its terminal variant, never both (a busy sound device is the app's own error)."
 
     # Seeded into {runtime}/config/files/{instance_dir}loraham_voice.conf (KEY=VALUE, split on '=').
-    # LHPC writes this instance's band only (433_* or 868_*) and active_band (0=433, 1=868) from it;
+    # LHPC writes the 433_* params and active_band=0 (Voice runs on 433 only in LHPC);
     # the app's own save writes both bands' params into the same file.
     [stack.component.config_file]
     path = "{runtime}/config/files/{instance_dir}loraham_voice.conf"
@@ -531,82 +530,72 @@ main = "loraham-voice"
       key = "callsign"
       default = "{callsign}"
       label = "Callsign (max 11 chars; portable forms like N0CALL/P allowed — use your own call)"
-      # Per-band LoRa radio params: the file key carries {band}, so the 433 config writes 433_* and
-      # the 868 config writes 868_* (an instance writes its radio's band only). Defaults match the app struct.
+      # The 433 MHz LoRa radio params (Voice runs on 433 only in LHPC): the app's 433_* keys. Defaults match
+      # the app struct.
       [[stack.component.config_file.param]]
       name = "freq"
-      key = "{band}_freq"
+      key = "433_freq"
       validator = "freq"
-      band_defaults = { "433" = "434.700", "868" = "869.525" }
       default = "434.700"
       label = "Frequency MHz"
       [[stack.component.config_file.param]]
       name = "sf"
-      key = "{band}_sf"
+      key = "433_sf"
       kind = "int"
-      band_defaults = { "433" = "7", "868" = "7" }   # 868 was 11: at SF11/BW250 a voice packet
-      # spends longer on the air than the audio it carries, so the app refuses the mode
       default = "7"
       min = 7
       max = 12
       label = "Spreading factor (SF)"
       [[stack.component.config_file.param]]
       name = "bw"
-      key = "{band}_bw"
+      key = "433_bw"
       kind = "enum"
       choices = ["7.8", "10.4", "15.6", "20.8", "31.25", "41.7", "62.5", "125.0", "250.0", "500.0"]
-      band_defaults = { "433" = "125.0", "868" = "250.0" }
       default = "125.0"
       label = "Bandwidth kHz"
       [[stack.component.config_file.param]]
       name = "cr"
-      key = "{band}_cr"
+      key = "433_cr"
       kind = "int"
-      band_defaults = { "433" = "5", "868" = "5" }
       default = "5"
       min = 5
       max = 8
       label = "Coding rate (4/CR)"
       [[stack.component.config_file.param]]
       name = "crc"
-      key = "{band}_crc"
+      key = "433_crc"
       kind = "enum"
       choices = ["0", "1"]
-      band_defaults = { "433" = "1", "868" = "1" }
       default = "1"
       label = "CRC (0/1)"
       [[stack.component.config_file.param]]
       name = "preamble"
-      key = "{band}_preamble"
+      key = "433_preamble"
       kind = "int"
-      band_defaults = { "433" = "8", "868" = "16" }
       default = "8"
       min = 6
       max = 65535
       label = "Preamble length"
       [[stack.component.config_file.param]]
       name = "sync"
-      key = "{band}_sync"
+      key = "433_sync"
       validator = "sync"
-      band_defaults = { "433" = "0x12", "868" = "0x2B" }
       default = "0x12"
       label = "Sync word (hex)"
       [[stack.component.config_file.param]]
       name = "power"
-      key = "{band}_power"
+      key = "433_power"
       radio_power = true
       kind = "int"
-      band_defaults = { "433" = "17", "868" = "10" }
       default = "17"
       min = 0
       max = 20
       label = "TX power dBm"
       [[stack.component.config_file.param]]
       name = "ldro"
-      key = "{band}_ldro"
+      key = "433_ldro"
       kind = "enum"
       choices = ["0", "1", "2"]
-      band_defaults = { "433" = "2", "868" = "2" }
       default = "2"
       label = "LDRO (0=off, 1=on, 2=auto)"
       # --- the rest (shown after the radio params) ---
@@ -628,16 +617,15 @@ main = "loraham-voice"
       key = "audio_playback"
       default = "default"
       label = "Audio playback device (ALSA)"
-      # active_band (0=433, 1=868) is written automatically from the band the stack is started on —
+      # active_band: the app's band switch (0=433, 1=868); LHPC runs Voice on 433 only, so it is always 0 —
       # hidden (not shown on the Settings page).
       [[stack.component.config_file.param]]
       name = "active_band"
       key = "active_band"
       kind = "int"
       min = 0
-      max = 1
+      max = 0
       default = "0"
-      band_defaults = { "433" = "0", "868" = "1" }
       hidden = true
 
   # ---------------------------------------------------------------
@@ -654,7 +642,6 @@ main = "loraham-voice"
   name = "LoRaHAM Voice (terminal)"
   kind = "service"
   band = "433"
-  bands = ["433", "868"]
   purpose = "Codec2 voice over LoRa via the daemon — ncurses terminal UI (no display needed)."
   tx_capable = true
   depends_on = ["loraham-daemon"]
@@ -2579,7 +2566,7 @@ main = "meshcore-node"
       # matching the T-Deck MeshCore firmware). A non-blank value here is written as an
       # explicit override and would clobber the preset's frequency.
       default = ""
-      min = 430000000
+      min = 863000000
       max = 950000000
       label = "Frequency Hz"
       advanced = true
@@ -3113,7 +3100,6 @@ state_root = "state/reticulum"      # transport identity, path tables, generated
 name = "Reticulum node"
 kind = "service"
 band = "868"
-bands = ["433", "868"]
 purpose = "rnsd-equivalent that OWNS the shared instance and the radio. Runs loraham-rns-node, which exits rather than staying up without a radio."
 tx_capable = true
 build_requires = ["rns-lora-interface"]
@@ -3234,11 +3220,6 @@ allow_param = "rns_allow"
 auth = "none"
 
 [[stack.component.resource]]
-key = "loraham.daemon-socket.{radio:433}"
-kind = "daemon-socket"
-mode = "consumer"
-backend = "daemon"
-[[stack.component.resource]]
 key = "loraham.daemon-socket.{radio:868}"
 kind = "daemon-socket"
 mode = "consumer"
@@ -3249,11 +3230,6 @@ kind = "radio-band"
 mode = "exclusive"
 backend = "spi"
 note = "Owns the radio for this band — conflicts with the daemon and meshtastic on 868."
-[[stack.component.resource]]
-key = "loraham.radio.{radio:433}"
-kind = "radio-band"
-mode = "exclusive"
-backend = "spi"
 [[stack.component.resource]]
 key = "spi.bus.0"
 kind = "spi-bus"
@@ -3362,7 +3338,7 @@ name = "iface_band"
 key = "band"
 section = "interfaces/LoRa"
 kind = "str"
-default = "{band}"
+default = "868"
 hidden = true
 label = "Band"
 [[stack.component.config_file.param]]
@@ -3388,7 +3364,6 @@ from_panel = "FREQ"
 section = "interfaces/LoRa"
 kind = "int"
 default = "868500000"
-band_defaults = { 433 = "434500000", 868 = "868500000" }
 min = 137000000
 max = 1020000000
 label = "Frequency Hz"
@@ -3429,10 +3404,9 @@ radio_power = true
 section = "interfaces/LoRa"
 kind = "int"
 default = "14"
-band_defaults = { 433 = "10", 868 = "14" }
 min = 0
 max = 17
-label = "TX power dBm — 868 SRD allows 25 mW (14 dBm); the 433 SRD band is 10 mW ERP (10 dBm)"
+label = "TX power dBm — 868 SRD allows 25 mW (14 dBm)"
 # The daemon backend's other radio values: from the radio's Daemon radio parameters panel (reti B2; `from_panel`
 # also on the five above: on the daemon backend their value is the panel's, the Config page drops them). Left out
 # on spi and when blank: `preamble` only when saved there (else the driver derives the RNode preamble for the SF/BW).
@@ -3565,7 +3539,6 @@ key = "airtime_limit_short"
 section = "interfaces/LoRa"
 kind = "str"
 default = "33.0"
-band_defaults = { 433 = "33.0", 868 = "33.0" }
 advanced = true
 label = "Short-term airtime limit % (15 s window) — a burst guard, not the legal limit (that is the long one); 33 is Reticulum's own RNode example, 5 starved every multi-frame reply"
 [[stack.component.config_file.param]]
@@ -3574,9 +3547,8 @@ key = "airtime_limit_long"
 section = "interfaces/LoRa"
 kind = "str"
 default = "1.0"
-band_defaults = { 433 = "10.0", 868 = "1.0" }
 advanced = true
-label = "Long-term airtime limit % (1 h window) — 868 SRD is 1%, 433 SRD is 10%"
+label = "Long-term airtime limit % (1 h window) — 868 SRD is 1%"
 # RF log at the shared LoRa interface: raw Reticulum packets (ciphertext), so MeshChat and every
 # other client's traffic appears here. STACK-level (band-less) switch; the path is lhpc's.
 [[stack.component.config_file.param]]

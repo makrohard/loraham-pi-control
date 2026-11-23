@@ -805,8 +805,8 @@ class LifecycleOpsMixin:
         enforcement, materialization, daemon-needs planning, lock/feed scoping and the
         launch itself: the explicit band, else the band the stack is ALREADY running on,
         else — for a stack whose GUI fallback is ACTIVE on this box — the band its
-        interactive marker was presented on (a Voice Lite operator who started on 868 must
-        not have a bandless second start silently judged/locked on the primary 433), else
+        interactive marker was presented on (a Lite start on a second band must not have a bandless
+        second start judged/locked on the primary; Voice, the one such stack, is 433-only now), else
         "" (the config resolver then falls back to the declared primary). A stale
         interactive marker never overrides a usable desktop GTK main: the marker is only
         consulted while `gui_fallback_active` says the fallback is what runs here."""

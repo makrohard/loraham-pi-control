@@ -36,6 +36,7 @@ The `lhpc` docs by task; the top-level README covers install. Start with Archite
 ## Stacks
 
 - [Adding a stack](adding-a-stack.md) — the extension contract.
+- [Adding a band](adding-a-band.md) — the band list, and what a new or dropped band touches.
 - [daemon](stacks/daemon.md) — LoRaHAM daemon; owns the radios.
 - [kiss](stacks/kiss.md) — KISS TNC over TCP.
 - [graywolf](stacks/graywolf.md) — Graywolf APRS station over `kiss`.

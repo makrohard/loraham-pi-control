@@ -14,7 +14,7 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem, Listener
 from lhpc.core.services import ControllerService
 
-_RADIOS = (radios_fixture.R1, radios_fixture.R2, radios_fixture.R3)      # r1, r2 on 433, r3 on 868
+_RADIOS = (radios_fixture.R1, radios_fixture.R2_868, radios_fixture.R3)  # r1 on 433, r2 (SPI) + r3 (USB) on 868
 
 
 def _client(web, tmp_path):
@@ -82,10 +82,10 @@ def test_lhpcs_own_webserver_entries_carry_their_new_names(tmp_path, web):
                                       ("LHPC Webserver", "Web Proxies All Stacks", "Monitor", "Certificates")]
 
 
-_HEADINGS = {"graywolf@r1": "Proxy · Graywolf UI · r1", "meshtastic@r2": "Proxy · Meshtastic UI · r2",
-             "meshcom@r1": "Proxy · MeshCom UI · r1", "meshcom@r2": "Proxy · MeshCom UI · r2",
+_HEADINGS = {"graywolf@r1": "Proxy · Graywolf UI · r1", "graywolf@r2": "Proxy · Graywolf UI · r2",
+             "meshtastic@r2": "Proxy · Meshtastic UI · r2", "meshcom@r1": "Proxy · MeshCom UI · r1",
              "meshcore@r3": "Proxy · MeshCore UI · r3", "meshcore-meshcore-node@r3": "Proxy · openHop repeater · r3",
-             "reticulum@r1": "Proxy · Reticulum UI"}
+             "reticulum@r2": "Proxy · Reticulum UI"}     # Reticulum runs on 868 only: r2 (SPI) is its radio
 
 
 def test_every_stack_proxy_entry_names_its_web_ui_and_radio_in_the_tree_and_its_heading(tmp_path, web):

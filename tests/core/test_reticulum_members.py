@@ -16,7 +16,7 @@ import radios_fixture
 from seams import seed_framing_driver
 
 from lhpc.adapters.cli import main as cli
-from lhpc.core import instances, kill
+from lhpc.core import instances, kill, radios
 from lhpc.core.lifecycle import Lifecycle
 from lhpc.core.outcomes import Outcome
 from lhpc.core.paths import Paths
@@ -24,6 +24,8 @@ from lhpc.core.probes.backends import CommandResult, FakeSystem
 from lhpc.core.services import ControllerService
 
 PINE = radios_fixture.BOX_H[3]                                    # r4, PineDio 868 (USB): the daemon backend
+SPI868 = (radios.Radio("r1", "b", "uputronics", "868", ce="ce1"),   # two SPI radios on 868 (Reticulum runs on 868 only)
+          radios.Radio("r2", "a", "uputronics", "868", ce="ce0"))
 
 
 # The refusals of the pinned interface's `loraham-rns-check-section` (rns-lora-interface f196175, section.py main/check)
@@ -86,7 +88,7 @@ class Node:
 
 @pytest.fixture
 def box(tmp_path, monkeypatch):
-    """Box H's r1 (433) and r2 (868) on the direct driver and the r4 stick: the node starts on r2 (the owner)."""
+    """Two SPI radios on 868 (r1, r2) on the direct driver and the r4 stick: the node starts on r2 (the owner)."""
     spawned = []
 
     def spawn(argv, log, cwd=None, env=None):
@@ -94,10 +96,10 @@ def box(tmp_path, monkeypatch):
         spawned.append(subprocess.Popen(["sleep", "120"], start_new_session=True,   # wallclock: a live launch, ended after the test; never paces
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
         return spawned[-1].pid
-    radios_fixture.write(tmp_path, (*radios_fixture.RADIOS, PINE))
+    radios_fixture.write(tmp_path, (*SPI868, PINE))
     radios_fixture.reticulum_backend(tmp_path, ["r1", "r2"])
     seed_framing_driver(tmp_path)
-    for name, value in (("hardware_configured", lambda self: True), ("radio_bands", lambda self: ["433", "868"]),
+    for name, value in (("hardware_configured", lambda self: True), ("radio_bands", lambda self: ["868"]),
                         ("is_built", lambda self, c: True), ("_build_complete", lambda self, c: True),
                         ("_source_present", lambda self, c: True)):
         monkeypatch.setattr(ControllerService, name, value)
@@ -535,7 +537,7 @@ def test_a_remove_takes_every_member_record_of_the_radio(box):
     owner = _owner_up(box)
     assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
     life, stk = box.svc._lifecycle(), box.svc.stack("reticulum")
-    assert life.record_launch(stk, stk.component("rns"), owner.pid, band="433",
+    assert life.record_launch(stk, stk.component("rns"), owner.pid, band="868",
                               extra={"rid": "r1", "member_of": "r2"})            # a second one, however it came
     assert len(_member(box, "r1")) == 2
     assert box.svc.stop("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r1")[0]).ok

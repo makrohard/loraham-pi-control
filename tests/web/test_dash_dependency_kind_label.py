@@ -14,10 +14,10 @@ from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
 
-RADIOS = (radios.Radio("r1", "left", "uputronics", "433", ce="ce0"), radios.Radio("r2", "right", "uputronics", "433", ce="ce1"),
+RADIOS = (radios.Radio("r1", "left", "uputronics", "433", ce="ce0"), radios.Radio("r2", "right", "uputronics", "868", ce="ce1"),
           radios.Radio("r3", "stick", "meshstick-1262", "868", usb_serial="MSTICK01"))
-RUNS = (("daemon", "r1", "433"), ("reticulum", "r1", "433"), ("meshtastic", "r2", "433"), ("meshcom", "r2", "433"),
-        ("meshcore", "r3", "868"))
+RUNS = (("daemon", "r1", "433"), ("reticulum", "r2", "868"), ("meshtastic", "r2", "868"), ("meshcom", "r1", "433"),
+        ("meshcore", "r3", "868"))                       # Reticulum runs on 868 only (r2), MeshCom on 433 (r1)
 KIND = {"RadioLib": "library", "libch341-spi-userspace": "library", "LoRa SPI interface (library)": "library",
         "Meshtastic web client": "library", "openHop repeater (source)": "library", "MeshCom firmware": "firmware"}
 

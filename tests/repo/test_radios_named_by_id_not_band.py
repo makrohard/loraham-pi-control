@@ -55,11 +55,9 @@ def test_w4_4_no_claim_key_names_a_band():
     assert _hits(r"loraham\.(radio|daemon-socket)\.(433|868)\b") == []
 
 
-# W7-10: every `{band}` left in the manifest, with the table row that keeps it.
-KEPT_BAND = {
-    "W7-3": {f'key = "{{band}}_{k}"' for k in ("freq", "sf", "bw", "cr", "crc", "preamble", "sync", "power", "ldro")},
-    "W7-6": {'default = "{band}"'},
-}
+# W7-10: every `{band}` left in the manifest, with the table row that keeps it. None is left: the W7-3 Voice keys
+# (`{band}_freq` …) and the W7-6 Reticulum `iface_band` default are written literally since each stack has one band.
+KEPT_BAND: dict[str, set[str]] = {}
 
 
 def test_w7_10_every_remaining_band_template_is_a_kept_row():

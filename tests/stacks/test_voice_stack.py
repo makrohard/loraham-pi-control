@@ -27,7 +27,8 @@ def outcomes(res):
 
 
 def _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False, patch_reqs=True, gtk_built=True):
-    """A voice-startable service: daemon READY/DIRECT on both bands, daemon + RadioLib + the
+    """A voice-startable service on two 433 radios (r1, r2; Voice runs on 433 only): daemon READY/DIRECT on both
+    radios, daemon + RadioLib + the
     terminal variant built (and the GTK app too unless `gtk_built=False`). desktop=True fakes the
     GTK header (GUI app stays) and a display; desktop=False also fakes the ABSENCE of a display,
     so the host running the tests never leaks its own DISPLAY into the "Lite" scenario.
@@ -35,7 +36,7 @@ def _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False, patch_reqs=True
     stays live."""
     STATUS = b"STATUS RADIO=READY TXMODE=DIRECT\n"
     paths = {"/usr/include/gtk-3.0/gtk/gtk.h"} if desktop else set()
-    radios_fixture.write(tmp_path)                          # stage L5: voice is its band's radio's client
+    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))   # voice is each 433 radio's client
     sys = FakeSystem(unix_replies=radios_fixture.by_radio({"/tmp/loraconf433.sock": STATUS,
                                                            "/tmp/loraconf868.sock": STATUS}),
                      paths=paths).system
@@ -210,9 +211,9 @@ def test_direct_start_of_other_interactive_sidecars_stays_unrefused(tmp_path, mo
     for other in ("nomadnet", "meshcore-cli", "loraham-chat"):
         assert svc._gui_fallback_refusal(other) is None, other
     set_call(svc)
-    res = svc.start("nomadnet", apply=True)
+    res = svc.start("loraham-chat", apply=True)        # a 433 sidecar: this box has 433 radios only
     assert "shares" not in res.summary       # never the voice refusal
-    assert any(r.component == "nomadnet" for r in res.results), \
+    assert any(r.component == "loraham-chat" for r in res.results), \
         "the component loop must be reached"
 
 
@@ -430,7 +431,7 @@ def test_other_stack_start_keeps_voice_sidecar_marker(tmp_path, monkeypatch, rea
     # start.
     from lhpc.core.model import RunState
     svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
-    assert marker_fixture.mark(svc, "voice", "868")
+    assert marker_fixture.mark(svc, "voice", "433")
 
     class _St:                       # snapshot stub: the sidecar TUI is process-detected
         def __init__(self, rs): self.run_state = rs
@@ -439,17 +440,17 @@ def test_other_stack_start_keeps_voice_sidecar_marker(tmp_path, monkeypatch, rea
                                       "loraham-voice-cli": _St(RunState.RUNNING)}})()]})()
     monkeypatch.setattr(type(svc), "build_snapshot", lambda self: snap)
     cleared = svc.clear_stale_interactive(keep="kiss")
-    assert "voice@r2" not in cleared, "a RUNNING terminal sidecar must keep its marker"
+    assert "voice@r1" not in cleared, "a RUNNING terminal sidecar must keep its marker"
     # ...and with the TUI gone, the marker is reaped exactly like chat's.
     snap.stacks[0].components["loraham-voice-cli"] = _St(RunState.STOPPED)
-    assert "voice@r2" in svc.clear_stale_interactive(keep="kiss")   # K7: the instance's marker
+    assert "voice@r1" in svc.clear_stale_interactive(keep="kiss")   # K7: the instance's marker
 
 
-def test_the_868_voice_profile_is_fast_enough_for_real_time_speech():
+def test_the_voice_profile_is_fast_enough_for_real_time_speech():
     """A voice packet must spend LESS time on the air than the audio it carries, or the app
     refuses the mode (`check_voice_mode`, loraham_voice_v107.c) and no PTT is possible — that is
-    how 868 shipped: SF11 at 250 kHz needs ~1.2 s for 260 ms of speech. The rule is arithmetic,
-    so the manifest's per-band defaults are checked against it here rather than on a radio."""
+    how 868 once shipped: SF11 at 250 kHz needs ~1.2 s for 260 ms of speech. The rule is arithmetic,
+    so the manifest's 433 defaults (Voice's one band) are checked against it here rather than on a radio."""
     import math
 
     from lhpc.core.manifest import default_manifest_path, load_manifest
@@ -462,12 +463,13 @@ def test_the_868_voice_profile_is_fast_enough_for_real_time_speech():
     params = {p.name: p for p in comp.config_file.params}
 
     def band(name, b):
-        return dict(params[name].band_defaults).get(b, params[name].default)
+        assert not params[name].band_defaults, name                  # one band: the default is the 433 value
+        return params[name].default
 
     frames = -(-TARGET_AUDIO_MS // FRAME_MS)
     payload = OVERHEAD + frames * FRAME_B
     audio_ms = frames * FRAME_MS
-    for b in ("433", "868"):
+    for b in ("433",):
         sf, bw, cr = int(band("sf", b)), float(band("bw", b)), int(band("cr", b))
         crc, preamble = int(band("crc", b)), int(band("preamble", b))
         t_sym = (1 << sf) / (bw * 1000.0)
@@ -559,7 +561,7 @@ def test_the_way_out_names_the_one_instance_whose_ui_is_held(tmp_path, monkeypat
     _config_written(monkeypatch, svc)
     set_call(svc)
     recs = [{"stack": "voice", "component": "loraham-voice", "role": "", "band": b, "rid": r, "pid": p}
-            for r, b, p in (("r1", "433", 4711), ("r2", "868", 4712))]
+            for r, b, p in (("r1", "433", 4711), ("r2", "433", 4712))]
     monkeypatch.setattr(svc._system.procfs, "cmdlines", lambda: {p: ["/x/LoRaHAM_Voice/loraham_voice"] for p in (4711, 4712)})
     monkeypatch.setattr(Lifecycle, "owned_inventory", lambda self: ([dict(r) for r in recs], [], "ok"))
     monkeypatch.setattr(Lifecycle, "verify_owned", lambda self, r: (r.get("pid") in (4711, 4712), ""))
@@ -577,7 +579,7 @@ def test_the_way_out_of_an_untold_holder_of_a_named_ui_is_the_stack(tmp_path, mo
     svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=True)
     _config_written(monkeypatch, svc)
     set_call(svc)
-    rec = {"stack": "voice", "component": "loraham-voice", "role": "", "band": "868", "rid": "r2", "pid": 4711}
+    rec = {"stack": "voice", "component": "loraham-voice", "role": "", "band": "433", "rid": "r2", "pid": 4711}
     monkeypatch.setattr(svc._system.procfs, "cmdlines", lambda: {4711: ["/x/LoRaHAM_Voice/loraham_voice"],
                                                                  4712: ["/x/LoRaHAM_Voice/loraham_voice_cli"]})
     monkeypatch.setattr(Lifecycle, "owned_inventory", lambda self: ([dict(rec)], [], "ok"))
@@ -599,19 +601,19 @@ def test_voice_r2s_terminal_variant_is_allowed_while_voice_r1s_gtk_app_runs(tmp_
 
 
 def test_each_instances_conf_selects_its_own_radios_band(tmp_path, monkeypatch, set_call, real_spawn):
-    # VOICE-PER-RADIO-v1 (c): voice@r1 (433) and voice@r2 (868) each seed their own loraham_voice.conf under <rid>/, and
-    # its active_band is its radio's (0 = 433, 1 = 868), never the other instance's.
+    # VOICE-PER-RADIO-v1 (c): voice@r1 and voice@r2 (both 433, Voice's one band) each seed their own
+    # loraham_voice.conf under <rid>/, and its active_band is 0 (433), the only band the app may select.
     from lhpc.core.commands import Instance
     svc = _voice_svc(real_spawn, tmp_path, monkeypatch, desktop=False)
     set_call(svc)
-    for rid, band in (("r1", "433"), ("r2", "868")):
+    for rid, band in (("r1", "433"), ("r2", "433")):
         rows = svc.write_config_files("voice", band, inst=Instance(rid, band=band))
         assert [w.status for w in rows if w.component == "loraham-voice"] == ["written"], rows
     got = {}
     for rid in ("r1", "r2"):
         text = (tmp_path / "config" / "files" / rid / "loraham_voice.conf").read_text()
         got[rid] = [ln.split("=", 1)[1].strip() for ln in text.splitlines() if ln.startswith("active_band=")]
-    assert got == {"r1": ["0"], "r2": ["1"]}, got
+    assert got == {"r1": ["0"], "r2": ["0"]}, got
 
 
 def test_a_terminal_variant_no_instance_tells_holds_every_instances_ui(tmp_path, monkeypatch, set_call, real_spawn):

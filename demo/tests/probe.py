@@ -613,7 +613,8 @@ try:
             svc.stop(_s.id, apply=True)
     _logs = svc._paths.under("logs")
     _written = [p for p in _logs.rglob("*.log") if _demo_shape(str(p.relative_to(_logs)))]
-    assert len(_written) >= 40 and all(("[demo]" in p.read_text() or "demo pkt" in p.read_text()) for p in _written), \
+    # floor 36: Voice starts on 433 only and Reticulum on 868 only, so their other-band starts write no log (F34)
+    assert len(_written) >= 36 and all(("[demo]" in p.read_text() or "demo pkt" in p.read_text()) for p in _written), \
         ("demo-logs: a demo-written log does not hold the demo's lines", len(_written))
     _kj = c.get("/api/logs/loraham-kiss-tnc").get_json()      # a no-radio window MAY now show the newer demo log
     assert _kj["path"].split("/logs/")[-1].startswith("start-loraham-kiss-tnc-"), _kj["path"]

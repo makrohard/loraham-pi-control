@@ -68,7 +68,7 @@ def test_the_panel_starts_from_reticulums_profile_every_row_editable_and_at_reco
     assert {n: rows[n]["value"] for n in ("FREQ", "SF", "BW", "CR", "POWER", "CADIDLE", "TXQUEUE", "PREAMBLE")} == {
         "FREQ": "868.500", "SF": "8", "BW": "125.0", "CR": "5", "POWER": "14", "CADIDLE": "50", "TXQUEUE": "1",
         "PREAMBLE": ""}
-    assert {n: _rows(svc, "r1")[n]["value"] for n in ("FREQ", "POWER")} == {"FREQ": "434.500", "POWER": "10"}
+    assert svc.daemon_params_view("reticulum", rid="r1") == {}             # r1 is 433: Reticulum runs on 868 only
     assert not any(r["app_owned"] for r in rows.values()) and all(r["at_start"] for r in rows.values())
     assert rows["MODE"]["choices"] == ["LORA"]
     assert (daemon_params.default_value("reticulum", "868", "CADIDLE"),

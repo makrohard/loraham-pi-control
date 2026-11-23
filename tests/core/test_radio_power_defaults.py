@@ -147,7 +147,8 @@ def test_a_stacks_own_power_file_default_follows_its_radio(tmp_path):
     assert svc.file_config_values("voice", "433")["power"] == "14"                 # the band caller: r3
     stick = commands.Instance("r5", band="868")
     assert svc.file_config_values("meshcore", "868", stick)["txpower"] == "14"      # unchanged (14 <= 14)
-    assert svc.file_config_values("voice", "868", stick)["power"] == "10"           # G2: a lower stack default stays (min)
+    r2 = commands.Instance("r2", band="868")                                         # the SPI board: model default 17
+    assert svc.file_config_values("reticulum", "868", r2)["txpower"] == "14"        # G2: a lower stack default stays (min)
 
 
 @pytest.mark.parametrize("edit, reason", [

@@ -1,6 +1,6 @@
 # Stack: Voice
 
-Codec2 voice over LoRa through the daemon on 433 or 868 MHz, in two builds of one source: a GTK
+Codec2 voice over LoRa through the daemon on 433 MHz (LHPC runs Voice on 433 only), in two builds of one source: a GTK
 desktop app (`loraham-voice`, needs a display and an audio device) and an ncurses terminal variant
 (`loraham-voice-cli`) for headless boxes. The daemon runs **DIRECT**: the app paces its own TX by
 airtime, and a MANAGED CAD wait would gap live audio.
@@ -25,23 +25,23 @@ airtime, and a MANAGED CAD wait would gap live audio.
 
 ## Settings
 
-| param | 433 | 868 | notes |
-|---|---|---|---|
-| `callsign` | inherits the global operator base callsign while empty | | max 11 characters; `/` and `-` allowed (portable forms such as `N0CALL/P` — use your own call); with neither a local nor a global callsign the start is refused |
-| `freq` | `434.700` | `869.525` | MHz |
-| `sf` | 7 | 7 | a voice packet must spend less time on the air than the audio it carries, or the app marks the mode `[VERBOTEN!]` and will not transmit; with the default `codec_mode` 0 that rules out SF8 and slower at 434.700/BW125, and SF9 and slower at 869.525/BW250 (SF11 at 868 needs about 1.25 s for 260 ms of audio) |
-| `bw` | 125.0 | 250.0 | kHz |
-| `cr` | 5 | 5 | 4/CR |
-| `crc` | 1 | 1 | |
-| `preamble` | 8 | 16 | |
-| `sync` | `0x12` | `0x2B` | |
-| `power` | 17 | 10 | dBm |
-| `ldro` | 2 | 2 | 0 = off, 1 = on, 2 = auto |
-| `codec_mode` | 0 | | Codec2 mode index 0–7 |
-| `audio_capture` / `audio_playback` | `default` | | ALSA devices. The terminal client lists up to 16 PCMs (capture-capable or without IOID restriction): with two or more it uses the saved names if both are listed, else asks at start (Enter = default); with one it uses it; with none it keeps the saved names |
+| param | default | notes |
+|---|---|---|
+| `callsign` | inherits the global operator base callsign while empty | max 11 characters; `/` and `-` allowed (portable forms such as `N0CALL/P` — use your own call); with neither a local nor a global callsign the start is refused |
+| `freq` | `434.700` | MHz |
+| `sf` | 7 | a voice packet must spend less time on the air than the audio it carries, or the app marks the mode `[VERBOTEN!]` and will not transmit; with the default `codec_mode` 0 that rules out SF8 and slower at 434.700/BW125 |
+| `bw` | 125.0 | kHz |
+| `cr` | 5 | 4/CR |
+| `crc` | 1 |  |
+| `preamble` | 8 |  |
+| `sync` | `0x12` |  |
+| `power` | 17 | dBm |
+| `ldro` | 2 | 0 = off, 1 = on, 2 = auto |
+| `codec_mode` | 0 | Codec2 mode index 0–7 |
+| `audio_capture` / `audio_playback` | `default` | ALSA devices. The terminal client lists up to 16 PCMs (capture-capable or without IOID restriction): with two or more it uses the saved names if both are listed, else asks at start (Enter = default); with one it uses it; with none it keeps the saved names |
 
-LHPC writes each instance's file with its radio's band only (`433_*` or `868_*`) and `active_band`
-(0 = 433, 1 = 868) from that band; the app rewrites it with both bands whenever it saves (its dialogs,
+LHPC writes each instance's file with the `433_*` params and `active_band=0` (433); the app rewrites
+it with both bands whenever it saves (its dialogs,
 and when it quits by itself; a stop by signal, such as lhpc's stop, saves nothing). Daemon-side radio
 parameters: [daemon](daemon.md#radio-parameters).
 

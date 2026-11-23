@@ -1,6 +1,7 @@
 """F34 C1 (K3): the band list lives in lhpc/core/known_bands.py only. No code keeps its own copy: no ("433", "868")
-tuple, no 433|868 regex alternation, no `== "433"` / `== "868"` test of a band. Comments are dropped (tokenize) and
-docstrings (ast); ordinary string literals stay in the scan. A value KEYED by band is not a copy of the list: the
+tuple (either quote, either order, split across lines), no 433|868 regex alternation, no `==` / `!=` test of a band
+on either side. Comments are dropped (tokenize) and docstrings (ast); ordinary string literals stay in the scan; a
+statement is scanned whole (its logical line), so a tuple split across lines is one text. A value KEYED by band is not a copy of the list: the
 exemptions below name such places by file and symbol (docs/adding-a-band.md lists them as places to extend)."""
 import ast
 import io
@@ -12,7 +13,10 @@ import repo_paths
 ROOT = repo_paths.REPO
 SCANNED = ("lhpc", "demo/lhpc_demo", "testlab/lhpc_testlab")
 SKIP = ("lhpc/data/meshcore_host/",)                 # a separate package (pyproject [tool.ruff] extend-exclude)
-PATTERNS = (re.compile(r'"433"\s*,\s*"868"'), re.compile(r"433\|868"), re.compile(r'==\s*"(433|868)"'))
+_Q = "[\"']"                                         # either quote
+PATTERNS = (re.compile(rf"{_Q}433{_Q}\s*,\s*{_Q}868{_Q}|{_Q}868{_Q}\s*,\s*{_Q}433{_Q}"),
+            re.compile(r"433\|868|868\|433"),
+            re.compile(rf"[=!]=\s*{_Q}(433|868){_Q}|{_Q}(433|868){_Q}\s*[=!]="))
 EXEMPT = {
     # the dual-board SPI rule (its 433 and 868 modules share SPI bus 0, SPI_SHARED_WARNING): a hardware fact, not the
     # band list
@@ -46,15 +50,21 @@ def _symbols(tree) -> list:
 
 
 def code_lines(src: str) -> dict:
-    """{line: its code without comments or docstrings}, the tokens joined by spaces."""
+    """{first line of a statement: its code without comments or docstrings}, the tokens of the whole logical line
+    joined by spaces (a tuple split across lines is one text)."""
     doc = _docstring_lines(ast.parse(src))
     lines: dict = {}
+    first = None
     for tok in tokenize.generate_tokens(io.StringIO(src).readline):
-        if tok.type in (tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT):
+        if tok.type == tokenize.NEWLINE:
+            first = None
+            continue
+        if tok.type in (tokenize.COMMENT, tokenize.NL, tokenize.INDENT, tokenize.DEDENT, tokenize.ENDMARKER):
             continue
         if tok.type == tokenize.STRING and tok.start[0] in doc:
             continue
-        lines.setdefault(tok.start[0], []).append(tok.string)
+        first = tok.start[0] if first is None else first
+        lines.setdefault(first, []).append(tok.string)
     return {n: " ".join(t) for n, t in lines.items()}
 
 
@@ -105,5 +115,11 @@ def test_the_scan_sees_a_copy_and_skips_comments_and_docstrings():
            'def f(b):\n'
            '    """433|868"""\n'
            '    return b == "868"\n'
-           'MSG = "a plain string 433|868"\n')
-    assert [h.split(":")[1] for h in copies("x.py", src)] == ["2", "3", "6", "7"]
+           'MSG = "a plain string 433|868"\n'
+           "Y = ('868', '433')\n"
+           'Z = ("433",\n'
+           '     "868")\n'
+           'def g(b):\n'
+           '    return b != "433" or "868" == b\n'
+           'RE2 = r"868|433"\n')
+    assert [h.split(":")[1] for h in copies("x.py", src)] == ["2", "3", "6", "7", "8", "9", "12", "13"]

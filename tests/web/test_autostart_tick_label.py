@@ -84,8 +84,9 @@ def test_a_stack_without_a_hardware_list_keeps_the_plain_label(web):
 
 
 def test_fixed_port_reticulum_names_the_radio_its_save_writes(web, tmp_path, csrf):
-    """A fixed-port stack has one instance's pages: the label's radio is the one whose file the Save writes."""
-    radios_fixture.write(tmp_path, TWO)
+    """A fixed-port stack has one instance's pages: the label's radio is the one whose file the Save writes. (Two 868
+    boards: Reticulum runs on 868 only.)"""
+    radios_fixture.write(tmp_path, tuple(radios.Radio(r.id, r.name, r.model, "868", ce=r.ce) for r in TWO))
     c = web()
     token = csrf(c, "/stacks?cfg=reticulum")
     page = _get(c, "/stacks?cfg=reticulum")

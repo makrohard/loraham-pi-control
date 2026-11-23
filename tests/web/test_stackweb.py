@@ -20,6 +20,7 @@ from lhpc.core.probes.backends import FakeSystem, Listener, CommandResult as CR
 from lhpc.core.services import ControllerService
 
 import radios_fixture
+from lhpc.core import radios
 import repo_paths
 from htmlq import parse
 
@@ -735,8 +736,9 @@ def test_default_ports_are_stable_per_stack_and_never_collide(tmp_path):
     # B1b: 8444 + its kind's index + 133 x (n - 1) on rN (the default list: r1 433, r2 868; meshcore is 868-only,
     # so it is r2's), no longer the position in a radio-by-radio list.
     svc = _svc(tmp_path)
-    want = {"graywolf@r1": 8444, "meshcom@r1": 8445, "meshtastic@r1": 8447, "reticulum@r1": 8448,
-            "graywolf@r2": 8577, "meshcore@r2": 8579, "meshtastic@r2": 8580, "meshcore-meshcore-node@r2": 8582}
+    want = {"graywolf@r1": 8444, "meshcom@r1": 8445, "meshtastic@r1": 8447,      # Reticulum runs on 868 only: r2's
+            "graywolf@r2": 8577, "meshcore@r2": 8579, "meshtastic@r2": 8580, "reticulum@r2": 8581,
+            "meshcore-meshcore-node@r2": 8582}
     assert {p: svc.stack_web_view(p)["suggested_port"] for p in svc._page_positions()} == want
     # stable after one is enabled
     assert svc.stack_web_configure("meshcom@r1", mode="local", port=8445).ok
@@ -2494,6 +2496,10 @@ def test_an_unknown_sets_fallback_row_equal_to_a_verified_row_is_one_line(tmp_pa
     assert sorted(n for n, _h, _l in lines) == ["MeshCom (QEMU) @r1", "MeshCom (QEMU) @r2"]
 
 
+# Two SPI boards on 868 (Reticulum runs on 868 only): r1 and r2, as radios_fixture's R1/R2 are on 433.
+RETI_868 = (radios.Radio("r1", "a", "uputronics", "868", ce="ce0"), radios.Radio("r2", "b", "uputronics", "868", ce="ce1"))
+
+
 def _kiss_box(tmp_path, monkeypatch, listeners, run, state, pids=(), sid="kiss"):
     """Stack `sid` (kiss) with each of its components in `state` and the running set `run` (None: unknown), the live
     sockets, and `pids` for each component with no readable argv."""
@@ -2823,9 +2829,9 @@ def test_a_disabled_radios_listener_at_its_saved_port_has_its_own_line(tmp_path,
 def test_a_fixed_port_listener_is_one_line_on_the_running_radio(tmp_path, monkeypatch, web, runs):
     # Reticulum's ports are fixed (one set serves whichever radio it runs on): r1 and r2 both read the same sockets
     # :4242 and :8790. Each is one line, the running radio's, never marked stopped and never joined to the other
-    # radio's page line; the box pill is "exposed"
+    # radio's page line; the box pill is "exposed". Both radios on 868: Reticulum runs on 868 only.
     from lhpc.core import commands
-    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    radios_fixture.write(tmp_path, RETI_868)
     svc = _kiss_box(tmp_path, monkeypatch, [_public(4242), _public(8790, 2)], run=[commands.Instance(runs)],
                     state="RUNNING", sid="reticulum")
     _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
@@ -2944,9 +2950,9 @@ def test_a_proxied_pages_public_upstream_has_its_own_line(tmp_path, monkeypatch,
 def _reticulum_r1_and_a_saved_r2_page(tmp_path, monkeypatch, r1_proxied, listeners, hardware):
     """reticulum (fixed ports: one MeshChat upstream :8790 serves either radio) runs on r1, whose page is proxied on
     :8590 when `r1_proxied`; r2 has its own settings file and no proxy (its page is not proxied), and the hardware
-    list is then `hardware` (r2 disabled or removed). The service."""
+    list is then `hardware` (r2 disabled or removed). The service. Both radios on 868: Reticulum runs on 868 only."""
     from lhpc.core import commands
-    radios_fixture.write(tmp_path, (radios_fixture.R1, radios_fixture.R2))
+    radios_fixture.write(tmp_path, RETI_868)
     svc = _kiss_box(tmp_path, monkeypatch, listeners, run=[commands.Instance("r1")], state="RUNNING", sid="reticulum")
     if r1_proxied:
         assert svc.stack_web_configure("reticulum@r1", mode="public", port=8590, cidrs=["0.0.0.0/0"], confirm=True,
@@ -2964,9 +2970,10 @@ def test_a_fixed_port_upstream_stays_the_listed_radios_when_another_radios_page_
     # G2-UIU3-R5 B1 (a regression of the fixed-port case of c39d6bde): reticulum runs on r1, MeshChat's one upstream
     # :8790 listens on every address, r2 (disabled or removed) keeps its settings, its page not proxied. The upstream is
     # r1's: one line names it, under r1, never under r2; the box reads "exposed". red on 0fb3bf96 (r1 proxied): the
-    # :8790 line was r2's, "radio disabled — page still served until Apply"
+    # :8790 line was r2's, "radio disabled — page still served until Apply". Both radios on 868: Reticulum runs on 868
+    # only.
     import dataclasses
-    hardware = (radios_fixture.R1,) + ((dataclasses.replace(radios_fixture.R2, enabled=False),) if r2 == "disabled" else ())
+    hardware = RETI_868[:1] + ((dataclasses.replace(RETI_868[1], enabled=False),) if r2 == "disabled" else ())
     svc = _reticulum_r1_and_a_saved_r2_page(tmp_path, monkeypatch, r1_proxied,
                                             [_public(4242), _public(8790, 2), _public(8590, 3)], hardware)
     _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
@@ -2979,7 +2986,7 @@ def test_two_off_list_pages_on_one_live_upstream_are_one_line(tmp_path, monkeypa
     # G2-UIU3-R5 N1 (R5): every radio is off, r1 and r2 both keep their reticulum settings, and the one fixed upstream
     # :8790 still listens on every address: one line for it (the first radio's), not one per page
     import dataclasses
-    off = (dataclasses.replace(radios_fixture.R1, enabled=False), dataclasses.replace(radios_fixture.R2, enabled=False))
+    off = tuple(dataclasses.replace(r, enabled=False) for r in RETI_868)
     svc = _reticulum_r1_and_a_saved_r2_page(tmp_path, monkeypatch, False, [_public(8790, 2)], off)
     _doc, box, lines = _box_lines(web(service_factory=lambda: svc))
     assert [n for n, _h, line in lines if ":8790" in line.text] == ["Reticulum (RNS) @r1"], [n for n, _h, _l in lines]

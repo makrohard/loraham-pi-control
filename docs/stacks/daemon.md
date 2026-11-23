@@ -147,8 +147,8 @@ limits in [reticulum](reticulum.md#band-limits). Defaults:
 |---|---|---|---|
 | daemon (base) | 433.175 MHz | 869.525 MHz | MANAGED, SF12, BW125, CR5, CRC on, preamble 8, sync 0x12, 17 dBm |
 | chat, kiss | — | — | the LoRaHAM amateur profile: MANAGED, SF12, BW125, CR5, CRC on, preamble 8, sync 0x12, 17 dBm |
-| voice | DIRECT, 434.700, SF7, BW125, CR5, preamble 8, sync 0x12, 17 dBm | DIRECT, 869.525, SF7, BW250, CR5, preamble 16, sync 0x2B, 10 dBm | CRC on |
-| meshcom | 433.175, SF10, BW125, CR6, 17 dBm | 869.525, SF11, BW250, CR6, 10 dBm | MANAGED, CRC on, preamble 8, sync 0x2B, CADIDLE 28 ms |
+| voice | DIRECT, 434.700, SF7, BW125, CR5, CRC on, preamble 8, sync 0x12, 17 dBm | — | — |
+| meshcom | 433.175, SF10, BW125, CR6, 17 dBm | — | MANAGED, CRC on, preamble 8, sync 0x2B, CADIDLE 28 ms |
 | meshcore | — | MANAGED, 869.618, SF8, BW62.5, CR8, CRC on, preamble 16, sync 0x12, 14 dBm | — |
 | reticulum (`backend = daemon`) | 434.500, 10 dBm | 868.500, 14 dBm | LORA only, MANAGED, SF8, BW125, CR5, CRC on, LDRO AUTO, preamble from the interface (RNode framing), sync 0x12, TXQUEUE 1, CADIDLE 50 ms, CADTXAFTERTIMEOUT 0 |
 | base LBT (every stack) | | | CADWAIT 1500 ms, CADIDLE 250 ms, TXQUEUE 1, CADMONITOR 0, CADRSSI −90, CADTXAFTERTIMEOUT 0 |

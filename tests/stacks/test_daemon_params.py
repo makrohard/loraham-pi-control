@@ -22,19 +22,23 @@ def test_loraham_defaults_match_app_source():
         assert dp.default_value(s, "433", "TXMODE") == "MANAGED"
 
 
-def test_voice_per_band_defaults():
+def test_voice_433_defaults():
     assert dp.default_value("voice", "433", "SF") == "7"
-    assert dp.default_value("voice", "868", "SF") == "7"
-    assert dp.default_value("voice", "868", "SYNC") == "0x2B"
+    assert dp.default_value("voice", "433", "SYNC") == "0x12"
     assert dp.default_value("voice", "433", "TXMODE") == "DIRECT"
 
 
-def test_meshcom_and_meshcore_868_defaults():
+def test_t4_voice_and_meshcom_have_no_868_profile_meshcore_keeps_its_868():
+    # Voice runs on 433 only and MeshCom's 868 profile was unused: neither has an "868" entry. MeshCore keeps it.
+    assert set(dp.STACK_DEFAULTS["voice"]) == {"433"}
+    assert set(dp.STACK_DEFAULTS["meshcom"]) == {"*", "433"}
+    assert dp.STACK_DEFAULTS["meshcore"]["868"]["SF"] == "8"
+
+
+def test_meshcom_433_and_meshcore_868_defaults():
     assert dp.default_value("meshcom", "433", "SF") == "10"        # DACH 433
-    assert dp.default_value("meshcom", "868", "SF") == "11"        # 868
     assert dp.default_value("meshcom", "433", "BW") == "125.0"
     assert dp.default_value("meshcom", "433", "CADIDLE") == "28"   # shared, the CADIDLE=28 fix
-    assert dp.default_value("meshcom", "868", "CADIDLE") == "28"
     assert dp.default_value("meshcore", "868", "SF") == "8"
     assert dp.default_value("meshcore", "868", "BW") == "62.5"
     assert dp.default_value("meshcore", "868", "CR") == "8"
@@ -52,7 +56,7 @@ def test_all_default_values_are_daemon_valid():
 
 def test_radio_params_greyed_lbt_not():
     # All params are editable now; app_owned is only the greyed (will-be-overwritten) hint.
-    rows = {r["name"]: r for r in dp.stack_view("meshcom", "868")}
+    rows = {r["name"]: r for r in dp.stack_view("meshcom", "433")}
     assert rows["SF"]["app_owned"]                       # greyed: app overwrites it
     assert rows["TXMODE"]["app_owned"]                   # app sets the mode
     assert not rows["CADIDLE"]["app_owned"]              # operator LBT, not overwritten
@@ -70,23 +74,23 @@ def test_daemon_stack_has_no_greyed_rows_and_shows_base_freq():
 def test_overrides_show_on_all_params():
     # Every param is editable and persists; app_owned only greys it visually.
     ov = {"CADIDLE": "40", "SF": "9"}
-    view = {r["name"]: r for r in dp.stack_view("meshcom", "868", ov)}
+    view = {r["name"]: r for r in dp.stack_view("meshcom", "433", ov)}
     assert view["CADIDLE"]["value"] == "40"          # LBT override shows
     assert view["SF"]["value"] == "9"                # radio override also shows (still greyed)
     assert view["SF"]["app_owned"]
 
 
 def test_the_voice_panel_defaults_are_the_apps_manifest_defaults():
-    """For every parameter the voice app sets, on each band, the panel's displayed default is
-    the value the app is seeded with: the manifest's band default (the app's LDRO 2 = auto is
+    """For every parameter the voice app sets on its one band (433), the panel's displayed default is
+    the value the app is seeded with: the manifest's `433_*` param default (the app's LDRO 2 = auto is
     the daemon's AUTO)."""
     from lhpc.core.manifest import load_manifest
     voice = next(s for s in load_manifest() if s.id == "voice")
-    seeded = [(band, p.name.upper(), value) for c in voice.components if c.config_file
-              for p in c.config_file.params for band, value in dict(p.band_defaults or ()).items()]
+    seeded = [("433", p.name.upper(), p.default) for c in voice.components if c.config_file
+              for p in c.config_file.params if p.key.startswith("433_")]
     shown = [(band, name, {"2": "AUTO"}.get(value, value) if name == "LDRO" else value,
               dp.default_value("voice", band, name))
              for band, name, value in seeded if name in dp.STACK_DEFAULTS["voice"][band]]
-    assert ("868", "SF") in {(band, name) for band, name, _v, _d in shown}
+    assert ("433", "SF") in {(band, name) for band, name, _v, _d in shown}
     assert [row for row in shown if row[2] != row[3]] == []
 

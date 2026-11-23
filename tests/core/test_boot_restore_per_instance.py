@@ -337,4 +337,19 @@ def test_spi_refusal_a_direct_spi_instance_on_a_usb_radio_is_not_restored_and_sa
     assert [(i["target"], i["state"], i["result"]["summary"]) for i in _journal(tmp_path)["items"]
             if i["target"].endswith("@r4")] == \
         [("reticulum@r4", "failed", "reticulum@r4: reticulum with backend spi drives SPI radios only, r4 is a USB-CH341 radio: use "
-                                    "reticulum@r1 or reticulum@r2")]
+                                    "reticulum@r2")]                     # r1 is 433: Reticulum runs on 868 only
+
+
+def test_t6_an_old_voice_on_868_or_reticulum_on_433_record_is_not_restored_and_says_why(tmp_path, monkeypatch):
+    # F34: Voice runs on 433 only and Reticulum on 868 only. A record from before the upgrade of voice@r2 (868) and of
+    # reticulum@r1 (433) starts nothing; each is skipped with its why. red-before (C1): both were started
+    starts = []
+    svc = _service(tmp_path, monkeypatch, (HAT433, HAT868), starts)
+    _record(tmp_path, rid="r2", band="868", pid=999951, at=1000, stack="voice", comp="loraham-voice")
+    _record(tmp_path, rid="r1", band="433", pid=999952, at=1001, stack="reticulum", comp="rns")
+    svc.boot_restore_run()
+    assert starts == []
+    assert _journal(tmp_path)["items"] == []
+    assert sorted(_skips(tmp_path)) == [
+        ("reticulum@r1", "band ambiguity: recorded band '433' contradicts manifest band '868'"),
+        ("voice@r2", "band ambiguity: recorded band '868' contradicts manifest band '433'")]

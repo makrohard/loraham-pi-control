@@ -130,8 +130,6 @@ STACK_DEFAULTS: dict[str, dict[str, dict[str, str]]] = {
     "voice": {
         "433": {"TXMODE": "DIRECT", "FREQ": "434.700", "SF": "7", "BW": "125.0", "CR": "5",
                 "CRC": "1", "LDRO": "AUTO", "PREAMBLE": "8", "SYNC": "0x12", "POWER": "17"},
-        "868": {"TXMODE": "DIRECT", "FREQ": "869.525", "SF": "7", "BW": "250.0", "CR": "5",
-                "CRC": "1", "LDRO": "AUTO", "PREAMBLE": "16", "SYNC": "0x2B", "POWER": "10"},
     },
     "meshcom": {
         # Shared across bands (MeshCom firmware: LoRa, MANAGED, CRC on, ~28 ms single-CAD).
@@ -139,8 +137,6 @@ STACK_DEFAULTS: dict[str, dict[str, dict[str, str]]] = {
               "SYNC": "0x2B", "PREAMBLE": "8", "CADIDLE": "28"},
         # DACH MeshCom 433 (firmware region OE/UK): SF10 / BW125 / CR4:6.
         "433": {"FREQ": "433.175", "SF": "10", "BW": "125.0", "CR": "6", "POWER": "17"},
-        # MeshCom 868 (firmware region 5): SF11 / BW250 / CR4:6.
-        "868": {"FREQ": "869.525", "SF": "11", "BW": "250.0", "CR": "6", "POWER": "10"},
     },
     "meshcore": {
         # PREAMBLE 16 / POWER 14 are what every preset in the MeshCore host actually

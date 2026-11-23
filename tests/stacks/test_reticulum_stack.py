@@ -62,7 +62,7 @@ def test_every_client_of_the_node_wheel_builds_after_the_node():
 def test_radio_is_exclusive_but_the_spi_bus_is_cooperative():
     res = {r.key: r.mode for r in _comp("rns").resources}
     assert res[radio_claim("868")] is ResourceMode.EXCLUSIVE
-    assert res[radio_claim("433")] is ResourceMode.EXCLUSIVE
+    assert radio_claim("433") not in res                  # Reticulum runs on 868 only: no 433 radio claim
     # Cooperative is only honest because the driver takes the daemon's spi0.lock.
     assert res["spi.bus.0"] is ResourceMode.COOPERATIVE
 
@@ -259,20 +259,21 @@ def test_band_choice_does_not_leak_between_stacks(tmp_path, monkeypatch):
 
     The switch links carry `band` AND `cfg=<stack.id>` together. Applying the band
     globally made a 433 choice (typically on the daemon's live-band switch) render
-    reticulum — whose declared primary is 868 — as 433, and worse, decided which
-    per-band config a Save would write to.
+    a stack whose declared primary is 868 as 433, and worse, decided which
+    per-band config a Save would write to. (Meshtastic: primary 868, bands 433 + 868; Reticulum, the
+    old example, runs on 868 only.)
     """
     from lhpc.core.services import ControllerService
 
     svc = ControllerService()
-    bands = svc.stack_bands("reticulum")
+    bands = svc.stack_bands("meshtastic")
 
     # With no explicit band the stack resolves to its DECLARED primary, not bands[0].
-    assert svc._config_band("reticulum", "") == "868"
+    assert svc._config_band("meshtastic", "") == "868"
     # bands[0] is 433 here, so a naive "first allowed band" fallback would fail above.
     assert bands[0] == "433"
     # An explicit band still wins when it IS this stack's choice.
-    assert svc._config_band("reticulum", "433") == "433"
+    assert svc._config_band("meshtastic", "433") == "433"
 
 
 def test_ifac_uses_the_keys_reticulum_actually_reads():
@@ -330,25 +331,25 @@ def test_a_multiband_stack_is_running_on_one_band_not_all_of_them(monkeypatch):
     """The radio dashboard asked "is a band-carrying component up?" — an answer
     that is identical in EVERY band column, so a stack running on 868 also
     rendered under "Running on 433". It must be scoped to the band the stack is
-    actually on."""
+    actually on. (Meshtastic, primary 868: the multi-band example since Reticulum runs on 868 only.)"""
     from lhpc.core.services import ControllerService
 
     svc = ControllerService()
     monkeypatch.setattr(svc, "launch_band", lambda sid, default="": "868")
-    assert svc._runs_on_band("reticulum", "868") is True
-    assert svc._runs_on_band("reticulum", "433") is False
+    assert svc._runs_on_band("meshtastic", "868") is True
+    assert svc._runs_on_band("meshtastic", "433") is False
 
     # No start marker: fall back to the launch band, then the DECLARED primary —
     # never "true for every supported band".
     monkeypatch.setattr(svc, "launch_band", lambda sid, default="": "")
     monkeypatch.setattr(svc, "interactive_shown", lambda sid, inst=None: {})
-    assert svc._runs_on_band("reticulum", "868") is True
-    assert svc._runs_on_band("reticulum", "433") is False
+    assert svc._runs_on_band("meshtastic", "868") is True
+    assert svc._runs_on_band("meshtastic", "433") is False
 
     # An interactive app launched on 433 is the evidence when no marker exists.
     monkeypatch.setattr(svc, "interactive_shown", lambda sid, inst=None: {"": "433"})
-    assert svc._runs_on_band("reticulum", "433") is True
-    assert svc._runs_on_band("reticulum", "868") is False
+    assert svc._runs_on_band("meshtastic", "433") is True
+    assert svc._runs_on_band("meshtastic", "868") is False
 
 
 def test_the_advertised_command_restores_the_terminal():
@@ -600,15 +601,16 @@ def test_starting_a_client_does_not_rewrite_the_launch_band(monkeypatch):
     """Starting an optional client with no explicit band resolved to the stack's
     DECLARED primary and overwrote the running-band marker: a live 433 node became
     "868" in state, so the console showed — and a Save would have written — the wrong
-    band's config. An explicit band wins, else the band already running."""
+    band's config. An explicit band wins, else the band already running. (Meshtastic, primary 868 with 433 + 868;
+    Reticulum, the old example, runs on 868 only.)"""
     from lhpc.core.services import ControllerService
 
     svc = ControllerService()
     monkeypatch.setattr(svc, "launch_band", lambda sid, default="": "433")
     # No explicit band: inherit 433, NOT the declared primary (868).
-    assert svc._config_band("reticulum", svc.launch_band("reticulum", "")) == "433"
+    assert svc._config_band("meshtastic", svc.launch_band("meshtastic", "")) == "433"
     # An explicit band still wins.
-    assert svc._config_band("reticulum", "868") == "868"
+    assert svc._config_band("meshtastic", "868") == "868"
 
 
 def test_the_console_falls_back_to_the_launch_band(monkeypatch):
@@ -649,8 +651,8 @@ def test_starting_the_other_band_while_running_is_refused(tmp_path, monkeypatch)
 def test_only_a_band_carrying_component_defines_the_band():
     """Starting an optional client with band=868 wrote the stack's running-band marker
     while `rns` was still tuned to 433 — status, the dashboard, arbitration and the
-    per-band config then all described a band the radio was not on."""
-    assert _comp("rns").bands == ("433", "868")
+    per-band config then all described a band the radio was not on. Since F34 `rns` carries one fixed band (868)."""
+    assert (_comp("rns").band, _comp("rns").bands) == ("868", ())
     for cid in ("lxmd", "nomadnet", "sideband"):
         c = _comp(cid)
         assert not c.bands and not c.band, f"{cid} must not carry a band"
@@ -659,7 +661,8 @@ def test_only_a_band_carrying_component_defines_the_band():
 def test_an_unknown_band_claims_every_possible_band(monkeypatch):
     """A live multi-band owner whose band marker is lost or unreadable must claim ALL
     its bands. Falling back to the declared primary meant a node actually on 433 was
-    arbitrated as an 868 owner, so a second exclusive 433 owner could be admitted."""
+    arbitrated as an 868 owner, so a second exclusive 433 owner could be admitted. (Meshtastic: the multi-band
+    example since Reticulum runs on 868 only.)"""
     from lhpc.core.services import ControllerService
 
     svc = ControllerService()
@@ -669,11 +672,11 @@ def test_an_unknown_band_claims_every_possible_band(monkeypatch):
     # stubbed both ways: the real check is a full system snapshot scan; this test is about
     # band arbitration, not process discovery.
     monkeypatch.setattr(svc, "_band_owner_is_up", lambda sid: True)
-    assert svc._operation_bands("reticulum", "", "", "start") == {"433", "868"}
+    assert svc._operation_bands("meshtastic", "", "", "start") == {"433", "868"}
 
     # Not running -> the declared primary is fine again (nothing to protect).
     monkeypatch.setattr(svc, "_band_owner_is_up", lambda sid: False)
-    assert svc._operation_bands("reticulum", "", "", "start") == {"868"}
+    assert svc._operation_bands("meshtastic", "", "", "start") == {"868"}
 
 
 def test_the_build_marker_is_a_receipt_for_its_consumed_sources(monkeypatch):
