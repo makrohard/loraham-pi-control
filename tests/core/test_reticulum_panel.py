@@ -1,17 +1,19 @@
 """Reticulum's daemon panel (plan reti v21 §1b R7, §1d RED-2, B2): on the daemon backend a radio's
 "Daemon radio parameters" panel holds all its radio values, starting from Reticulum's profile; the panel and the
-rendered `[[LoRa <rid>]]` section are one function (the instance's own set over the profile, never the radio row's);
+rendered `[[LoRa <rid>]]` section are one function (the instance's own set over the radio row's POWER, at most the
+band cap, over the profile; no other row of the radio's);
 every row is operator-owned and Save-only (the interface sends the section at every (re)connect, LHPC sends nothing).
 The Config page keeps frequency/SF/BW/CR/power for `backend = spi` only. Box H: r1 loraham 433, r2 loraham 868 (SPI),
 r3 CH341-RFM98 433 and r4 PineDio 868 (USB)."""
 from __future__ import annotations
 
 import dataclasses
+import re
 
 import radios_fixture
 
 from lhpc.adapters.cli import main as cli
-from lhpc.core import daemon_params, instances
+from lhpc.core import daemon_params, instances, radio_start
 from lhpc.core.paths import Paths
 from lhpc.core.probes.backends import FakeSystem
 from lhpc.core.services import ControllerService
@@ -38,7 +40,8 @@ def _rows(svc, rid, stack="reticulum"):
 
 def _section(tmp_path, svc, rid):
     """{key: value} of `[[LoRa <rid>]]` as the node's file renders it."""
-    svc.write_config_files("rns", "868", inst=instances.copy_of(svc, "reticulum", rid)[0])
+    inst = instances.copy_of(svc, "reticulum", rid)[0]
+    svc.write_config_files("rns", inst.band, inst=inst)
     lines = [ln.strip() for ln in (tmp_path / "state" / "reticulum" / "config").read_text().splitlines()]
     out = {}
     for ln in lines[lines.index(f"[[LoRa {rid}]]") + 1:]:
@@ -177,3 +180,65 @@ def test_the_owners_panel_save_is_checked_first_and_marks_the_node_restart_requi
     assert _rows(svc, "r2")["POWER"]["value"] == "12"
     seen.clear()
     assert svc.save_daemon_params("reticulum", {"POWER": "12"}, rid="r2").ok and seen == []     # nothing changed
+
+
+# ---- the radio's POWER (plan RETI-POWER v2) ---------------------------------------------------------------------------
+
+def test_the_radios_power_reaches_reticulums_panel_and_section_at_most_its_band_cap(tmp_path):
+    svc = _svc(tmp_path, _row_dp("r3", POWER="2"))
+    # red-before (93419bfe): 10 in both — the profile's band value over the radio's POWER 2 (live proof R-P1, r3)
+    assert (_rows(svc, "r3")["POWER"]["value"], _section(tmp_path, svc, "r3")["txpower"]) == ("2", "2")
+    svc = _svc(tmp_path, _row_dp("r1", POWER="14"))
+    assert (_rows(svc, "r1")["POWER"]["value"], _section(tmp_path, svc, "r1")["txpower"]) == ("10", "10")
+    svc = _svc(tmp_path, _row_dp("r2", POWER="17"))
+    assert (_rows(svc, "r2")["POWER"]["value"], _section(tmp_path, svc, "r2")["txpower"]) == ("14", "14")
+    svc = _svc(tmp_path, _row_dp("r3", POWER="2"))
+    assert svc.save_daemon_params("reticulum", {"POWER": "5"}, rid="r3").ok          # its own set wins over the row
+    assert (_rows(svc, "r3")["POWER"]["value"], _section(tmp_path, svc, "r3")["txpower"]) == ("5", "5")
+
+
+def test_saving_the_radios_power_stores_none_so_reticulum_follows_the_radio(tmp_path):
+    svc = _svc(tmp_path, _row_dp("r3", POWER="2"))
+    assert svc.save_daemon_params("reticulum", {"POWER": "2", "SF": "9"}, rid="r3").ok
+    assert "POWER" not in radio_start.instance_dp(svc, "reticulum", "r3")
+    radios_fixture.write(tmp_path, _row_dp("r3", POWER="5"))
+    assert (_rows(svc, "r3")["POWER"]["value"], _section(tmp_path, svc, "r3")["txpower"]) == ("5", "5")
+
+
+def test_a_save_while_the_node_runs_compares_the_section_it_renders(tmp_path, monkeypatch):
+    from lhpc.core import reticulum_members
+    svc, seen = _svc(tmp_path, _row_dp("r3", POWER="2")), []
+    monkeypatch.setattr(reticulum_members, "check", lambda s, rid, block: seen.append(block) or "")
+    monkeypatch.setattr(reticulum_members, "owner_record", lambda s: {"rid": "r3", "node_owner": True})
+    assert svc.save_daemon_params("reticulum", {"SF": "8", "POWER": "2"}, rid="r3").ok          # = what it renders
+    assert seen == [] and svc.restart_required("reticulum@r3") is None
+    assert svc.save_daemon_params("reticulum", {"SF": "9"}, rid="r3").ok
+    # red-before (inherited POWER without the would-be merge): dp_POWER too, the checked section at 10
+    assert svc.restart_required("reticulum@r3")["params"] == ["dp_SF"]
+    assert len(seen) == 1 and re.search(r"^\s*txpower = 2$", seen[0], re.M)
+
+
+def test_a_power_below_reticulums_floor_is_refused_never_raised(tmp_path):
+    svc = _svc(tmp_path, _row_dp("r4", POWER="1"))                                 # sx1262: POWER 0/1 are valid
+    why = "r4's POWER 1 dBm is below Reticulum's minimum 2 dBm — set POWER 2 or more on the radio or on Reticulum's panel"
+    assert radio_start.panel_section(svc, "reticulum", "r4") == ({}, why)
+    res = svc.save_daemon_params("reticulum", {"SF": "9"}, rid="r4")
+    # red-before (a25 C1): the Save passed with no check
+    assert not res.ok and why in res.summary and "SF" not in radio_start.instance_dp(svc, "reticulum", "r4")
+    assert svc.save_daemon_params("reticulum", {"POWER": "2"}, rid="r4").ok
+    assert radio_start.panel_section(svc, "reticulum", "r4")[0]["txpower"] == "2"
+    svc = _svc(tmp_path, _row_dp("r4", POWER="5"))
+    res = svc.save_daemon_params("reticulum", {"POWER": "1"}, rid="r4")                      # its own 1: the same
+    assert not res.ok and "r4's POWER 1 dBm is below Reticulum's minimum 2 dBm" in res.summary
+
+
+def test_an_owner_radio_below_the_floor_fails_the_nodes_render_so_its_start_is_blocked(tmp_path):
+    svc = _svc(tmp_path, _row_dp("r4", POWER="1"))
+    writes = svc.write_config_files("rns", "868", inst=instances.copy_of(svc, "reticulum", "r4")[0])
+    # red-before (93419bfe): rendered with txpower 14, over the radio's POWER 1
+    assert [(w.status, w.detail) for w in writes if w.component == "rns"] == [("failed", (
+        "r4's POWER 1 dBm is below Reticulum's minimum 2 dBm — set POWER 2 or more on the radio or on Reticulum's "
+        "panel"))]
+    assert not (tmp_path / "state" / "reticulum" / "config").exists()
+    radios_fixture.write(tmp_path, _row_dp("r4", POWER="2"))
+    assert _section(tmp_path, svc, "r4")["txpower"] == "2"

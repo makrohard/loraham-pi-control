@@ -566,3 +566,14 @@ def test_an_owner_starts_reconcile_says_not_verified_while_its_member_stays_trac
     # a25 F220 N2: the reconcile line follows the facts (record kept -> "not verified"), never a fixed "not connected"
     assert res.ok and "[member] r1: not verified — the node attached LoRa r1 but does not answer whether it runs" in text, text
     assert len(_member(box, "r1")) == 1 and _intent(box, "r1") == "r2"
+
+
+def test_a_member_radio_below_reticulums_power_floor_is_left_out_and_the_owner_starts(box):
+    # plan RETI-POWER v2 §3b / a25 N3: refused, never raised to 2 (that would send above the radio's POWER)
+    radios_fixture.write(box.root, (*radios_fixture.RADIOS, dataclasses.replace(PINE, dp=(("POWER", "1"),))))
+    (box.root / "config" / "stacks" / "reticulum@r4.toml").write_text('member_of = "r2"\n')
+    res = _start(box, "r2")
+    assert res.ok, res.summary
+    # red-before (93419bfe): r4 attached at its profile's 14, the radio's POWER 1 unseen
+    assert "[member] r4: not connected — r4's POWER 1 dBm is below Reticulum's minimum 2 dBm" in "\n".join(res.details)
+    assert _member(box, "r4") == [] and "[[LoRa r4]]" not in _sections(box)

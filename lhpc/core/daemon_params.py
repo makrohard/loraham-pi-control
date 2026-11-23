@@ -160,6 +160,10 @@ STACK_DEFAULTS: dict[str, dict[str, dict[str, str]]] = {
     },
 }
 
+# The lowest txpower Reticulum's interface accepts (loraham-rns-interface section.py MIN_TXPOWER): a rendered POWER
+# below it is refused, never raised.
+RETICULUM_MIN_POWER = 2
+
 # Stacks that talk to the daemon (get a panel). The `daemon` stack itself is handled per-radio
 # (its base config, nothing greyed). Direct-SPI stacks (meshtastic) have no daemon panel.
 CLIENT_STACKS = ("chat", "kiss", "voice", "meshcom", "meshcore", "reticulum")

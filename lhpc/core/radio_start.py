@@ -795,10 +795,15 @@ def instance_dp(svc, sid: str, rid: str) -> dict:
 
 
 def inherited_dp(svc, sid: str, rid: str) -> dict:
-    """What instance `<sid>@<rid>`'s own daemon set inherits: its radio's row (`row_dp`); nothing for a SAVE_ONLY stack
-    (Reticulum: its profile alone, plan reti v21 §1d G1 row 180 B1)."""
+    """What instance `<sid>@<rid>`'s own daemon set inherits: its radio's row (`row_dp`). A SAVE_ONLY stack (Reticulum)
+    inherits the row's POWER alone, at most its profile's band value (the interface's cap), so it never sends above
+    the radio's POWER; every other row stays its profile's (CADIDLE etc., plan reti v21 §1d G1 row 180 B1)."""
     from . import daemon_params
-    return {} if sid in daemon_params.SAVE_ONLY else row_dp(svc, rid)
+    row = row_dp(svc, rid)
+    if sid not in daemon_params.SAVE_ONLY:
+        return row
+    cap = daemon_params.default_value(sid, daemon_radio(svc, rid)[1], "POWER")
+    return {"POWER": str(min(int(row["POWER"]), int(cap)))} if row.get("POWER") and cap else {}
 
 
 def panel_dp(svc, sid: str, rid: str) -> dict:
@@ -822,28 +827,41 @@ def dp_target(svc, target: str, rid: str) -> tuple:
 
 
 def _panel_rows(svc, sid: str, rid: str, band: str, dp=None) -> list:
+    """The panel rows of `<sid>@<rid>`: `dp` (a set not saved yet) or its own set, over what it inherits."""
     from . import daemon_params
-    return daemon_params.stack_view(sid, band, panel_dp(svc, sid, rid) if dp is None else dp, chip_family(svc, rid) or "",
+    own = instance_dp(svc, sid, rid) if dp is None else dp
+    return daemon_params.stack_view(sid, band, {**inherited_dp(svc, sid, rid), **own}, chip_family(svc, rid) or "",
                                     effective_high_power(svc, rid), *power_window(svc, rid))
 
 
 def panel_section(svc, sid: str, rid: str, dp=None) -> tuple:
     """({section key: value}, "") of SAVE_ONLY instance `<sid>@<rid>` — its panel's rows (the same function the panel
     shows; `dp`: a set not saved yet instead of its own) in the interface's spelling — or ({}, why) when it has no panel
-    there."""
+    there or its POWER is below the interface's floor (refused, never raised: that would send above the radio's POWER;
+    an owner's refusal fails the node's render, a member's leaves that member out)."""
     from . import daemon_params
     _sid, _is_daemon, band, why = dp_target(svc, sid, rid)
-    return ({}, why) if why else (daemon_params.section_values(_panel_rows(svc, sid, rid, band, dp)), "")
+    if why:
+        return {}, why
+    section, floor = daemon_params.section_values(_panel_rows(svc, sid, rid, band, dp)), daemon_params.RETICULUM_MIN_POWER
+    if section.get("txpower") and int(section["txpower"]) < floor:
+        return {}, (f"{rid}'s POWER {section['txpower']} dBm is below Reticulum's minimum {floor} dBm — set POWER "
+                    f"{floor} or more on the radio or on Reticulum's panel")
+    return section, ""
 
 
 def _save_only_gate(svc, sid: str, rid: str, edits: dict) -> tuple[str, list, bool]:
     """A SAVE_ONLY panel Save (plan v22 §8.3 B2b): (why not, the changed params, `rid` owns the running node). While the
     node runs on or with `rid`, its would-be section passes the interface's own check BEFORE the commit; the owner's
     interface keeps the section it started with, so the owner gets the restart-required marker (first: a failed write
-    leaves a safe-side marker); a member reloads after the commit (the caller). Nothing changed: nothing to check."""
+    leaves a safe-side marker); a member reloads after the commit (the caller). A would-be section that does not
+    render (its POWER below the floor) is refused, running or not; one that did not render before counts as changed.
+    Nothing changed: nothing to check."""
     from . import daemon_params, reticulum_members
     after = {n: v for n, v in {**instance_dp(svc, sid, rid), **edits}.items() if v}
-    now, new = panel_section(svc, sid, rid)[0], panel_section(svc, sid, rid, after)[0]
+    (new, new_why), now = panel_section(svc, sid, rid, after), panel_section(svc, sid, rid)[0]
+    if new_why:
+        return new_why, [], False
     changed = [f"dp_{n}" for n, k in daemon_params.SECTION_KEYS.items() if now.get(k) != new.get(k)]
     if not changed:
         return "", [], False
