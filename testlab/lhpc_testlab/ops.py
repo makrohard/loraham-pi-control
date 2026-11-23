@@ -12,6 +12,7 @@ import sys
 import time
 
 from lhpc.core import known_bands, reslock, runtime_fs
+from lhpc.core.outcomes import Outcome
 from lhpc.core.service_base import ActionResult, AdmissionRefused
 
 from . import (
@@ -195,14 +196,18 @@ def reset(svc) -> ActionResult:
     # NOT an operator stop, so it must not leave a stop-intent tombstone that pins the stack
     # "stay stopped" past the reset. Fail CLOSED — do not erase runtime state over a stack we
     # could not stop (a half-stopped box is not a clean baseline).
-    stopped, stop_failed = 0, []
+    stopped, stop_failed, unowned = 0, [], []
     for s in svc.stacks():
         try:
             if svc.stack_running(s.id):
-                if svc.stop(s.id, apply=True, _operator=False).ok:
+                res = svc.stop(s.id, apply=True, _operator=False)
+                if res.ok:
                     stopped += 1
                 else:
                     stop_failed.append(s.id)
+                    # the lab's procfs is the host's: a matching process this root never started reads as its stack
+                    unowned += [f"{c.component}: {c.summary}" for c in getattr(res, "results", ())
+                                if c.outcome is Outcome.MANUAL_REQUIRED]
         except Exception as exc:
             stop_failed.append(f"{s.id} ({exc})")
     if stop_failed:
@@ -220,6 +225,9 @@ def reset(svc) -> ActionResult:
         return ActionResult(False, "Reset refused — another daemon serves " + ", ".join(foreign)
                             + ": a second lab root (or a real daemon) on this host shares the radio sockets; stop it "
                             "first.", details=[*details, *(f"  live foreign socket: {p}" for p in foreign)])
+    if stop_failed and unowned:
+        return ActionResult(False, f"Reset aborted — could not stop: {', '.join(stop_failed)}: a process this lab did not "
+                            "start runs on this host (" + "; ".join(unowned) + "); stop it first.", details=details)
     if stop_failed:
         return ActionResult(False, f"Reset aborted — could not stop: {', '.join(stop_failed)}.", details=details)
     _clear_runtime_state(svc)                      # clean baseline (no surviving state/config)

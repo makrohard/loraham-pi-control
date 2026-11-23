@@ -120,6 +120,35 @@ def test_a_lab_reset_refuses_while_a_foreign_daemon_serves_its_radio_sockets(tmp
         sockdir.rmdir()
 
 
+def test_a_lab_reset_names_a_host_process_it_did_not_start(tmp_path, monkeypatch):
+    """The lab's procfs is the host's, so a matching process this root never started (a hardware run's meshtasticd on
+    the dev PC) reads as its running stack, and the stop refuses to kill a process LHPC does not own. The reset still
+    refuses (its baseline is not clean), and its refusal names that process instead of a stack of its own."""
+    from lhpc_testlab import ops
+    from lhpc_testlab.testing import make_lab_root, stop_lab_fakes
+
+    from lhpc.core.outcomes import CompResult, Outcome
+    from lhpc.core.service_base import ActionResult
+    from lhpc.core.services import ControllerService
+    try:
+        paths = make_lab_root(tmp_path, monkeypatch)
+        svc = ControllerService(paths=paths)
+        sid = svc.stacks()[0].id
+        why = "a matching process is running but not owned by LHPC — stop it yourself: kill 4242"
+        monkeypatch.setattr(svc, "stack_running", lambda s: s == sid)
+        monkeypatch.setattr(svc, "stop", lambda *a, **k: ActionResult(False, "not fully verified", results=(
+            CompResult(f"{sid}-main", "stop", Outcome.MANUAL_REQUIRED, stack=sid, summary=why),
+            CompResult(f"{sid}-cli", "stop", Outcome.ALREADY_STOPPED, stack=sid, summary="no owned process"))))
+        monkeypatch.setattr(ops, "_foreign_live_sockets", list)       # no foreign daemon on the sockets
+        r = ops.reset(svc)
+        assert not r.ok, r.summary
+        assert f"could not stop: {sid}: a process this lab did not start runs on this host ({sid}-main: {why})" \
+            in r.summary, r.summary
+        assert "no owned process" not in r.summary                     # only the process it could not stop is named
+    finally:
+        stop_lab_fakes(tmp_path)
+
+
 def test_a_lab_test_that_reboots_leaves_no_fake_behind(tmp_path):
     """The suite's own teardown: a lab test that simulates a reboot (the boot respawns the fake gpsd) and builds no
     LabServer, run as the suite runs it, leaves no fake of its lab root."""
