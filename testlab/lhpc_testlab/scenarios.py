@@ -18,9 +18,12 @@ DEFAULT = "healthy"
 #   radio_433 / radio_868: READY | FAILED            gpsd: bool
 #   fw_receipt: fresh | stale | absent               power_auth: yes | no
 #   missing_files: [paths the LabFs reports absent]
+#   txbusy_433 / txbusy_868: int (the fake daemon refuses the next N TXs CHANNEL_BUSY)
+#   txcadtimeout_433 / txcadtimeout_868: bool (its TX_RESULT OK carries flag 0x04)
 _BASE = {"wifi": "connected", "join_result": "ok", "radio_433": "READY",
          "radio_868": "READY", "gpsd": True, "fw_receipt": "fresh",
-         "missing_files": [], "power_auth": "yes"}
+         "missing_files": [], "power_auth": "yes",
+         "txbusy_433": 0, "txbusy_868": 0, "txcadtimeout_433": False, "txcadtimeout_868": False}
 
 SCENARIOS: dict[str, dict] = {
     "healthy": dict(_BASE),

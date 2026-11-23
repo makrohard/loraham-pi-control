@@ -16,7 +16,9 @@ SOCK_STREAM sockets and speaks the daemon's protocol:
 Scenario coupling (state/testlab/ under the runtime root, derived from
 LORAHAM_RUNTIME_DIR): scenario.json's radio_{band} drives RADIO=READY|FAILED per reply;
 rx-queue/{band}/*.json files are delivered EXACTLY ONCE, in name order, to all
-connected data clients; every TX is appended to tx.jsonl. scenario.json's "air" (a list of
+connected data clients; every TX is appended to tx.jsonl. txbusy_{band} = N: the next N framed or raw TXs
+are refused CHANNEL_BUSY before the air (a changed value arms it again); txcadtimeout_{band}: a TX_RESULT OK
+carries flag 0x04 (MANAGED sent after its CAD wait timed out) with 0x01. scenario.json's "air" (a list of
 bands) makes this band a virtual air: a TX that succeeds is also delivered once, as RX, to every
 OTHER data client of the band (never back to the sender). Deliberately NOT emitted:
 unsolicited CONF broadcasts (TX=/CAD=/RSSI=) — lhpc's one-shot CONF clients read only
@@ -63,6 +65,8 @@ class Fake:
         self.scn_read = 0.0
         self.radio = "READY"
         self.air = False
+        self.busy_seen, self.busy_left = 0, 0     # scenario txbusy_{band}: its last value, the refusals left
+        self.cad_timeout = False
 
     # -- scenario / queue ------------------------------------------------------------
 
@@ -82,9 +86,14 @@ class Fake:
                     flags = {}
                 self.radio = str(flags.get(f"radio_{self.band}", "READY"))
                 self.air = self.band in (rec.get("air") or [])
+                busy = int(flags.get(f"txbusy_{self.band}", 0) or 0)
+                if busy != self.busy_seen:            # a changed value arms the count again
+                    self.busy_seen, self.busy_left = busy, busy
+                self.cad_timeout = bool(flags.get(f"txcadtimeout_{self.band}", False))
             except Exception:
                 self.radio = "READY"
                 self.air = False
+                self.cad_timeout = False
         return self.radio
 
     def queue_dir(self):
@@ -192,6 +201,11 @@ class Fake:
             self.last = "RADIO_NOT_READY"
             self.capture_tx(payload, "RADIO_NOT_READY")
             return 3
+        if self.busy_left > 0:                         # scenario txbusy: refused before the air
+            self.busy_left -= 1
+            self.last = "CHANNEL_BUSY"
+            self.capture_tx(payload, "CHANNEL_BUSY")
+            return 2
         self.n["TXOK"] += 1
         self.done += 1
         self.seq = (self.seq + 1) & 0xFFFF
@@ -307,7 +321,7 @@ def _consume(fake, c, conns):
             status = fake.transmit(payload)
             _air(fake, conns, c, payload, status)
             if fake.set_["TXRESULT"] == "1":
-                body = struct.pack("<BBH", status, 0x01, fake.seq)
+                body = struct.pack("<BBH", status, 0x05 if status == 0 and fake.cad_timeout else 0x01, fake.seq)
                 _send(c, b"\x04" + struct.pack("<H", len(body)) + body)
     else:                                   # raw: every <=255-byte chunk = one TX
         data, c.buf = c.buf, b""

@@ -314,13 +314,13 @@ def test_web_testlab_actions_csrf_and_scenario_switch(tmp_path, monkeypatch):
 # --- fake daemon protocol conformance ----------------------------------------------------
 
 
-def _spawn_fake_daemon(tmp_path, procs, band="433", radio="READY", air=(), rid="", extra=(), wait_s=5):
+def _spawn_fake_daemon(tmp_path, procs, band="433", radio="READY", air=(), rid="", extra=(), wait_s=5, flags=None):
     sockdir = tmp_path / "socks"
     sockdir.mkdir(exist_ok=True)
     root = tmp_path / "droot"
     (root / "state" / "testlab" / "rx-queue" / band).mkdir(parents=True, exist_ok=True)
     scenario = {"name": "t", "applied_boottime": 0, "auto_revert_s": None,
-                "flags": {f"radio_{band}": radio}}
+                "flags": {f"radio_{band}": radio, **(flags or {})}}
     if air:                                  # absent, not empty: the pre-air scenario format
         scenario["air"] = list(air)
     (root / "state" / "testlab" / "scenario.json").write_text(json.dumps(scenario))
@@ -562,6 +562,35 @@ def test_fake_daemon_framed_tx_result_and_rx_injection(fake_daemon, tmp_path):
     assert not list((root / "state" / "testlab" / "rx-queue" / "433").glob("*"))
     tx = (root / "state" / "testlab" / "tx.jsonl").read_text()
     assert '"result": "OK"' in tx and '"band": "433"' in tx
+
+
+@pytest.mark.wallclock("the fake daemon re-reads its scenario at most every 0.8 s: the re-arm wait, bounded 5 s")
+def test_fake_daemon_txbusy_refuses_before_the_air_and_txcadtimeout_flags_the_ok(fake_daemon, tmp_path):
+    """Scenario txbusy_<band> = N: the next N framed TXs answer CHANNEL_BUSY (status 2, the sequence unchanged,
+    captured as such), then OK; txcadtimeout_<band>: that OK carries 0x05. Another band's count is not this one's.
+    A changed txbusy value arms the count again (re-read at most every 0.8 s); txcadtimeout off: 0x01 again."""
+    import socket as _s
+    import struct as _st
+    sockdir, root = fake_daemon(flags={"txbusy_433": 2, "txbusy_868": 5, "txcadtimeout_433": True})
+    f = _s.socket(_s.AF_UNIX)
+    f.settimeout(FAKE_HANG_S)
+    f.connect(str(sockdir / "lora433f.sock"))
+    _conf(sockdir, "433", b"SET TXRESULT=1")
+
+    def tx():
+        f.sendall(b"\x02" + _st.pack("<H", 5) + b"hello")
+        return _st.unpack("<BBH", _frame_of(f, "TX_RESULT frame")[3:7])
+    assert [tx() for _ in range(3)] == [(2, 0x01, 0), (2, 0x01, 0), (0, 0x05, 1)]
+    scn = root / "state" / "testlab" / "scenario.json"
+    rec = json.loads(scn.read_text())
+    rec["flags"].update(txbusy_433=1, txcadtimeout_433=False)
+    scn.write_text(json.dumps(rec))
+    deadline = time.monotonic() + 5          # the fake's scenario re-read (0.8 s), bounded
+    while (r := tx())[0] == 0:
+        assert time.monotonic() < deadline, "the changed txbusy never armed again"
+    assert r[0] == 2 and tx() == (0, 0x01, r[2] + 1)
+    results = [json.loads(line)["result"] for line in (root / "state" / "testlab" / "tx.jsonl").read_text().splitlines()]
+    assert results[:3] == ["CHANNEL_BUSY", "CHANNEL_BUSY", "OK"] and results[-2:] == ["CHANNEL_BUSY", "OK"]
 
 
 @pytest.mark.slow
