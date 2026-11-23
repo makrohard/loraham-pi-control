@@ -1226,7 +1226,7 @@ class LifecycleOpsMixin:
             if run.joined and comp.id == _ri.NODE_ID:     # B5: a member's rns step attaches (its order holds no client:
                 why = _rm.attach(self, instances.member_of(self, stack.id, run.joined), run.joined)   # _run_order)
                 record(comp, stack, Outcome.BLOCKED if why else Outcome.VERIFIED,
-                       f"not connected: {why}" if why else "connected to the Reticulum node (live, no restart)")
+                       f"{_rm.failed_state(self, run.joined)}: {why}" if why else "connected to the Reticulum node (live, no restart)")
                 continue
             state = instances.start_state(self, stack.id, comp, prep.inst, cfg_band, st_index[comp.id].run_state, st_index[comp.id])
             running = state == RunState.RUNNING        # DEGRADED is NOT healthy
@@ -1559,7 +1559,7 @@ class LifecycleOpsMixin:
                 r.component == _ri.NODE_ID and r.outcome == Outcome.VERIFIED for r in results)):
             # B5: THE reconcile after every owner start (manual and boot): each intended member attached, or named
             for rid, why in _rm.reconcile(self, prep.inst.rid, time.monotonic() + _rm.RPC_DEADLINE_S):
-                out.append(f"  [member] {rid}: " + (f"not connected — {why}" if why else "connected to the node"))
+                out.append(f"  [member] {rid}: " + (f"{_rm.failed_state(self, rid)} — {why}" if why else "connected to the node"))
         run.pre_marker = _pre_marker
         return run
 

@@ -33,6 +33,7 @@ class Node:
         self.base, self.attached, self.calls = base, {"LoRa r2"}, []
         self.refuse_attach, self.unlisted, self.refuse_reload, self.check_line = set(), set(), set(), ""
         self.j_down, self.j_down_after = False, set()   # `-j` unanswered (a hung or busy RPC); from the op named on
+        self.j_miss, self.j_miss_after = 0, {}           # `-j` unanswered N times after the op named
 
     def run(self, argv, timeout, cwd=None, env=None):
         tool = os.path.basename(argv[0])
@@ -47,12 +48,16 @@ class Node:
         args = argv[3:]
         self.calls.append(tuple(args))
         if args == ["-j"]:
+            if self.j_miss:
+                self.j_miss -= 1
+                return CommandResult(1, "", "No shared RNS instance available to get status from")
             if self.j_down:
                 return CommandResult(1, "", "No shared RNS instance available to get status from")
             return CommandResult(0, json.dumps({"interfaces": [{"name": f"LoRaSPIInterface[{n}]"}
                                                                for n in sorted(self.attached)]}), "")
         op, name = args
         self.j_down = self.j_down or op in self.j_down_after
+        self.j_miss = self.j_miss_after.get(op, self.j_miss)
         if op == "--attach" and name not in self.refuse_attach:
             self.attached |= {name} - self.unlisted
             return CommandResult(0, f"Interface {name} was attached", "")
@@ -154,7 +159,7 @@ def test_an_attach_the_node_does_not_list_is_refused_and_leaves_nothing(box, cap
     _owner_up(box)
     box.node.unlisted = {"LoRa r1"}                                 # rc 0, but RNS dropped the interface (plan §1c (a))
     assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 1
-    assert "did not attach LoRa r1" in capsys.readouterr().out
+    assert "the node attached LoRa r1 but does not list it" in capsys.readouterr().out
     assert (_sections(box), _member(box, "r1"), _intent(box, "r1")) == (["[[LoRa r2]]"], [], "")
 
 
@@ -229,9 +234,10 @@ def test_a_live_members_settings_are_checked_first_and_reloaded_live(box):
     assert res.ok and ("--reload", "LoRa r1") in box.node.calls and "[member] r1: reloaded live" in "\n".join(res.details)
     box.node.refuse_reload = {"LoRa r1"}
     res = box.svc.save_config("reticulum", {"file_frequency": "434100000"}, inst=r1)
-    assert res.ok and "not connected: the node refused the new settings" in "\n".join(res.details)
+    text = "\n".join(res.details)
+    assert res.ok and "not connected: neither the new settings (refused: Could not reload interface LoRa r1)" in text, text
     # red-before (ea51424b): only the record goes, the refused interface is never detached (plan v25 §9.2)
-    assert ("--detach", "LoRa r1") in box.node.calls and "LoRa r1 is gone from the node" in "\n".join(res.details)
+    assert ("--detach", "LoRa r1") in box.node.calls and "LoRa r1 is gone from the node" in text
     assert _member(box, "r1") == [] and _intent(box, "r1") == "r2"
 
 
@@ -441,7 +447,10 @@ def test_an_attach_the_node_does_not_confirm_is_detached_and_stays_tracked(box, 
     assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 1
     out = capsys.readouterr().out
     # red-before (ea51424b): the block removed without a --detach, no record, the intent dropped: r1 abandoned live
-    assert "did not attach LoRa r1" in out and "it stays tracked" in out, out
+    # row 220 B1: the attach succeeded, only its confirmation is missing
+    assert "not verified: the node attached LoRa r1 but does not answer whether it runs" in out, out
+    assert "it may still be live and stays tracked" in out
+    assert "did not attach" not in out
     assert ("--detach", "LoRa r1") in box.node.calls
     assert (_sections(box), len(_member(box, "r1")), _intent(box, "r1")) == (["[[LoRa r2]]", "[[LoRa r1]]"], 1, "r2")
     box.node.j_down, box.node.j_down_after = False, set()           # the node answers again: its [Connect] ...
@@ -459,7 +468,9 @@ def test_a_reload_the_node_does_not_confirm_keeps_the_member_record(box):
     res = box.svc.save_config("reticulum", {"file_frequency": "434100000"}, inst=r1)
     text = "\n".join(res.details)
     # red-before (ea51424b): the record removed although the interface may run (both reloads succeeded)
-    assert res.ok and "not connected: the node refused the new settings" in text and "it stays tracked" in text, text
+    # row 220 B2: both reloads succeeded (rc 0), neither is confirmed: nothing was refused, the state is not known
+    assert res.ok and "not verified: neither the new settings (reloaded, the node does not answer whether it runs)" in text
+    assert "it may still be live and stays tracked" in text and "refused" not in text and "not connected" not in text, text
     assert len(_member(box, "r1")) == 1 and _intent(box, "r1") == "r2"
 
 
@@ -492,3 +503,14 @@ def test_a_remove_takes_every_member_record_of_the_radio(box):
     assert box.svc.stop("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r1")[0]).ok
     # red-before (b602baa8): the first record goes, the second stays (a25 F218 N1)
     assert _member(box, "r1") == []
+
+
+def test_an_attach_the_node_confirms_only_after_its_teardown_says_detached_again(box, capsys):
+    _owner_up(box)
+    box.node.j_miss_after = {"--attach": 1}                        # attached (rc 0), the verifying `-j` unanswered once
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 1
+    out = capsys.readouterr().out
+    # red-before (a8c5bd67): "did not attach" although the attach succeeded (row 220 B1)
+    assert "not connected: the node attached LoRa r1 but does not answer whether it runs; LoRa r1 detached again" in out
+    assert ("--detach", "LoRa r1") in box.node.calls
+    assert (_sections(box), _member(box, "r1"), _intent(box, "r1")) == (["[[LoRa r2]]"], [], "")

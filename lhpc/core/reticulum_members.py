@@ -151,11 +151,18 @@ def attach(svc, owner: str, rid: str) -> str:
     _write_block(svc, rid, block)
     if not _one_record(svc, own, owner, rid):
         return _left("the member's ownership record could not be written", teardown(svc, rid, clear_intent=False))
-    res = rnstatus(svc, "--attach", reticulum_node.name(rid))
-    if res.returncode == 0 and rid in (listed(svc) or set()):
+    name = reticulum_node.name(rid)
+    res = rnstatus(svc, "--attach", name)
+    if (now := listed(svc) if res.returncode == 0 else set()) is not None and rid in now:
         return ""
-    why = f"the node did not attach {reticulum_node.name(rid)}: {(res.stdout or res.stderr or '').strip()}".rstrip(": ")
-    return _left(why, teardown(svc, rid, clear_intent=False))
+    if res.returncode != 0:                                # refused / attached, not confirmed / attached, not listed
+        why = f"the node did not attach {name}: {(res.stdout or res.stderr or '').strip()}".rstrip(": ")
+    elif now is None:
+        why = f"the node attached {name} but does not answer whether it runs"
+    else:
+        why = f"the node attached {name} but does not list it"
+    kept = teardown(svc, rid, clear_intent=False)
+    return _left(why, kept) if kept or now is not None else f"{why}; {name} detached again"
 
 
 def _one_record(svc, own, owner: str, rid: str) -> bool:
@@ -179,7 +186,13 @@ def _one_record(svc, own, owner: str, rid: str) -> bool:
 
 def _left(why: str, kept: str) -> str:
     """A failure's text, with why its block and record stay (`teardown`'s refusal) when they do."""
-    return f"{why}; {kept} — it stays tracked" if kept else why
+    return f"{why}; {kept} — it may still be live and stays tracked" if kept else why
+
+
+def failed_state(svc, rid: str) -> str:
+    """How a failed attach of `rid` left it: "not connected" (the teardown confirmed it gone), or "not verified" (its
+    record stays: the node could not confirm the interface is gone)."""
+    return "not verified" if member_record(svc, rid) is not None else "not connected"
 
 
 def reconcile(svc, owner: str, deadline: float) -> list[tuple[str, str]]:
@@ -271,9 +284,10 @@ def panel_refusal(svc, rid: str, section: dict) -> tuple[str, bool]:
 
 
 def reload(svc, rid: str) -> str:
-    """After a member's saved settings: its section re-rendered and reloaded (`--reload`, verified in `-j`); refused ->
-    the previous section back and reloaded; that fails too -> `teardown` (not connected; block and record stay while
-    the node cannot confirm the interface is gone). "" = reloaded, else
+    """After a member's saved settings: its section re-rendered and reloaded (`--reload`, verified in `-j`); not
+    confirmed (refused, not listed, or `-j` unanswered: each named as such) -> the previous section back and reloaded;
+    that is not confirmed either -> `teardown` (not connected; "not verified" with block and record kept while the node
+    cannot confirm the interface is gone). "" = reloaded, else
     what happened (the saved settings stand: they passed the check, a failure here is the node's)."""
     owner = instances.member_of(svc, STACK_ID, rid)
     old = reticulum_node.section_text(_node_file(svc).read_text(), rid)
@@ -281,18 +295,22 @@ def reload(svc, rid: str) -> str:
     if why:
         return f"not reloaded: {why}"
 
-    def _round(block):
+    def _round(block):                                 # "" = reloaded and listed, else what the node said
         _write_block(svc, rid, block)
         res = rnstatus(svc, "--reload", reticulum_node.name(rid))
-        ok = res.returncode == 0 and rid in (listed(svc) or set())
-        return "" if ok else (res.stdout or res.stderr or "not listed after the reload").strip()
+        if res.returncode != 0:
+            return f"refused: {(res.stdout or res.stderr or '').strip()}".rstrip(": ")
+        now = listed(svc)
+        return ("" if rid in now else "reloaded, the node does not list it") if now is not None else \
+            "reloaded, the node does not answer whether it runs"
     if not (first := _round(new)):
         return ""
     if not (second := _round(old)):
-        return f"the node refused the new settings ({first}); the previous section is back and attached"
-    why = f"not connected: the node refused the new settings ({first}), and the previous ones too ({second})"
+        return f"the new settings were not confirmed ({first}); the previous section is back and attached"
     kept = teardown(svc, rid, clear_intent=False)
-    return _left(why, kept) if kept else f"{why}; {reticulum_node.name(rid)} is gone from the node"
+    why = f"neither the new settings ({first}) nor the previous ones ({second}) were confirmed"
+    return f"not verified: {why}; {kept} — it may still be live and stays tracked" if kept else \
+        f"not connected: {why}; {reticulum_node.name(rid)} is gone from the node"
 
 
 def after_save(svc, target: str, inst) -> list[str]:
