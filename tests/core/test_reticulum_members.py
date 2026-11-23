@@ -98,6 +98,8 @@ def box(tmp_path, monkeypatch):
         return spawned[-1].pid
     radios_fixture.write(tmp_path, (*SPI868, PINE))
     radios_fixture.reticulum_backend(tmp_path, ["r1", "r2"])
+    with (tmp_path / "config" / "stacks" / "reticulum@r2.toml").open("a") as f:   # MeshChat (selected by default) is no
+        f.write('autostart_meshchat = "off"\n')                                  # process here: the owner node alone
     seed_framing_driver(tmp_path)
     for name, value in (("hardware_configured", lambda self: True), ("radio_bands", lambda self: ["868"]),
                         ("is_built", lambda self, c: True), ("_build_complete", lambda self, c: True),
@@ -169,6 +171,15 @@ def test_a_join_starts_none_of_the_member_radios_ticked_node_clients(box, capsys
     assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0, capsys.readouterr()
     out = capsys.readouterr().out
     assert "lxmd" not in out and "meshchat" not in out and len(box.spawned) == launched
+    assert _member(box, "r1")
+
+
+def test_a_join_starts_no_meshchat_by_default_either(box, capsys):
+    # MeshChat starts with the stack by default (his word 11-23); a joining radio still starts none (one on 8790).
+    _owner_up(box)
+    launched = len(box.spawned)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0, capsys.readouterr()
+    assert "meshchat" not in capsys.readouterr().out and len(box.spawned) == launched
     assert _member(box, "r1")
 
 
@@ -432,6 +443,16 @@ def test_a_member_restart_rejoins_the_node(box):
     # red-before (bbaf96b6): its stop cleared the intent, so its start was the Connect offer (refused)
     assert res.ok, res.summary + "\n".join(res.details)
     assert owner.poll() is None and _member(box, "r1") and _intent(box, "r1") == "r2"
+
+
+def test_a_member_restart_starts_no_meshchat_by_default_either(box):
+    # MeshChat is selected by default (his word 11-23); a joining radio's restart still starts none (the owner's on 8790).
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    launched = len(box.spawned)
+    res = box.svc.restart("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r1")[0])
+    assert res.ok and not any("meshchat" in d for d in res.details), res.summary + "\n".join(res.details)
+    assert len(box.spawned) == launched
 
 
 # ---- the daemon panel of a node radio (plan v22 §8.3 B2b) -------------------------------------------------------------

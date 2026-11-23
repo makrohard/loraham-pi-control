@@ -119,8 +119,15 @@ gated by `python3-dev` (`sbapp` pulls `materialyoucolor`, a C++ extension withou
 and `libx11-dev` (the `--with-gui` marker; Kivy vendors its own SDL2); without `--with-gui` it is
 skipped, never a build error.
 
-**MeshChat** is an optional browser client for the same node: `lhpc stack start reticulum` starts
-the node only; start MeshChat with `lhpc stack start meshchat` or its console row. An aiohttp
+**MeshChat** is an optional browser client for the same node, selected to start by default:
+`lhpc stack start reticulum` selects the node and MeshChat unless MeshChat is unticked on the
+stack's Settings (per radio; the tick is saved only where it differs from the default). After an
+update a radio keeps its saved choice; one with none takes the new default. A radio that joins
+another radio's node starts no MeshChat. Selected is not started: a MeshChat whose build is missing
+or older than its sources is `[blocked]` with the remedy LHPC prints on that line (e.g. `rebuild
+first (lhpc build reticulum)`), and the stack start reports failure although the node is up — run
+the printed remedy, or untick MeshChat. Start it on its own with `lhpc stack start meshchat` or its
+console row. An aiohttp
 backend on `127.0.0.1:8790` plus a prebuilt frontend, with no authentication of its own, published
 through the LHPC proxy ([webserver](../webserver.md#stack-web-ui-proxies)). Its venv is built
 **without** system site-packages, so it cannot import the SPI driver.

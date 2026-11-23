@@ -89,8 +89,8 @@ def test_an_interactive_optional_service_that_is_not_built_is_skipped(box, tmp_p
     # The interactive site: NomadNet (a tickable interactive service) ticked, its source present, not built.
     # Red before: rc 1, "[blocked] nomadnet: interactive but not built …".
     run = box((R1, R2_868), paths=[str(tmp_path / "state" / "reticulum" / "ready")])
-    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "reticulum", {"autostart_nomadnet": "on"},
-                               inst=Instance("r2"))
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "reticulum",
+                               {"autostart_nomadnet": "on", "autostart_meshchat": "off"}, inst=Instance("r2"))
     _blockers(monkeypatch, tmp_path, "reticulum", blocked=("nomadnet",))
     monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, comp: [])   # the PC has no SPI device
     rc, out, launches = run("start", "reticulum@r2")

@@ -4018,6 +4018,7 @@ note = "Sideband is provisioned into its own in-root venv by the build. It needs
   name = "MeshChat"
   kind = "service"
   optional = true
+  autostart_default = true   # his word 11-23: selected to start with the stack unless unticked on the radio (existing boxes too)
   purpose = "Browser client for the Reticulum node (LXMF messaging) — a phone or laptop uses the node through it. Client only: it never owns the radio."
   tx_capable = true
   depends_on = ["rns"]

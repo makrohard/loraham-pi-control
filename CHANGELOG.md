@@ -30,6 +30,8 @@
   re-enter yours there (the Config page keeps frequency, SF, BW, CR and power for `backend = spi` only).
 - MeshChat announces itself once at every start, so a box is discoverable on the air; a failed announce is logged and
   the start stands.
+- MeshChat is selected to start with Reticulum by default (saved choices stay; untick it on Settings). If it is not built
+  it is blocked with its printed remedy and the stack start fails while the node is up: run the remedy or untick it.
 - Updates: a bare `lhpc update <stack>` keeps the installed lane; `lhpc source-check`, the stack page and `lhpc status
   --versions` give one verdict per source: current, update available, update LHPC first, could not check, unknown or unchecked.
 - `lhpc self-update` updates from the checkout's own origin, whatever repo it is, and names it (the check, the result and

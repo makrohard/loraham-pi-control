@@ -507,7 +507,8 @@ def test_every_client_endpoint_is_labelled():
     assert missing == [], f"client endpoints with no label: {missing}"
 
 
-def test_only_the_meshcore_web_ui_starts_with_its_stack_by_default():
-    # His word 11-21 (Q10): the chat UI auto-starts with meshcore. Red before: no component had the default.
+def test_only_the_meshcore_web_ui_and_meshchat_start_with_their_stacks_by_default():
+    # His word 11-21 (Q10): the chat UI auto-starts with meshcore; his word 11-23: MeshChat with reticulum.
+    # Red before: meshchat had no default.
     on = {c.id for s in load_manifest() for c in s.components if getattr(c, "autostart_default", False)}
-    assert on == {"meshcore-webui"}, on
+    assert on == {"meshcore-webui", "meshchat"}, on

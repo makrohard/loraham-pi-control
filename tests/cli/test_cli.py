@@ -1520,6 +1520,15 @@ def test_a_stale_build_names_the_update_when_the_checkout_is_off_its_pinned_sele
     assert f"  [blocked] rns: its sources changed since the last build — rebuild first ({remedy})\n" in out, out
 
 
+def _no_meshchat(tmp_path):
+    """MeshChat (selected to start with Reticulum by default) saved off on r2: this box models no MeshChat process."""
+    from lhpc.core import config as cfgmod
+    from lhpc.core.commands import Instance
+    from lhpc.core.paths import Paths
+    cfgmod.update_stack_config(Paths(runtime_root=tmp_path), "reticulum", {"autostart_meshchat": "off"},
+                               inst=Instance("r2"))
+
+
 def test_the_changelog_upgrade_steps_work_in_their_printed_form(box, tmp_path, capsys, monkeypatch):
     """The 0.14.0 CHANGELOG switch, exactly as printed: `lhpc config reticulum@<rid> rnode_framing
     yes`, then `lhpc stack restart reticulum@<rid>`, on a box whose built driver has the framing
@@ -1528,6 +1537,7 @@ def test_the_changelog_upgrade_steps_work_in_their_printed_form(box, tmp_path, c
     from lhpc.core.lifecycle import Lifecycle
     from radios_fixture import R1, R2_868
     run = box((R1, R2_868), paths=[str(tmp_path / "state" / "reticulum" / "ready")])     # the node reports ready
+    _no_meshchat(tmp_path)
     monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, comp: [])
     assert main(["config", "reticulum@r2", "rnode_framing", "yes"]) == 0, capsys.readouterr().out
     capsys.readouterr()
@@ -1550,6 +1560,7 @@ def test_the_changelog_upgrade_sequence_runs_in_its_printed_order(box, tmp_path,
     from lhpc.core.lifecycle import Lifecycle
     from radios_fixture import R1, R2_868
     run = box((R1, R2_868), paths=[str(tmp_path / "state" / "reticulum" / "ready")])     # the node reports ready
+    _no_meshchat(tmp_path)
     monkeypatch.setattr(Lifecycle, "missing_requirements", lambda self, comp: [])
     running = {"rns": True}
     monkeypatch.setattr(ControllerService, "_running_source_consumers",

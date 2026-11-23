@@ -50,7 +50,7 @@ the firewall blocks it.
 | meshtasticd's own web UI | `127.0.0.1:9443` (HTTPS) | `ssh -N -L 9443:127.0.0.1:9443 <user>@<host>` | `https://127.0.0.1:9443/` |
 | KISS TNC (an APRS client on your machine) | `127.0.0.1:8001` | `ssh -N -L 8001:127.0.0.1:8001 <user>@<host>` | KISS over TCP at `127.0.0.1:8001` |
 | Reticulum TCP interface (another RNS node of yours) | `127.0.0.1:4242` | `ssh -N -L 4242:127.0.0.1:4242 <user>@<host>` | a `TCPClientInterface` to `127.0.0.1:4242` |
-| MeshChat (an optional component of the reticulum stack, started from its card or with `lhpc stack start meshchat@<rid>`) | `127.0.0.1:8790` | `ssh -N -L 8790:127.0.0.1:8790 <user>@<host>` | `http://127.0.0.1:8790/` |
+| MeshChat (an optional component of the reticulum stack, selected to start with it unless unticked; or `lhpc stack start meshchat@<rid>`) | `127.0.0.1:8790` | `ssh -N -L 8790:127.0.0.1:8790 <user>@<host>` | `http://127.0.0.1:8790/` |
 
 The table gives r1's ports. On radio rN each stack port is + 133 × (n − 1) (r2: KISS 8134); the
 console's 8443, Reticulum's 4242 and MeshChat's 8790 are fixed.
