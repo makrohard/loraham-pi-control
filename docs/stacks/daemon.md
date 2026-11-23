@@ -138,7 +138,8 @@ A client app re-`SET`s its own radio params and `TXMODE` on connect, so those ro
 `CADIDLE`, `TXQUEUE`, `CADMONITOR`, `CADRSSI`, `CADTXAFTERTIMEOUT`) are operator-owned and stick, and so is
 `POWER` for chat and kiss (kiss's from its next start: its TNC sends the start-time value in every SET).
 Reticulum's rows are all operator-owned and Save-only: its interface sends the values it started with at every
-(re)connect (no LHPC `SET`, no *Apply*); its panel inherits nothing from the radio's row. While the node runs, *Save*
+(re)connect (no LHPC `SET`, no *Apply*); its panel inherits the radio row's `POWER` alone, at most the band
+value (14 dBm on 868), and none of the row's other values. While the node runs, *Save*
 checks the section first; a joined radio reloads it, the node's own radio is marked restart required.
 A profile is the app's default, not a legal ceiling; the licence-free stacks sit inside the SRD
 limits in [reticulum](reticulum.md#band-limits). Defaults:
@@ -150,7 +151,7 @@ limits in [reticulum](reticulum.md#band-limits). Defaults:
 | voice | DIRECT, 434.700, SF7, BW125, CR5, CRC on, preamble 8, sync 0x12, 17 dBm | — | — |
 | meshcom | 433.175, SF10, BW125, CR6, 17 dBm | — | MANAGED, CRC on, preamble 8, sync 0x2B, CADIDLE 28 ms |
 | meshcore | — | MANAGED, 869.618, SF8, BW62.5, CR8, CRC on, preamble 16, sync 0x12, 14 dBm | — |
-| reticulum (`backend = daemon`) | 434.500, 10 dBm | 868.500, 14 dBm | LORA only, MANAGED, SF8, BW125, CR5, CRC on, LDRO AUTO, preamble from the interface (RNode framing), sync 0x12, TXQUEUE 1, CADIDLE 50 ms, CADTXAFTERTIMEOUT 0 |
+| reticulum (`backend = daemon`, 868 only) | — | 868.500, 14 dBm | LORA only, MANAGED, SF8, BW125, CR5, CRC on, LDRO AUTO, preamble from the interface (RNode framing), sync 0x12, TXQUEUE 1, CADIDLE 50 ms, CADTXAFTERTIMEOUT 0 |
 | base LBT (every stack) | | | CADWAIT 1500 ms, CADIDLE 250 ms, TXQUEUE 1, CADMONITOR 0, CADRSSI −90, CADTXAFTERTIMEOUT 0 |
 
 Set them in the **Daemon radio parameters** panel of each stack's Settings (*Save* persists,

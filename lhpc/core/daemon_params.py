@@ -151,11 +151,10 @@ STACK_DEFAULTS: dict[str, dict[str, dict[str, str]]] = {
     "daemon": {"*": {"TXMODE": "MANAGED", "SF": "12", "BW": "125.0", "CR": "5",
                      "CRC": "1", "PREAMBLE": "8", "SYNC": "0x12", "POWER": "17"}},
     # The Reticulum profile (plan reti v21 §1b). No PREAMBLE: without a saved one the interface derives it (the RNode
-    # preamble for the SF/BW with RNode framing, else 8). POWER = the band cap.
+    # preamble for the SF/BW with RNode framing, else 8). POWER = the band cap. 868 only: Reticulum runs on 868 only.
     "reticulum": {
         "*": {"MODE": "LORA", "TXMODE": "MANAGED", "SF": "8", "BW": "125.0", "CR": "5", "CRC": "1", "LDRO": "AUTO",
               "SYNC": "0x12", "TXQUEUE": "1", "CADIDLE": "50", "CADTXAFTERTIMEOUT": "0"},
-        "433": {"FREQ": "434.500", "POWER": "10"},
         "868": {"FREQ": "868.500", "POWER": "14"},
     },
 }

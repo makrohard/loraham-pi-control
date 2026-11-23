@@ -35,6 +35,20 @@ def test_t4_voice_and_meshcom_have_no_868_profile_meshcore_keeps_its_868():
     assert dp.STACK_DEFAULTS["meshcore"]["868"]["SF"] == "8"
 
 
+def test_t8_a_stack_has_band_defaults_only_for_the_bands_it_runs_on():
+    # A per-band profile for a band the manifest no longer offers is a stale default (shown in the docs table and on
+    # a panel no radio can reach). Reticulum runs on 868 only: no 433 FREQ/POWER is left for it.
+    from lhpc.core.instances import stack_bands
+    from lhpc.core.manifest import load_manifest
+    for st in load_manifest():
+        bands = set(stack_bands(st))
+        for band in set(dp.STACK_DEFAULTS.get(st.id, {})) - {"*"}:
+            assert band in bands, f"{st.id}: a {band} profile, but it runs on {sorted(bands)}"
+    assert set(dp.STACK_DEFAULTS["reticulum"]) == {"*", "868"}
+    assert dp.default_value("reticulum", "433", "POWER") == ""
+    assert dp.default_value("reticulum", "868", "POWER") == "14"
+
+
 def test_meshcom_433_and_meshcore_868_defaults():
     assert dp.default_value("meshcom", "433", "SF") == "10"        # DACH 433
     assert dp.default_value("meshcom", "433", "BW") == "125.0"
