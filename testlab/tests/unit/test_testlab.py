@@ -566,9 +566,10 @@ def test_fake_daemon_framed_tx_result_and_rx_injection(fake_daemon, tmp_path):
 
 @pytest.mark.wallclock("the fake daemon re-reads its scenario at most every 0.8 s: the re-arm wait, bounded 5 s")
 def test_fake_daemon_txbusy_refuses_before_the_air_and_txcadtimeout_flags_the_ok(fake_daemon, tmp_path):
-    """Scenario txbusy_<band> = N: the next N framed TXs answer CHANNEL_BUSY (status 2, the sequence unchanged,
-    captured as such), then OK; txcadtimeout_<band>: that OK carries 0x05. Another band's count is not this one's.
-    A changed txbusy value arms the count again (re-read at most every 0.8 s); txcadtimeout off: 0x01 again."""
+    """Scenario txbusy_<band> = N: the next N framed TXs answer CHANNEL_BUSY (status 2, captured as such), then OK;
+    every result has its own, next sequence (a receiver drops one whose sequence does not advance as late);
+    txcadtimeout_<band>: that OK carries 0x05. Another band's count is not this one's. A changed txbusy value arms
+    the count again (re-read at most every 0.8 s); txcadtimeout off: 0x01 again."""
     import socket as _s
     import struct as _st
     sockdir, root = fake_daemon(flags={"txbusy_433": 2, "txbusy_868": 5, "txcadtimeout_433": True})
@@ -580,7 +581,7 @@ def test_fake_daemon_txbusy_refuses_before_the_air_and_txcadtimeout_flags_the_ok
     def tx():
         f.sendall(b"\x02" + _st.pack("<H", 5) + b"hello")
         return _st.unpack("<BBH", _frame_of(f, "TX_RESULT frame")[3:7])
-    assert [tx() for _ in range(3)] == [(2, 0x01, 0), (2, 0x01, 0), (0, 0x05, 1)]
+    assert [tx() for _ in range(3)] == [(2, 0x01, 1), (2, 0x01, 2), (0, 0x05, 3)]
     scn = root / "state" / "testlab" / "scenario.json"
     rec = json.loads(scn.read_text())
     rec["flags"].update(txbusy_433=1, txcadtimeout_433=False)
@@ -622,7 +623,7 @@ def test_fake_daemon_txbusy_is_per_band_and_framed_only(fake_daemon, tmp_path):
     while '"text": "raw-1"' not in (tx_log.read_text() if tx_log.exists() else ""):
         assert time.monotonic() < deadline, "the raw TX was never captured"
     f868 = framed("868")
-    assert [tx(f868), tx(f868)] == [(2, 0x01, 1), (0, 0x01, 2)]
+    assert [tx(f868), tx(f868)] == [(2, 0x01, 1), (0, 0x01, 2)]           # the raw TX took no result sequence
     by_text = [(r["band"], r["text"], r["result"]) for r in map(json.loads, tx_log.read_text().splitlines())]
     assert by_text == [("433", "hello", "OK"), ("868", "raw-1", "OK"), ("868", "hello", "CHANNEL_BUSY"),
                        ("868", "hello", "OK")]

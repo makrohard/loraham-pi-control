@@ -50,6 +50,16 @@ def test_no_refusal_two_refusals_or_no_sent_retry_are_wrong():
     assert rel.busy_case_wrong([REFUSED, dict(SENT, len=L + 1)], RF_OK, NODE).startswith("tx.jsonl pair: no OK")
 
 
+def test_two_refused_tries_of_one_packet_are_counted_as_two():
+    node2 = NODE.replace("after 1 refused tries (channel-busy 1", "after 2 refused tries (channel-busy 2")
+    assert rel.busy_case_wrong([REFUSED, REFUSED, SENT], RF_OK, node2, refusals=2) == ""
+    assert rel.busy_case_wrong([REFUSED, REFUSED, SENT], RF_OK, NODE, refusals=2).startswith("node line:")
+    assert rel.busy_case_wrong([REFUSED, SENT], RF_OK, node2, refusals=2).startswith(
+        "tx.jsonl pair: the fake daemon refused 1 TXs on 868, not 2")
+    assert rel.busy_case_wrong([dict(REFUSED, len=9), REFUSED, SENT], RF_OK, node2, refusals=2).startswith(
+        "tx.jsonl pair: the refused tries are not one packet")
+
+
 def test_logs_are_read_from_their_marks(tmp_path):
     log = tmp_path / "rf.log"
     assert rel.file_mark(log) == 0 and rel.read_since(log, 0) == ""

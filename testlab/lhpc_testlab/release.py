@@ -801,19 +801,22 @@ _RF_TX = re.compile(r" TX rssi=\S+ snr=\S+ len=(?P<len>\d+) outcome=(?P<outcome>
 _REFUSED_LINE = re.compile(r" sent \d+ bytes after (\d+) refused tries \(channel-busy (\d+), busy (\d+), not-ready (\d+);")
 
 
-def busy_case_wrong(tx_records: list, rf_text: str, node_text: str, band: str = "868") -> str:
-    """'' when ONE Reticulum packet met the lab's one busy try as the daemon interface must log it, else what is
-    missing: the fake daemon refused one framed TX of `band` (tx.jsonl, CHANNEL_BUSY) and sent the next of the
-    same length (OK); the RF log has no TX line for the refused try (every outcome is one of RF_LOG_OUTCOMES) and
-    ONE line of that length, ok-cad-timeout; the node log names the refusal once (channel-busy 1, the rest 0)."""
+def busy_case_wrong(tx_records: list, rf_text: str, node_text: str, band: str = "868", refusals: int = 1) -> str:
+    """'' when ONE Reticulum packet met the lab's `refusals` busy tries as the daemon interface must log it, else
+    what is missing: the fake daemon refused that many framed TXs of `band` (tx.jsonl, CHANNEL_BUSY, one length)
+    and sent the next of the same length (OK); the RF log has no TX line for a refused try (every outcome is one
+    of RF_LOG_OUTCOMES) and ONE line of that length, ok-cad-timeout; the node log names the refusals once
+    (channel-busy `refusals`, the rest 0)."""
     recs = [r for r in tx_records if r.get("band") == band]
     refused = [i for i, r in enumerate(recs) if r.get("result") == "CHANNEL_BUSY"]
-    if len(refused) != 1:
-        return f"tx.jsonl pair: the fake daemon refused {len(refused)} TXs on {band}, not 1"
+    if len(refused) != refusals:
+        return f"tx.jsonl pair: the fake daemon refused {len(refused)} TXs on {band}, not {refusals}"
     size = recs[refused[0]]["len"]
-    sent = next((r for r in recs[refused[0] + 1:] if r.get("result") == "OK"), None)
+    if {recs[i]["len"] for i in refused} != {size}:
+        return f"tx.jsonl pair: the refused tries are not one packet ({[recs[i] for i in refused]})"
+    sent = next((r for r in recs[refused[-1] + 1:] if r.get("result") == "OK"), None)
     if sent is None or sent["len"] != size:
-        return f"tx.jsonl pair: no OK of len {size} after the refused try ({recs[refused[0]:][:4]})"
+        return f"tx.jsonl pair: no OK of len {size} after the refused tries ({recs[refused[-1]:][:4]})"
     lines = [(int(m["len"]), m["outcome"]) for m in map(_RF_TX.search, rf_text.splitlines()) if m]
     odd = [o for _, o in lines if o not in RF_LOG_OUTCOMES]
     if odd:
@@ -821,8 +824,10 @@ def busy_case_wrong(tx_records: list, rf_text: str, node_text: str, band: str = 
     if [o for n, o in lines if n == size] != ["ok-cad-timeout"]:
         return f"RF line: the TX lines of len {size} are {[o for n, o in lines if n == size]}, not one ok-cad-timeout"
     counts = [m.groups() for m in map(_REFUSED_LINE.search, node_text.splitlines()) if m]
-    if counts != [("1", "1", "0", "0")]:
-        return f"node line: not one 'after 1 refused tries (channel-busy 1, busy 0, not-ready 0; …)' (found {counts})"
+    n = str(refusals)
+    if counts != [(n, n, "0", "0")]:
+        return (f"node line: not one 'after {n} refused tries (channel-busy {n}, busy 0, not-ready 0; …)'"
+                f" (found {counts})")
     return ""
 
 

@@ -413,10 +413,14 @@ def test_release_reticulum(env, svc):
     assert rnstatus_lists_interface(out, iface), (
         f"{stack_regression('reticulum', 'readiness')}\n"
         f"rnstatus does not list this instance's interface [{iface}]:\n{out[-1500:]}")
-    # A busy channel, before lxmd / MeshChat / Sideband start (their announces would add TX lines): the lab's
-    # fake daemon refuses the next framed 868 TX once and flags the OK as a send after a CAD timeout; one
-    # Reticulum TX (a path request for an unknown destination) must then be logged as the interface logs it.
-    # Reticulum runs on 868 radios only. Logs are read from marks taken here, not by their mtime.
+    # A busy channel, before lxmd / MeshChat / Sideband start (their announces would add TX lines). One path
+    # request for an unknown destination first goes out answered OK, so the busy tries follow a successful send
+    # on this connection (each result carries the next sequence, refused ones too). Then the lab's fake daemon
+    # refuses the next framed 868 TX twice and flags the OK as a send after a CAD timeout; the next path request
+    # must be logged as the interface logs it. Reticulum runs on 868 radios only. Logs are read from marks taken
+    # after the first request, not by their mtime.
+    rnpath = [str(rnstatus.with_name("rnpath")), "--config", str(root / "state" / "reticulum"), "-w", "8"]
+    subprocess.run([*rnpath, os.urandom(16).hex()], capture_output=True, text=True, timeout=60, check=False)
     rflog = root / "logs" / iface.split(" ", 1)[1] / "rf-reticulum.log"
     txlog = root / "state" / "testlab" / "tx.jsonl"
     marks = {p: file_mark(p) for p in (rflog, txlog, *(root / "logs").glob("start-*.log"))}
@@ -426,12 +430,11 @@ def test_release_reticulum(env, svc):
         nonlocal wrong
         tx = [json.loads(line) for line in read_since(txlog, marks[txlog]).splitlines() if line.strip()]
         node = "".join(read_since(p, marks.get(p, 0)) for p in sorted((root / "logs").glob("start-*.log")))
-        wrong = busy_case_wrong(tx, read_since(rflog, marks[rflog]), node)
+        wrong = busy_case_wrong(tx, read_since(rflog, marks[rflog]), node, refusals=2)
         return not wrong
-    set_lab_flags(env, txbusy_868=1, txcadtimeout_868=True)
+    set_lab_flags(env, txbusy_868=2, txcadtimeout_868=True)
     try:
-        subprocess.run([str(rnstatus.with_name("rnpath")), "--config", str(root / "state" / "reticulum"),
-                        "-w", "8", os.urandom(16).hex()], capture_output=True, text=True, timeout=60, check=False)
+        subprocess.run([*rnpath, os.urandom(16).hex()], capture_output=True, text=True, timeout=60, check=False)
         wait_for(_busy_try_logged, 30, every=1.0)
     finally:
         set_lab_flags(env, txbusy_868=0, txcadtimeout_868=False)      # re-read before lxmd starts

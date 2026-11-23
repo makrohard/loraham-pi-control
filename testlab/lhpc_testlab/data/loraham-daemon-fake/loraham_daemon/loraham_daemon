@@ -60,6 +60,7 @@ class Fake:
         self.rf = {}
         self.n = {"RX": 0, "RXBYTES": 0, "TXOK": 0, "TXERR": 0}
         self.seq = 0
+        self.result_seq = 0                   # a TX_RESULT's sequence: one per framed TX, refused ones too
         self.done = 0
         self.last = "NONE"
         self.scn_read = 0.0
@@ -319,9 +320,10 @@ def _consume(fake, c, conns):
                 _send(c, b"\x03" + struct.pack("<H", 18) + b"unknown frame type")
                 continue
             status = fake.transmit(payload, framed=True)
+            fake.result_seq = (fake.result_seq + 1) & 0xFFFF
             _air(fake, conns, c, payload, status)
             if fake.set_["TXRESULT"] == "1":
-                body = struct.pack("<BBH", status, 0x05 if status == 0 and fake.cad_timeout else 0x01, fake.seq)
+                body = struct.pack("<BBH", status, 0x05 if status == 0 and fake.cad_timeout else 0x01, fake.result_seq)
                 _send(c, b"\x04" + struct.pack("<H", len(body)) + body)
     else:                                   # raw: every <=255-byte chunk = one TX
         data, c.buf = c.buf, b""
