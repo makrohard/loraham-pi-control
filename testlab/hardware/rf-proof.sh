@@ -836,7 +836,10 @@ txframe() {   # txframe <row> <key> <box> <rid> <nonce>: one frame (tx_text) and
   X "$3" "$s" "{RT}/venv/lhpc/bin/python -c '$TXSTAT_PY' $4"; sr=$XRC
   w="the daemon's STATUS and STATS before/after in $s0, $s$([ "$sr" = 0 ] || echo "; the read after the send failed, rc $sr")"
   case "$tc" in 0) [ "$sr" = 0 ] || stop "$s: exit status $sr ($OUT/$s)";;
-    2) fail "TX refused: $(body "$f" | tail -n 1) ($w)";;
+    2) case "$(body "$f" | tail -n 1)" in   # refused before the radio is keyed: its daemon sent nothing for it (RS may count 0)
+         "TX_RESULT BUSY "*|"TX_RESULT CHANNEL_BUSY "*|"TX_RESULT RADIO_NOT_READY "*|"TX_RESULT INVALID_PACKET "*|"TX_RESULT INVALID_BAND "*)
+           v=$(getk "RAD_$2"); keep "TXREF_${v//:/_}" $(( $(getk "TXREF_${v//:/_}" 0) + 1 ));; esac   # not RADIO_ERROR: also a failed keyed transmit
+       fail "TX refused: $(body "$f" | tail -n 1) ($w)";;
     3) fail "TX frame error: $(body "$f" | tail -n 1) ($w)";;
     4) fail "TX unconfirmed: $(body "$f" | tail -n 1), cause unknown$(txstate "$s0" "$s") ($w)";;
     *) stop "$f: exit status $tc ($OUT/$f)";; esac; }
@@ -1478,10 +1481,12 @@ txjudge() {
 txlines() { awk -v want="$2" 'BEGIN {split(want, W, " "); for (i in W) w[W[i]] = 1}
     $0 !~ /^r[1-9][0-9]? ([0-9]+|UNREADABLE)$/ || !($1 in w) || ($1 in s) {bad = 1} {s[$1] = 1}
     END {for (k in w) if (!(k in s)) bad = 1; exit bad}' "$1"; }
-# kitrids / runrids <box>: the box radios the kit reserved frames on (TXR > 0), and the radios with an instance at R0 or one
+# kitrids / runrids <box>: the box radios the kit reserved frames on that their daemon did not refuse with a TX_RESULT (TXR >
+# TXREF: a radio whose every frame was refused may count 0), and the radios with an instance at R0 or one
 # the kit started (STARTED_<box>_<rid>: a stack can send at its start, e.g. meshtastic's nodeinfo)
 mtled() { sed -n "s/^MTX_$1_\(r[1-9][0-9]*\)=\([0-9]*\)$/\1=\2/p" "$OUT/state.env" | awk -F= '{v[$1] = $2} END {for (k in v) print k "=" v[k]}' | sort | tr '\n' ' '; }   # the kit's own Meshtastic sends per radio
-kitrids() { sed -n "s/^TXR_$1_\(r[1-9][0-9]*\)=[0-9]*[1-9][0-9]*$/\1/p" "$OUT/state.env" | sort -u | tr '\n' ' '; }
+kitrids() { local r; for r in $(sed -n "s/^TXR_$1_\(r[1-9][0-9]*\)=.*/\1/p" "$OUT/state.env" | sort -u); do
+    [ "$(getk "TXR_$1_$r" 0)" -gt "$(getk "TXREF_$1_$r" 0)" ] && printf '%s ' "$r"; done; return 0; }
 runrids() { { body "R0-$1-runset.txt" | sed -n 's/^[a-z0-9-]*@\(r[1-9][0-9]*\)$/\1/p'; sed -n "s/^STARTED_$1_\(r[1-9][0-9]*\)=.*/\1/p" "$OUT/state.env"; } | sort -u | tr '\n' ' '; }
 row_RS() {
   undo_to 0 || stop "RS: an undo failed (UNRESOLVED.txt): the recovery runs it again"; [ "$MODE" = dry ] || { [ ! -s "$EVD/UNRESOLVED.txt" ] || fail "RS: unresolved undo(s): $(tr '\n' '|' < "$EVD/UNRESOLVED.txt")"; }

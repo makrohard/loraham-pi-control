@@ -86,10 +86,10 @@ def test_the_frame_send_exits_by_the_daemons_answer(tmp_path, monkeypatch, chunk
 
 # ---- txframe: the verdict per exit status, kept across the reads; the counters before and after ----------------------------
 
-def _txframe(tmp_path, send_rc, stat_rc=0, before="TXRESULT=1", after="TXRESULT=1", up=(5, 9)):
+def _txframe(tmp_path, send_rc, stat_rc=0, before="TXRESULT=1", after="TXRESULT=1", up=(5, 9), line="TX_RESULT CHANNEL_BUSY flags=1 seq=0"):
     # the first STATUS/STATS read (before the send) answers `before`; the second (after it) `after`, with exit status stat_rc
     n = tmp_path / "reads"
-    fake = (f'sshrun() {{ case "$3" in *loraf-*) echo "TX_RESULT CHANNEL_BUSY flags=1 seq=0"; return {send_rc};; '
+    fake = (f'sshrun() {{ case "$3" in *loraf-*) echo "{line}"; return {send_rc};; '
             f'*STATS*) echo x >> "{n}"; if [ "$(wc -l < "{n}")" = 1 ]; then echo "STATUS {before}"; echo "STATS UPTIME={up[0]}"; '
             f'return 0; fi; echo "STATUS {after} TXQLAST=CHANNEL_BUSY"; echo "STATS UPTIME={up[1]} TXBUSY=1"; return {stat_rc};; esac; }}; ')
     return source_only(tmp_path, TX_SETUP + fake + 'echo "STATUS CADWAIT=1500" > "$EVD/PW-K.txt"; '
@@ -115,6 +115,18 @@ def test_a_refused_frame_is_the_rows_fail_after_the_counters_are_read(tmp_path, 
                                                                           "STATS UPTIME=9 TXBUSY=1"]
     assert (evd / "9-txstat0-H-r1.txt").read_text().splitlines()[-1] == "STATS UPTIME=5"
     assert "TXR_PC_g2=1" in (evd / "state.env").read_text().splitlines()   # the refused frame counts in the budget
+    # only a TX_RESULT refusal proves the daemon sent nothing (RS may then count 0); a frame error or no answer does not
+    assert ("TXREF_PC_g2=1" in (evd / "state.env").read_text().splitlines()) == (send_rc == 2)
+
+
+@pytest.mark.parametrize("status, kept", [("BUSY", True), ("CHANNEL_BUSY", True), ("RADIO_NOT_READY", True),
+                                          ("INVALID_PACKET", True), ("INVALID_BAND", True),
+                                          ("RADIO_ERROR", False),   # also a failed transmit after keying: it may have radiated
+                                          ("9", False)])            # a status the kit does not know
+def test_only_a_refusal_before_keying_is_kept_as_a_frame_the_daemon_never_sent(tmp_path, status, kept):
+    r, evd = _txframe(tmp_path, 2, line=f"TX_RESULT {status} flags=0 seq=0")
+    assert r.returncode == 1 and f"FAIL: TX refused: TX_RESULT {status} flags=0 seq=0 ({W})" in r.stderr.splitlines(), r.stderr
+    assert ("TXREF_PC_g2=1" in (evd / "state.env").read_text().splitlines()) == kept
 
 
 @pytest.mark.parametrize("after, up, state", [("TXRESULT=0", (5, 9), "TXRESULT=0, UPTIME 5 -> 9"),

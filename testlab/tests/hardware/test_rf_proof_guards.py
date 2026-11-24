@@ -503,6 +503,17 @@ def test_rs_never_reads_missing_tx_evidence_as_zero(tmp_path, before, after, ext
     _rs(tmp_path, before, after, "", want, extra=extra)
 
 
+@pytest.mark.parametrize("extra, want", [
+    ("keep TXR_H_r1 1; keep TXREF_H_r1 1; ", "r1 0|"),                # its one frame refused by the daemon: 0 is its count
+    ("keep TXR_H_r1 2; keep TXREF_H_r1 2; ", "r1 0|"),
+    ("keep TXR_H_r1 2; keep TXREF_H_r1 1; ", "FAIL r1 UNREADABLE|"),  # one frame not refused and not counted: unreadable
+    ("keep TXR_H_r1 1; keep TXREF_H_r1 1; keep TXR_H_r1 2; ", "FAIL r1 UNREADABLE|"),   # a later frame sent: the last values
+])
+def test_rs_reads_0_for_a_radio_whose_every_kit_frame_its_daemon_refused(tmp_path, extra, want):
+    # red-before (daa840f9, run 20261124T080716Z: r4 refused CHANNEL_BUSY, then RS "r4 UNREADABLE" stopped the run)
+    _rs(tmp_path, BASE, {}, "", want, extra=extra)
+
+
 @pytest.mark.parametrize("lines, ok", [("r1 3\nr2 0\n", True), ("r1 3\nr2 0\nreticulum UNREADABLE\n", False), ("", False),
                                        ("r1 3\n", False), ("r1 3\nr1 3\nr2 0\n", False), ("r1 3\nr2 0\nr9 0\n", False),
                                        ("r1 3\nr2 -1\n", False), ("r1 3\nr2 x\n", False)])
