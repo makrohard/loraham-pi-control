@@ -129,6 +129,18 @@ def test_only_a_refusal_before_keying_is_kept_as_a_frame_the_daemon_never_sent(t
     assert ("TXREF_PC_g2=1" in (evd / "state.env").read_text().splitlines()) == kept
 
 
+def test_each_refused_frame_of_a_radio_adds_one_to_its_refused_count(tmp_path):
+    # RS compares the last reserved count with the last refused one: two refused frames are TXREF 2, never 1 (a constant
+    # would leave the radio's 0 frames UNREADABLE at RS: the safe side, but not the count)
+    r, evd = source_only(tmp_path, TX_SETUP + 'sshrun() { case "$3" in *loraf-*) echo "TX_RESULT CHANNEL_BUSY flags=1 seq=0"; '
+                         'return 2;; *STATS*) echo "STATUS TXRESULT=1"; echo "STATS UPTIME=5"; return 0;; esac; }; '
+                         'echo "STATUS CADWAIT=1500" > "$EVD/PW-K.txt"; '
+                         'for i in 1 2; do ( txframe 9 K H r1 "rfkit 0000aaaa" ); echo "SEND rc=$?"; done')
+    assert [x for x in r.stdout.splitlines() if x.startswith("SEND")] == ["SEND rc=1"] * 2, r.stdout + r.stderr   # each a FAIL
+    state = (evd / "state.env").read_text().splitlines()
+    assert [x for x in state if x.startswith(("TXR_", "TXREF_"))] == ["TXR_PC_g2=1", "TXREF_PC_g2=1", "TXR_PC_g2=2", "TXREF_PC_g2=2"]
+
+
 @pytest.mark.parametrize("after, up, state", [("TXRESULT=0", (5, 9), "TXRESULT=0, UPTIME 5 -> 9"),
                                               ("TXRESULT=1", (50, 2), "TXRESULT=1, UPTIME 50 -> 2")])
 def test_a_daemon_restart_during_the_send_is_named_never_a_cause(tmp_path, after, up, state):
