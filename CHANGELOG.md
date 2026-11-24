@@ -17,7 +17,7 @@
 - Stack instances: every stack runs as `<stack>@<rid>` on each radio of its bands (Reticulum once per box), started,
   stopped and restored alone; ports base + 133 × (n − 1), r1 keeps today's.
 - Home radio cards: "Running on rN" names the stacks running on that radio with their call or node name ("Running on
-  r1 MeshCom (QEMU) DJ0CHE-11"; the daemon alone: "Running on r1 LoRaHAM daemon"); a stack's title no longer shows it.
+  r1 MeshCom (QEMU) XX0XXA-11"; the daemon alone: "Running on r1 LoRaHAM daemon"); a stack's title no longer shows it.
 - Home: a box opened or closed in one browser tab is no longer reopened or reclosed by another tab's refresh.
 - Home radio cards: "Start a stack on rN" starts collapsed; the box keeps the viewer's last open/closed choice.
 - Home: the nav line links the Apps page: "All menus · Home · Apps".

@@ -89,9 +89,9 @@ def test_meshcore_shows_the_names_of_its_running_mode(tmp_path, web, mode, want)
 
 
 def test_a_ham_stack_shows_its_call_and_the_ham_mark(tmp_path, web):
-    svc = _running(tmp_path, "chat", "loraham-chat", ("r1",), saved={"r1": {"file_call": "DJ0CHE-10"}})
+    svc = _running(tmp_path, "chat", "loraham-chat", ("r1",), saved={"r1": {"file_call": "XX0XXA-10"}})
     doc, t = _title(web, svc, "chat@r1")
-    assert _line(doc, "r1") == "Running on r1 LoRaHAM Chat DJ0CHE-10"
+    assert _line(doc, "r1") == "Running on r1 LoRaHAM Chat XX0XXA-10"
     assert " ".join(t.text.split()) == "📜 LoRaHAM Chat chat@r1" and _no_ident(doc)      # the call left the title
     [mark] = t.find("span", class_="lic")
     assert mark.text == "📜" and mark["title"] == "Ham stack: amateur licence required"
@@ -126,7 +126,7 @@ def test_running_on_folds_open_start_a_stack_folds_collapsed_and_hardware_stays_
 
 
 def test_the_signature_poll_reads_no_name(tmp_path, web, monkeypatch):
-    svc = _running(tmp_path, "chat", "loraham-chat", ("r1",), saved={"r1": {"file_call": "DJ0CHE-10"}})
+    svc = _running(tmp_path, "chat", "loraham-chat", ("r1",), saved={"r1": {"file_call": "XX0XXA-10"}})
     seen = []
     real = ControllerService._resolved_param_value
     monkeypatch.setattr(ControllerService, "_resolved_param_value", lambda self, *a, **k: seen.append(a) or real(self, *a, **k))
@@ -191,10 +191,10 @@ def test_a_process_no_instance_claims_shows_its_mark_and_no_name(tmp_path, web):
 
 
 def test_meshcom_names_its_call_in_the_running_on_line_not_in_its_title(tmp_path, web):
-    # "Running on r1 MeshCom (QEMU) DJ0CHE-11", the title "📜 MeshCom (QEMU) meshcom@r1"
-    svc = _running(tmp_path, "meshcom", "meshcom-qemu", ("r1",), saved={"r1": {"mc_callsign": "DJ0CHE-11"}})
+    # "Running on r1 MeshCom (QEMU) XX0XXA-11", the title "📜 MeshCom (QEMU) meshcom@r1"
+    svc = _running(tmp_path, "meshcom", "meshcom-qemu", ("r1",), saved={"r1": {"mc_callsign": "XX0XXA-11"}})
     doc, t = _title(web, svc, "meshcom@r1")
-    assert _line(doc, "r1") == "Running on r1 MeshCom (QEMU) DJ0CHE-11"
+    assert _line(doc, "r1") == "Running on r1 MeshCom (QEMU) XX0XXA-11"
     assert " ".join(t.text.split()) == "📜 MeshCom (QEMU) meshcom@r1" and _no_ident(doc)
 
 
@@ -223,13 +223,13 @@ def test_the_daemon_is_named_only_when_it_runs_alone(tmp_path, web, daemon_proc)
     chat = _running(tmp_path / "c", "chat", "loraham-chat", ("r1",), radios=(radios_fixture.R1,))
     paths = Paths(runtime_root=tmp_path / "b")
     plain = ControllerService(system=FakeSystem().system, paths=paths)
-    assert plain.save_config_bundle("chat", values={"file_call": "DJ0CHE-10"},
+    assert plain.save_config_bundle("chat", values={"file_call": "XX0XXA-10"},
                                     inst=instances.parse_target(plain, "chat@r1", "start")[1]).ok
     table = {**kiss._system.procfs.cmdlines(), **{pid + 50: v for pid, v in chat._system.procfs.cmdlines().items()}}
     svc = _with_daemon(ControllerService(system=FakeSystem(cmdlines_data=table).system, paths=paths), daemon_proc.pid)
     doc = parse(web(service_factory=lambda: svc).get("/", headers=LOCAL).get_data(as_text=True))
     order = [t["data-stack"] for t in doc.within(doc.by_id("runon-r1")).find("summary", class_="stitle")]
-    names = {"kiss@r1": "LoRaHAM KISS TNC", "chat@r1": "LoRaHAM Chat DJ0CHE-10"}
+    names = {"kiss@r1": "LoRaHAM KISS TNC", "chat@r1": "LoRaHAM Chat XX0XXA-10"}
     assert "daemon@r1" in order and set(names) <= set(order), order           # their blocks stay below
     assert _line(doc, "r1") == "Running on r1 " + ", ".join(names[k] for k in order if k in names)
 
