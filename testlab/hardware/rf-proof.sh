@@ -1062,12 +1062,12 @@ frame_row() {   # frame_row <id> <box:KEY> <box:KEY> <power a,b> <flags>: the da
     [ "$MODE" = dry ] || [ "$(getk "P_$4")" = "$STICK_MIN" ] || stop "row $id: $2:$3 reads back '$(getk "P_$4")' dBm after POWER=$STICK_MIN: no TX"; done
   txron "$id" a "$ba" "$ra" "$qa"; txron "$id" b "$bb" "$rb" "$qb"   # each sender answers its frame with a TX_RESULT
   local sa sb; sa=$([ "$pa" = min ] && echo "$STICK_MIN dBm (minimum)" || echo "$(getk "P_$qa" as-is) dBm (as-is)"); sb=$([ "$pb" = min ] && echo "$STICK_MIN dBm (minimum)" || echo "$(getk "P_$qb" as-is) dBm (as-is)")
-  for x in "A->B $qa $ba $ra $qb $bb $rb $sa" "B->A $qb $bb $rb $qa $ba $ra $sb"; do read -r d q1 b1 r1 q2 b2 r2 pw <<< "$x"; n=$(nonce)
+  for x in "A->B $qa $ba $ra $qb $bb $rb $sa" "B->A $qb $bb $rb $qa $ba $ra $sb"; do read -r d q1 b1 r1 q2 b2 r2 pw <<< "$x"; n=$(nonce); leg "$d"   # a FAIL from here is this direction's
     txframe "$id" "$q1" "$b1" "$r1" "$n"
     usbcheck "$id-usb-$b1-$r1-a.txt" "$ka"; usbcheck "$id-usb-$b1-$r1-b.txt" "$kb"
     boxrx "$b2" "$id-rx-$b2-$r2.txt" rx_rf "$r2" "$n" 30 || fail "not heard: $n"
     REPORT "$id" daemon "$b1 ($r1) -> $b2 ($r2)" "$(v="RADIO_$ka"; set -- ${!v}; echo "$3")" "$b2 ($r2)" "$d" "yes ('$n' RX on $b2:$r2)" "$pw" PASS; done
-  if [ "$fl" = same-box ]; then   # one box: stopping one radio's daemon leaves the other's running (its pid and start time)
+  if [ "$fl" = same-box ]; then leg stop-isolation   # one box: stopping one radio's daemon leaves the other's running (its pid and start time)
     pid() { echo "p=\$(pgrep -f 'loraham[_]daemon.*--id $1( |\$)' | head -n 1); [ -n \"\$p\" ] || { echo NO-PID $1; exit 3; }; echo \$p \$(awk '{print \$22}' /proc/\$p/stat)"; }
     must "$ba" "$id-pa0.txt" "$(pid "$ra")"; must "$ba" "$id-stop-b.txt" "$(form stop inst="daemon@$rb")"; must "$ba" "$id-pa1.txt" "$(pid "$ra")"
     [ "$MODE" = dry ] || eq "row $id: daemon@$ra keeps its pid and start time when $rb stops" "$(body "$id-pa1.txt")" "$(body "$id-pa0.txt")"
@@ -1421,15 +1421,15 @@ runrow() {   # one row in a subshell; a FAIL (the marker) = recorded, its undos 
   bgend || stop "row $r: a background peer job does not end (its undos would find the peer lock held)"
   if [ "$rc" = 1 ] && [ -s "$OUT/rowfail.txt" ]; then
     # a stack row: the leg it named last (leg) FAILed, else (a FAIL before any leg) its first direction without a result;
-    # every other direction without a result did not run (NOT RUN, naming that FAIL). A frame row's FAIL (an incompatible
-    # radio) is every direction's.
+    # every other direction without a result did not run (NOT RUN, naming that FAIL). A frame row's FAIL before its first
+    # direction (an incompatible radio: no leg named) is every direction's.
     local why lg fd= ds= d2; why=$(head -n 1 "$OUT/rowfail.txt"); lg=$(head -n 1 "$OUT/rowleg.txt" 2>/dev/null)
     for d in $(dirs "$r"); do d2=$(dirtext "$d")
       awk -F'|' -v i="$r" -v d="$d2" '$1 == i && $2 == d {f = 1} END {exit !f}' "$OUT/results.txt" 2>/dev/null && continue
       ds="$ds $d"; [ "$d2" != "$lg" ] || fd=$d2; done
     ds=${ds# }; [ -n "$fd" ] || fd=$(dirtext "${ds%% *}")
     for d in $ds; do d2=$(dirtext "$d")
-      if [ "$d2" = "$fd" ] || [ "$(rowf "$r" kind)" = frame ]; then REPORT "$r" "$(rowname "$r")" — — — "$d2" no — "FAIL: $why"
+      if [ "$d2" = "$fd" ] || { [ "$(rowf "$r" kind)" = frame ] && [ -z "$lg" ]; }; then REPORT "$r" "$(rowname "$r")" — — — "$d2" no — "FAIL: $why"
       else notrun "$r" "$d" "after $fd FAIL: $why"; fi; done
     [ "$MODE" = dry ] || echo "row $r: $(head -n 1 "$OUT/rowfail.txt")" >> "$EVD/FAILED.txt" || stop "FAILED.txt: append failed"
     for x in needed formed; do [ "$MODE" = live ] || [ ! -f "$SCRATCH/$x" ] || { awk -v r="$r" '$1 != r' "$SCRATCH/$x" > "$SCRATCH/$x.n" \

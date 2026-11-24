@@ -1292,6 +1292,34 @@ def test_a_single_frame_row_with_a_freq_mismatch_fails_with_rc_0_in_dry(tmp_path
     assert "dry self-check OK all-forms-printed" in r.stdout
 
 
+# ---- a frame row's FAIL in a direction is that direction's: a later one did not run ------------------------------------------
+
+FRAME_STAND_IN = (  # runrow and frame_row as they are; the box calls, the power steps and the RX check stubbed out
+    'rowf() { case $2 in kind) echo frame;; a) echo H:KA;; b) echo "$BOXB:KB";; power) echo as,as;; flags) echo "$FLAGS";; *) echo -;; esac; }; '
+    'needs() { return 0; }; undo_mark() { echo 0; }; undo_to() { return 0; }; usbguard() { :; }; bgend() { return 0; }; '
+    'started() { :; }; dpower() { :; }; txron() { :; }; usbcheck() { :; }; boxrx() { return 0; }; '
+    'RADIO_KA="H r4 868 port=1-1"; RADIO_KB="$BOXB r2 868 -"; keep KA r4; keep KB r2; '
+    'for q in R9-H-r4 R9-$BOXB-r2; do echo "STATUS FREQ=869.525 SF=12" > "$EVD/PW-$q.txt"; done; '
+    'txframe() { echo x >> "$EVD/sends"; [ "$(wc -l < "$EVD/sends")" != "$FAILAT" ] || fail "TX refused: x"; }; ')
+
+
+NR = "NOT RUN: after A->B FAIL: TX refused: x"
+
+
+@pytest.mark.parametrize("flags, fail_at, want", [
+    ("-", 1, ["9|A->B|FAIL: TX refused: x", f"9|B->A|{NR}"]),
+    ("-", 2, ["9|A->B|PASS", "9|B->A|FAIL: TX refused: x"]),
+    ("same-box", 1, ["9|A->B|FAIL: TX refused: x", f"9|B->A|{NR}", f"9|stop-isolation|{NR}"]),   # one box, two radios
+])
+def test_a_frame_rows_fail_is_its_directions_and_a_later_one_is_not_run(tmp_path, flags, fail_at, want):
+    # red-before (daa840f9, run 20261124T080716Z row 9): a refused A->B frame was also B->A's FAIL, which never sent
+    box_b = "H" if flags == "same-box" else "Z"
+    r, evd = source_only(tmp_path, f'FLAGS={flags}; BOXB={box_b}; FAILAT={fail_at}; ' + FRAME_STAND_IN + 'runrow 9; echo "AFTER rc=$?"')
+    assert "AFTER rc=0" in r.stdout, r.stdout + r.stderr
+    assert (evd / "results.txt").read_text().splitlines() == want
+    assert (evd / "sends").read_text().count("x") == fail_at   # nothing is sent after the FAIL
+
+
 # ---- the dispatcher's checks after the power read: boot id, the PC's by-id list, the sending box's USB list ----------------
 
 TXH = ('BOXES=H; CURROW=9; printf "%s\\n" "rfkit 0000aaaa" > "$EVD/nonces"; keep RAD_K H:r1; keep PWROW_H_r1 9; keep BOOT_H B1; '
