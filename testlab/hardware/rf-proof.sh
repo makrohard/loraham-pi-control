@@ -891,7 +891,8 @@ appseen() {   # appseen <file> <nonce>: 0 the app shows it, 1 it does not, 2 the
   # DRY_APPMISS=<file> rehearses the word missing, DRY_APPMISS=<file>:ended the listener ending early
   [ "$MODE" = dry ] && { case "${DRY_APPMISS:-}" in "$1") return 1;; "$1:ended") return 2;; esac; return 0; }
   [ "$XRC" = 4 ] && grep -qxE 'LISTENER-ENDED [0-9]+' "$OUT/$1" && return 2; result "$1" "$2"; }
-covres() { local r; r=$(grep -F "$1|$(dirtext "$2")|" "$OUT/results.txt" 2>/dev/null | tail -n 1 | cut -d'|' -f3-)
+covres() { local r   # the row's own line: id and direction as whole fields (a substring match took row 12's for row 2)
+  r=$(awk -F'|' -v i="$1" -v d="$(dirtext "$2")" '$1 == i && $2 == d {sub(/^[^|]*[|][^|]*[|]/, ""); l = $0} END {print l}' "$OUT/results.txt" 2>/dev/null)
   case "$r" in PASS) echo "proven|";; DRY-PASS) echo "rehearsed|";; "FAIL: "*) echo "FAIL|${r#FAIL: }";; "NOT RUN: "*) echo "NOT RUN|${r#NOT RUN: }";; *) echo "NOT RUN|no result";; esac; }
 coverage() {   # one line per item (a model, a stack, a check), row and direction; every supported model no radio carries: not present
   local id d e k m res seen=" " line; [ "$MODE" = dry ] || printf '| item | kind | row | direction | result | why |\n|---|---|---|---|---|---|\n' > "$EVD/COVERAGE.md"

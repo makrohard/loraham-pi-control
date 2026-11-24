@@ -1626,6 +1626,36 @@ def test_coverage_names_the_models_no_chosen_row_carries(tmp_path):
     assert "COVERAGE | meshstick-1262 | model | - | - | not present | no row carries this model" in r.stdout.splitlines()
 
 
+def test_coverage_takes_each_rows_own_result_not_a_row_whose_id_ends_alike(tmp_path):
+    # red-before (a21's kit run on 8e52a31e): covres matched "2|<direction>|" anywhere in the line, so row 2's COVERAGE
+    # showed row 12's result (and row 1's row 11's); here row 12's box -> peer is NO-PATH, row 2's is rehearsed
+    r = dry(tmp_path, LANE="full", DRY_NOPATH="12-box-send")
+    assert r.returncode == 0, r.stderr[-1500:]
+    cov = [ln.split(" | ") for ln in r.stdout.splitlines() if ln.startswith("COVERAGE | ")]
+    row = {i: [c for c in cov if c[3] == i] for i in ("2", "12")}
+    assert row["2"] and row["12"], cov
+    assert all(c[5] == "rehearsed" for c in row["2"]), row["2"]
+    assert [c[5:] for c in row["12"] if c[4] == "box -> peer"] == [["NOT RUN", "the node had no path to the PC, nothing sent"]]
+
+
+def test_coverage_takes_a_directions_own_result_not_one_whose_text_extends_it(tmp_path):
+    # row 13's "member joins" is the start of its "member joins again": a FAIL after the join leaves the join rehearsed and
+    # the rejoin NOT RUN, and each COVERAGE line shows its own (a planted FAIL right after the join's REPORT)
+    hw = tmp_path / "r" / "testlab" / "hardware"
+    shutil.copytree(HW, hw, ignore=shutil.ignore_patterns("*.local.env", "__pycache__"))
+    (tmp_path / "r" / "lhpc").symlink_to(HW.parents[1] / "lhpc")
+    s = (hw / "rf-proof.sh").read_text()
+    anchor = '"$(dirtext join)" "the node\'s pid unchanged, LoRa $rm up, MeshChat answers" — PASS\n'
+    assert s.count(anchor) == 1
+    (hw / "rf-proof.sh").write_text(s.replace(anchor, anchor + "  fail planted-after-the-join\n"))
+    r = dry(tmp_path, hw=hw, LANE="rns", ROWS_ONLY="13")
+    assert "planted-after-the-join" in r.stdout + r.stderr, r.stderr[-1500:]
+    cov = [ln.split(" | ") for ln in r.stdout.splitlines() if ln.startswith("COVERAGE | ") and ln.split(" | ")[3] == "13"]
+    join = [c[5] for c in cov if c[4] == "member joins"]
+    again = [c[5] for c in cov if c[4] == "member joins again"]
+    assert join and set(join) == {"rehearsed"}, cov
+    assert again and set(again) == {"NOT RUN"}, cov
+
 def test_the_same_box_frame_row_proves_stop_isolation(tmp_path):
     # mutant K22: row 7's stop-isolation direction was gone from its directions (COVERAGE, and the FAIL marking)
     r = dry(tmp_path, LANE="fast", ROWS_ONLY="7")
