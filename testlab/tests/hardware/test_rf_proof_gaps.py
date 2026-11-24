@@ -78,6 +78,33 @@ def test_row_5_listens_before_the_meshchat_start_and_counts_its_announce(tmp_pat
     assert sum(1 for x in lines if x.startswith("  [dry] Z > 5-start.txt:")) == 1
 
 
+def test_row_12_calls_one_announce_after_the_release_once_meshchat_answers(tmp_path):
+    # red-before (8e52a31e, a21's kit run): row 12 had only MeshChat's start announce, which can lose its emission second to
+    # RNS's own path-response announce (nothing on air: BOX-ANNOUNCE not heard). Now one announce call after the release's
+    # go file, once MeshChat answers on its port (bounded); row 5 keeps the start announce alone
+    d = dry(tmp_path)
+    assert d.rc == 0, d.err[-2000:]
+    lines = block(d.out, 12).splitlines()
+    st = next(i for i, x in enumerate(lines) if x.startswith("  [dry] H > 12-start.txt:"))
+    pw = next(i for i, x in enumerate(lines) if "12-rnode-power-2.txt" in x)
+    go = next(i for i, x in enumerate(lines) if "12-tx2-go.txt" in x)
+    up = [i for i, x in enumerate(lines) if x.startswith("  [dry] H > 12-meshchat.txt:")]
+    an = [i for i, x in enumerate(lines) if x.startswith("  [dry] H > 12-announce.txt:")]
+    assert len(up) == 1 and len(an) == 1 and st < pw < go < up[0] < an[0], (st, pw, go, up, an)
+    assert "seq 1 60" in lines[up[0]] and "/dev/tcp/127.0.0.1/8790" in lines[up[0]]
+    assert re.match(r"TX \| H:r[0-9]+ \| 2 \| control \| must 12-announce\.txt", lines[an[0] - 1]), lines[an[0] - 1]
+    assert "/api/v1/announce" in lines[an[0]]
+    assert "the box heard by the kit's announce call, not its start's" in block(d.out, 12)
+    assert "/api/v1/announce" not in block(d.out, 5) and "5-meshchat.txt" not in block(d.out, 5)
+
+
+def test_row_12_fails_without_an_announce_call_when_meshchat_does_not_answer(tmp_path):
+    d = dry(tmp_path, DRY_MCDOWN="12")
+    b = block(d.out, 12)
+    assert "row 12: MeshChat does not answer on 127.0.0.1:8790 within 60 s (12-meshchat.txt): no announce call" in d.out + d.err
+    assert "12-announce.txt" not in b
+
+
 def test_row_5_journals_the_meshchat_stop_before_its_start(tmp_path):
     # a24 M2 (G3): a STOP after the start must stop MeshChat: its guarded stop is journalled before the start runs
     lines = block(dry(tmp_path).out, 5).splitlines()

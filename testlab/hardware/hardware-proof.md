@@ -56,6 +56,10 @@ on every radio of the node).
 The PC announces at launch and once more after the release (its TX checks passed again), right before its message: the
 box's node runs only from MeshChat's start, and its own send needs the PC's path. The PC's client of the shared rnsd takes
 that rnsd's RPC key from its config (`RNS_CONFIG`), else every request to it is refused.
+Row 12 also calls one MeshChat announce (`rt_announce`) after the release's go file, at least 2 s after MeshChat answers
+on 127.0.0.1:8790 (waited for at most 60 s, else the row FAILs with no call): the start's own announce can lose its
+emission second to RNS's path-response announce of the same destinations, and then nothing goes on air (2 more frames
+on the row's radio). A row-12 PASS so proves the announce call on air, not the announce at start.
 Row 5's prerequisite (an operator step before the run): save `backend = spi` on the Zero's board radio
 (`lhpc config reticulum@<rid> backend spi`); the product's default is `daemon`, and row 5 stops on it.
 The Reticulum rows' prerequisite on each of their boxes: MeshChat started there once (its first start writes

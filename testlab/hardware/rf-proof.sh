@@ -71,7 +71,7 @@ ROWS=(
 # member <-> the Zero on 868.3 (the RNode hears neither): the owner 3 (start's announce, proof) + 5 (the announce call, the send,
 # its slip, the proof of the Zero's message: reserved on every node radio, the node picks one) + 1 (the leave's proof) = 9; the
 # member 5; the Zero 5 (its MeshChat start's announce, its send and slip, its proof of H's message).
-declare -A WORST=([1]="3 4" [2]="1 1" [3]="1 1" [4]="1 1" [5]="5 5" [6]="1 1" [12]="5 5" [13]="9 8 5 5")
+declare -A WORST=([1]="3 4" [2]="1 1" [3]="1 1" [4]="1 1" [5]="5 5" [6]="1 1" [12]="7 5" [13]="9 8 5 5")
 declare -A RROW=(); RIDS=
 for l in "${ROWS[@]}"; do read -r id lane kind a b pw fl <<< "$l"; RROW[$id]="$l"; RIDS="$RIDS $id"; done
 rowf() { local id lane kind a b pw fl; read -r id lane kind a b pw fl <<< "${RROW[$1]}"; case $2 in lane) echo "$lane";; kind) echo "$kind";;
@@ -194,7 +194,7 @@ CHAT_READY='Ctrl-K: Konf'   # the chat client's footer
 # The forms each row needs (rt_send is optional in rows 5 and 12: their box -> peer is NOT RUN without it; row 13's member leg is
 # its two bounded sends, so it needs it).
 declare -A RFORMS=([1]="start stop tx_mcom rx_mcom rx_mcom_app" [2]="start stop" [3]="start stop mt_cap mt_send mt_pget rx_mt rx_mt_app" [4]="start stop mc_send mc_pget rx_mc rx_mc_app"
-  [5]="start stop rt_get rt_pget rx_mchat" [6]="start stop chat_client rx_rf" [12]="start stop rt_get rt_dpget rx_mchat"
+  [5]="start stop rt_get rt_pget rx_mchat" [6]="start stop chat_client rx_rf" [12]="start stop rt_get rt_dpget rx_mchat rt_announce"
   [13]="start stop rt_get rt_dpget rt_pget rx_mchat rt_join rt_own rt_dfreq rt_zfreq rt_announce rt_send")
 # The pre-step M (mcset.py, from the RF sheet's MCSET-PRESTEP-v4): per stack row, the instance settings it copies from the stack's
 # source file into <sid>@<rid> of endpoint A's radio ({band} = that radio's band). J1's value is the input MCSET_J1.
@@ -1254,8 +1254,17 @@ rnsx() {   # rnsx <id> <tag> <box> <rid> <rnode key> <key>...: one exchange with
   # 2. release, every check right before the second phase: the RNode's power again, its path request, the box's delivery proof
   # the RNode's 2 control frames: the PC's second announce (the box's node runs now; it needs the PC's path) + a path request
   hpower "$pk" "$tg-rnode-power-2.txt"; tx "$pk" 2 control --reserve; for x in "$@"; do tx "$x" 1 control --reserve; done
+  [ "${RNSCALL:-0}" != 1 ] || for x in "${@:2}"; do tx "$x" "$ANNF" control --reserve; done   # the announce call below
   tx "$pk" 1 "$n1" -- X PC "$tg-tx2-go.txt" "LHPC_PROOF=$b:meshchat@$r printf '%s\n' '$n1' > $(shq "$go")"
   [ "$MODE" = live ] || printf '%s\n' "$n1" > "$go" || stop "row $id: the dry release file"   # dry: right after its tx
+  if [ "${RNSCALL:-0}" = 1 ]; then   # row 12: one announce call; the start's own announce (its detached post step) can lose
+    # its emission second to RNS's path-response announce of the same destinations, and then nothing goes on air. The wait
+    # counts from MeshChat's port: it opens only after both destinations are registered (MeshChat 45f89a8 meshchat.py:126,
+    # :151 before :2063), so >= 2 s later is a later second than both. The peer waits for the box's announce first.
+    X "$b" "$tg-meshchat.txt" "$(mcready 60)"; [ "$MODE" = live ] || case " ${DRY_MCDOWN:-} " in *" $tg "*) XRC=3;; esac   # DRY_MCDOWN=<tag>...
+    [ "$XRC" = 0 ] || fail "row $id: MeshChat does not answer on 127.0.0.1:8790 within 60 s ($tg-meshchat.txt): no announce call"
+    [ "$MODE" = dry ] || sleep 2
+    tx "$q" "$ANNF" control -- must "$b" "$tg-announce.txt" "$(form rt_announce)"; fi
   RNSNOPATH=; if [ "${RNSSEND:-1}" = 1 ] && needs rt_send; then [ "$MODE" = dry ] || sleep 60; dest=$(cat "$pcd" 2>/dev/null || echo dry)
     [ "$MODE" = dry ] || [[ "$dest" =~ ^[0-9a-f]{32}$ ]] || stop "row $id: no PC destination hash"
     tx "$pk" 1 control --reserve   # the PC's delivery proof of the box's message: an RNode frame
@@ -1288,7 +1297,7 @@ row_rns() {   # row_rns <id> <box:KEY> <backend>: Reticulum + MeshChat on one bo
   hpower "R$id-rnode" "$id-rnode-power.txt"
   leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   rnsx "$id" "$id" "$b" "$r" "R$id-rnode" "$q"
-  REPORT "$id" "$(rowname "$id")" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "peer -> box" "yes: LXMF delivered (the box's proof) and stored" "the RNode at $(getk "P_R$id-rnode" unrecorded) dBm" PASS
+  REPORT "$id" "$(rowname "$id")" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "peer -> box" "yes: LXMF delivered (the box's proof) and stored$([ "${RNSCALL:-0}" != 1 ] || echo "; the box heard by the kit's announce call, not its start's")" "the RNode at $(getk "P_R$id-rnode" unrecorded) dBm" PASS
   leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   if needs rt_send && [ -z "${RNSNOPATH:-}" ]; then rnsback "$id"
     REPORT "$id" "$(rowname "$id")" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "box -> peer" yes "$(getk "P_$q" as-is) dBm (as-is)" PASS
@@ -1296,12 +1305,13 @@ row_rns() {   # row_rns <id> <box:KEY> <backend>: Reticulum + MeshChat on one bo
   else notrun "$id" box-\>peer "form not confirmed: rt_send"; fi
   undo_to "$m"; }
 row_5() { row_rns 5 "$1" spi; }       # the Zero's board radio, direct SPI (backend = spi saved there: hardware-proof.md)
-row_12() { row_rns 12 "$1" daemon; }  # box H's Meshstick through the daemon (the product default)
+row_12() { RNSCALL=1 row_rns 12 "$1" daemon; }  # box H's Meshstick through the daemon (the product default), + announce call
 
 rnspid() { echo "p=\$(pgrep -f '[l]oraham-rns-node --config' | head -n 1); [ -n \"\$p\" ] || { echo NO-PID; exit 3; }; echo \$p \$(awk '{print \$22}' /proc/\$p/stat)"; }   # the node's pid + start time
 # the node's interfaces (rnstatus -j of its config): IF <up|down> <name>, the name holding "LoRa <rid>"
 RNSIF="cd {RT} && src/reticulum/.venv/bin/rnstatus --config state/reticulum -j | python3 -c 'import json, sys; [print(\"IF\", \"up\" if i.get(\"status\") is True else \"down\", i.get(\"name\", \"\")) for i in json.load(sys.stdin).get(\"interfaces\", [])]'"
-MCREADY='for i in $(seq 1 15); do (exec 3<>/dev/tcp/127.0.0.1/8790) 2>/dev/null && { echo READY 8790; exit 0; }; sleep 1; done; echo NOT-READY 8790; exit 3'   # MeshChat's port
+mcready() { echo "for i in \$(seq 1 $1); do (exec 3<>/dev/tcp/127.0.0.1/8790) 2>/dev/null && { echo READY 8790; exit 0; }; sleep 1; done; echo NOT-READY 8790; exit 3"; }   # MeshChat's port, <= $1 s
+MCREADY=$(mcready 15)
 rnslog() { echo "for d in RX TX; do echo \"\$d \$(grep -cF -- \" \$d \" {RT}/logs/$1/rf-reticulum.log 2>/dev/null)\"; done"; }   # rnslog <rid>: its RF log's RX and TX lines
 ifis() { local n u; n=$(body "$1" | grep -cE "^IF .*LoRa $2(]|\$)"); u=$(body "$1" | grep -cE "^IF up .*LoRa $2(]|\$)")   # ifis <file> <rid> <up|gone>
   case $3 in up) [ "$n" = 1 ] && [ "$u" = 1 ];; *) [ "$n" = 0 ];; esac; }

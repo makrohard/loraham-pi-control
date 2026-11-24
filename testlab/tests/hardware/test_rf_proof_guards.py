@@ -1545,7 +1545,7 @@ def r0_budget(r):
 
 
 @pytest.mark.parametrize("row, want", [
-    ("12", ["BUDGET | H:r5 | 5 | 10", "BUDGET | PC:rnode | 5 | 10"]),                       # row 5's five and five
+    ("12", ["BUDGET | H:r5 | 7 | 10", "BUDGET | PC:rnode | 5 | 10"]),                       # row 5's + the announce call (2)
     # the owner: MeshChat started once (2) + the member leg's announce call (2) + the owner and leave proofs + the member leg's
     # send, slip and proof of the Zero's message; the RNode (owner, leave): see the end; the member: the announce call (2) + send,
     # slip, proof; the Zero: its MeshChat start's announce (2) + send, slip, proof of H's message; the RNode 4 x 2
