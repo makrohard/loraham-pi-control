@@ -511,6 +511,32 @@ async def test_send_sizes_its_wait_from_the_handshake_and_the_radio(tmp_path, mo
         await d.close()
 
 
+async def test_hardening_wait_is_never_shorter_than_cadwait(tmp_path, caplog):
+    """Hardening. At SF7 with CADPOLL 500 the daemon's tick sum for CADWAIT 1500 is about 1.31 s,
+    which is the daemon's own bound. The host still waits at least CADWAIT plus airtime and
+    margin, so a result just after the tick sum is received: no `No TX_RESULT`, no reconnect."""
+    d = FakeLoRaHAMDaemon(tmp_path, tx=True, cadwait_ms=1500, cadpoll_ms=500, cadsym=4)
+    await d.start()
+    r = make_radio(d, spreading_factor=7, bandwidth=125000, coding_rate=5,
+                   tx_result_margin=0.1)
+    r.begin()
+    try:
+        assert await wait_for(lambda: r.connected and r.tx_ready)
+        payload = b"sf7"
+        tick_sum = managed_tx_worst_case_s(1500, 500, 4, 7, 125000)
+        assert tick_sum < 1.5 - 0.15                    # the case where the tick sum is shorter
+        d.tx_result_delay = tick_sum + r._calculate_airtime_ms(len(payload)) / 1000.0 + 0.1 + 0.03
+        handshakes = d.config_commands.count("GET STATUS")
+        caplog.set_level(logging.INFO, logger="LoRaHAMRadio")
+        assert await r.send(payload) is not None
+        assert "No TX_RESULT" not in caplog.text
+        assert r.tx_ready
+        assert d.config_commands.count("GET STATUS") == handshakes
+    finally:
+        await r.aclose()
+        await d.close()
+
+
 async def test_sf12_result_after_the_old_wait_is_still_received(tmp_path, caplog):
     """At SF12 the daemon may hold a frame on a busy channel for its whole MANAGED wait (about
     8.4 s at the default CAD) before it answers CHANNEL_BUSY. The host waits for that answer:

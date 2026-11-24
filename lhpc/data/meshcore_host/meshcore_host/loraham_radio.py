@@ -362,9 +362,12 @@ class LoRaHAMRadio(_LoRaRadioBase):
 
             airtime_ms = self._calculate_airtime_ms(len(data))
             # The daemon may hold the frame for its whole MANAGED busy wait before it answers.
+            # Hardening: never shorter than CADWAIT itself, though a fast probe can make the
+            # daemon's tick sum (its real bound) smaller.
             timeout = (
-                managed_tx_worst_case_s(round(self._cadwait_s * 1000), self._cadpoll_ms,
-                                        self._cadsym, self.spreading_factor, self.bandwidth)
+                max(self._cadwait_s,
+                    managed_tx_worst_case_s(round(self._cadwait_s * 1000), self._cadpoll_ms,
+                                            self._cadsym, self.spreading_factor, self.bandwidth))
                 + (airtime_ms / 1000.0) + self.tx_result_margin
             )
 
