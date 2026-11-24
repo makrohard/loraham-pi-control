@@ -86,6 +86,14 @@ TX_RESULT_FLAG_CAD_TIMEOUT = 0x04
 
 # Daemon CADWAIT default (seconds) if the status reply does not report it.
 DEFAULT_CADWAIT_S = 1.5
+# The daemon's CAD poll sleep (ms) and CAD symbol count when its status reply does not report
+# them: the daemon's own poll default, and RadioLib's SX126x CAD length (an SX127x scan, reported
+# as `-`, is shorter). A daemon up to 1.6.1 reports no CADSYM.
+DEFAULT_CADPOLL_MS = 50
+DEFAULT_CADSYM = 4
+# Per CAD probe, on top of the scan itself: quiesce, SPI and RX restore. Measured 15-40 ms on a
+# box; this is more than twice that.
+CAD_PROBE_OVERHEAD_S = 0.100
 
 # How often to ask the daemon (GET CHANNEL NOSCAN) for a fresh live-channel RSSI to keep
 # get_noise_floor() current.
@@ -133,6 +141,21 @@ def resolve_socket_path(configured: str) -> str:
     except OSError:
         pass
     return configured
+
+
+def managed_tx_worst_case_s(cadwait_ms: int, cadpoll_ms: int, cad_symbols: int,
+                            sf: int, bw_hz: float) -> float:
+    """Longest time (s) the daemon's MANAGED mode holds a frame on a busy channel.
+
+    The daemon counts ticks, not time: ceil(CADWAIT / CADPOLL) ticks, each one CAD probe plus a
+    CADPOLL sleep, with no sleep after the last tick. A probe is the scan (cad_symbols symbols)
+    plus CAD_PROBE_OVERHEAD_S. A poll interval of 0 gives 0 ticks, as in the daemon.
+    """
+    if cadpoll_ms <= 0 or cadwait_ms <= 0:
+        return 0.0
+    ticks = (cadwait_ms + cadpoll_ms - 1) // cadpoll_ms
+    probe_s = cad_symbols * (2 ** sf) / bw_hz + CAD_PROBE_OVERHEAD_S
+    return ticks * probe_s + (ticks - 1) * cadpoll_ms / 1000.0
 
 
 class LoRaHAMRadio(_LoRaRadioBase):
@@ -224,6 +247,8 @@ class LoRaHAMRadio(_LoRaRadioBase):
         # so at most one _pending_tx_result exists at any time even if sends overlap.
         self._tx_lock = asyncio.Lock()
         self._cadwait_s = DEFAULT_CADWAIT_S
+        self._cadpoll_ms = DEFAULT_CADPOLL_MS
+        self._cadsym = DEFAULT_CADSYM
         self._tx_ready = False
         self._connected = False
         self._pending_tx_result: Optional[asyncio.Future] = None
@@ -336,7 +361,12 @@ class LoRaHAMRadio(_LoRaRadioBase):
                 return None
 
             airtime_ms = self._calculate_airtime_ms(len(data))
-            timeout = self._cadwait_s + (airtime_ms / 1000.0) + self.tx_result_margin
+            # The daemon may hold the frame for its whole MANAGED busy wait before it answers.
+            timeout = (
+                managed_tx_worst_case_s(round(self._cadwait_s * 1000), self._cadpoll_ms,
+                                        self._cadsym, self.spreading_factor, self.bandwidth)
+                + (airtime_ms / 1000.0) + self.tx_result_margin
+            )
 
             loop = asyncio.get_running_loop()
             future: asyncio.Future = loop.create_future()
@@ -634,8 +664,17 @@ class LoRaHAMRadio(_LoRaRadioBase):
             for key, value in re.findall(r"\b([A-Z]+)=([^\s]+)", line.upper())
         }
 
+    @staticmethod
+    def _positive_int(value: Optional[str], default: int) -> int:
+        """A status field as a positive integer; missing, AUTO, `-` or anything else -> default."""
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return default
+        return number if number > 0 else default
+
     async def _handshake_status(self) -> bool:
-        """One-shot connect handshake: `GET STATUS`, cache CADWAIT, verify TX gates.
+        """One-shot connect handshake: `GET STATUS`, cache CADWAIT/CADPOLL/CADSYM, verify TX gates.
 
         Returns whether TX is ready. RX-only clients never gate on this.
         """
@@ -684,6 +723,10 @@ class LoRaHAMRadio(_LoRaRadioBase):
                     logger.info("LoRaHAM CADWAIT=%s ms", fields["CADWAIT"])
                 except ValueError:
                     logger.warning("Bad LoRaHAM CADWAIT value: %s", fields["CADWAIT"])
+                # Read anew from every handshake's reply; they size the TX_RESULT wait only and
+                # never gate TX readiness.
+                self._cadpoll_ms = self._positive_int(fields.get("CADPOLL"), DEFAULT_CADPOLL_MS)
+                self._cadsym = self._positive_int(fields.get("CADSYM"), DEFAULT_CADSYM)
 
                 if not self.enable_tx:
                     return False

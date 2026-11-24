@@ -7,6 +7,7 @@ cancellation, and bounded buffering.
 """
 
 import asyncio
+import logging
 
 import pytest
 
@@ -18,7 +19,7 @@ from fake_loraham_daemon import (
     FakeLoRaHAMDaemon,
 )
 from harness import make_radio, wait_for
-from meshcore_host.loraham_radio import RX_QUEUE_MAX, LoRaHAMRadio
+from meshcore_host.loraham_radio import RX_QUEUE_MAX, LoRaHAMRadio, managed_tx_worst_case_s
 
 
 @pytest.fixture
@@ -419,6 +420,97 @@ async def test_tx_not_ready_recovers_via_rehandshake(tmp_path):
     assert await r.send(b"now") is not None
     await r.aclose()
     await d.close()
+
+
+# ---------------------------------------------------------------------------
+# TX_RESULT wait = the daemon's MANAGED busy worst case
+# ---------------------------------------------------------------------------
+
+def test_managed_worst_case_at_sf12_default_cad():
+    # 30 ticks x (4 symbols x 32.768 ms + 100 ms) + 29 x 50 ms.
+    assert managed_tx_worst_case_s(1500, 50, 4, 12, 125000) == pytest.approx(8.38216, abs=1e-3)
+
+
+def test_managed_worst_case_counts_each_cad_symbol():
+    assert managed_tx_worst_case_s(1500, 50, 8, 12, 125000) == pytest.approx(12.31432, abs=1e-3)
+
+
+def test_managed_worst_case_rounds_the_ticks_up():
+    # 1501 / 50 is 30.02: the daemon runs 31 ticks.
+    assert managed_tx_worst_case_s(1501, 50, 4, 12, 125000) == pytest.approx(8.663232, abs=1e-3)
+
+
+@pytest.mark.parametrize("cadwait_ms, cadpoll_ms", [(0, 50), (1500, 0), (0, 0)])
+def test_managed_worst_case_without_ticks_is_zero(cadwait_ms, cadpoll_ms):
+    assert managed_tx_worst_case_s(cadwait_ms, cadpoll_ms, 4, 12, 125000) == 0.0
+
+
+@pytest.mark.parametrize("cadpoll, cadsym, want_poll, want_sym", [
+    (50, None, 50, 4),          # a 1.6.1 daemon: CADPOLL, no CADSYM
+    (None, None, 50, 4),        # neither field
+    (100, 8, 100, 8),           # reported values are used as given
+    (100, "AUTO", 100, 4),
+    (100, "-", 100, 4),         # SX127x
+    ("x", "x", 50, 4),
+    (0, 0, 50, 4),
+])
+async def test_handshake_caches_cadpoll_and_cadsym(tmp_path, cadpoll, cadsym, want_poll, want_sym):
+    d = FakeLoRaHAMDaemon(tmp_path, tx=True, cadpoll_ms=cadpoll, cadsym=cadsym)
+    await d.start()
+    r = make_radio(d)
+    r.begin()
+    try:
+        # Neither field gates TX readiness: only CADWAIT does.
+        assert await wait_for(lambda: r.connected and r.tx_ready)
+        assert (r._cadpoll_ms, r._cadsym) == (want_poll, want_sym)
+    finally:
+        await r.aclose()
+        await d.close()
+
+
+async def test_each_handshake_reads_cadsym_anew(tmp_path):
+    d = FakeLoRaHAMDaemon(tmp_path, tx=True, cadpoll_ms=100, cadsym=8)
+    await d.start()
+    r = make_radio(d)
+    r.begin()
+    try:
+        assert await wait_for(lambda: r.tx_ready and r._cadsym == 8)
+        d.cadpoll_ms, d.cadsym = None, None             # e.g. the daemon went back to 1.6.1
+        handshakes = d.config_commands.count("GET STATUS")
+        await d.drop_data_connection()
+        assert await wait_for(
+            lambda: d.config_commands.count("GET STATUS") > handshakes and r.tx_ready
+        )
+        assert (r._cadpoll_ms, r._cadsym) == (50, 4)
+    finally:
+        await r.aclose()
+        await d.close()
+
+
+async def test_sf12_result_after_the_old_wait_is_still_received(tmp_path, caplog):
+    """At SF12 the daemon may hold a frame on a busy channel for its whole MANAGED wait (about
+    8.4 s at the default CAD) before it answers CHANNEL_BUSY. The host waits for that answer:
+    no `No TX_RESULT`, no reconnect, TX stays ready."""
+    d = FakeLoRaHAMDaemon(tmp_path, tx=True, tx_result_status=TX_RESULT_STATUS_CHANNEL_BUSY)
+    await d.start()
+    r = make_radio(d, spreading_factor=12, bandwidth=125000, coding_rate=5,
+                   tx_result_margin=0.1)
+    r.begin()
+    try:
+        assert await wait_for(lambda: r.connected and r.tx_ready)
+        payload = b"busy"
+        old_wait = 1.5 + r._calculate_airtime_ms(len(payload)) / 1000.0 + 0.1
+        d.tx_result_delay = old_wait + 0.5
+        handshakes = d.config_commands.count("GET STATUS")
+        caplog.set_level(logging.INFO, logger="LoRaHAMRadio")
+        assert await r.send(payload) is None            # the daemon did not send it
+        assert "Channel busy" in caplog.text
+        assert "No TX_RESULT" not in caplog.text
+        assert r.tx_ready
+        assert d.config_commands.count("GET STATUS") == handshakes
+    finally:
+        await r.aclose()
+        await d.close()
 
 
 # ---------------------------------------------------------------------------

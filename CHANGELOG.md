@@ -52,6 +52,8 @@
   or a moved binary pin no longer refuse a start (the stack page says "Rebuild available").
 - A self-update no longer changes saved settings to a release's new defaults, and its result lists the stacks with an
   update (from the next self-update on).
+- MeshCore: a frame the daemon holds on a busy channel (about 8 s at SF12) is no longer logged `unconfirmed`
+  with a reconnect: the host waits out the daemon's whole channel-busy wait for its result.
 - meshcom-qemu-raspi: 722b5e8e5 -> b4d3bc0c2 (pin/b4d3bc0), used by meshcom-gps-relay, meshcom-qemu
 - meshcom-loraham-bridge: 8500df8bf -> 5c7843b3b (v0.3.1), used by meshcom-bridge
 - loraham-rns-interface: 015540bd2 -> 6c92f2291 (v0.4.1), used by rns-lora-interface

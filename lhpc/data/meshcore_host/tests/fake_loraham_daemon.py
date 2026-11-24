@@ -43,6 +43,8 @@ class FakeLoRaHAMDaemon:
         tx_result_payload_len=4,
         tx_result_delay=0.0,
         cadwait_ms=1500,
+        cadpoll_ms=50,
+        cadsym=None,
         txmode="MANAGED",
         txresult=1,
         radio="READY",
@@ -68,6 +70,10 @@ class FakeLoRaHAMDaemon:
         # Reported in the GET STATUS reply. None omits CADWAIT entirely; a
         # non-numeric value yields a malformed CADWAIT field (for tests).
         self.cadwait_ms = cadwait_ms
+        # CADPOLL as reported (None omits it); CADSYM None omits it, as a daemon up to 1.6.1
+        # does; any other value is reported as given (AUTO, `-`, garbage, for tests).
+        self.cadpoll_ms = cadpoll_ms
+        self.cadsym = cadsym
         # RADIO/TXMODE/TXRESULT reported by GET STATUS (per-band daemon state).
         self.radio = radio
         self.txmode = txmode
@@ -134,12 +140,14 @@ class FakeLoRaHAMDaemon:
         cadwait = ""
         if self.cadwait_ms is not None:
             cadwait = f"CADWAIT={self.cadwait_ms} "
+        cadpoll = "" if self.cadpoll_ms is None else f"CADPOLL={self.cadpoll_ms} "
+        cadsym = "" if self.cadsym is None else f" CADSYM={self.cadsym}"
         return (
             f"STATUS RADIO={self.radio} TX={1 if self.tx else 0} "
             f"CAD={1 if self.cad else 0} GETRSSI=0 TXRESULT={self.txresult} "
             f"TXMODE={self.txmode} TXQUEUE=1 "
-            f"{cadwait}CADIDLE=250 CADPOLL=50 "
-            f"CADTXAFTERTIMEOUT=0\n"
+            f"{cadwait}CADIDLE=250 {cadpoll}"
+            f"CADTXAFTERTIMEOUT=0{cadsym}\n"
         )
 
     def _channel_line(self):
