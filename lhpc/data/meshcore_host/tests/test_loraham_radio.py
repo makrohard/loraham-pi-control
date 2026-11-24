@@ -19,6 +19,7 @@ from fake_loraham_daemon import (
     FakeLoRaHAMDaemon,
 )
 from harness import make_radio, wait_for
+from meshcore_host import loraham_radio
 from meshcore_host.loraham_radio import RX_QUEUE_MAX, LoRaHAMRadio, managed_tx_worst_case_s
 
 
@@ -482,6 +483,29 @@ async def test_each_handshake_reads_cadsym_anew(tmp_path):
             lambda: d.config_commands.count("GET STATUS") > handshakes and r.tx_ready
         )
         assert (r._cadpoll_ms, r._cadsym) == (50, 4)
+    finally:
+        await r.aclose()
+        await d.close()
+
+
+async def test_send_sizes_its_wait_from_the_handshake_and_the_radio(tmp_path, monkeypatch):
+    """send() passes the handshake's CADWAIT / CADPOLL / CADSYM and the radio's own SF and BW to the
+    wait: a daemon reporting CADSYM 8 at SF12 needs about 12.3 s, not the 4-symbol 8.4 s."""
+    seen = []
+
+    def record(*args):
+        seen.append(args)
+        return 0.0
+
+    monkeypatch.setattr(loraham_radio, "managed_tx_worst_case_s", record)
+    d = FakeLoRaHAMDaemon(tmp_path, tx=True, cadwait_ms=1501, cadpoll_ms=100, cadsym=8)
+    await d.start()
+    r = make_radio(d, spreading_factor=12, bandwidth=125000, coding_rate=5)
+    r.begin()
+    try:
+        assert await wait_for(lambda: r.connected and r.tx_ready)
+        assert await r.send(b"pin") is not None
+        assert seen == [(1501, 100, 8, 12, 125000)]
     finally:
         await r.aclose()
         await d.close()
