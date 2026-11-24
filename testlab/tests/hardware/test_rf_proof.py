@@ -260,6 +260,21 @@ def test_absent_hardware_turns_exactly_its_rows_not_run(dry, base, case):
     assert {k: r for k, r in got.items() if k[0] not in want} == {k: r for k, r in before.items() if k[0] not in want}
 
 
+@pytest.mark.parametrize("lane", ["full", "rns"])
+@pytest.mark.parametrize("box", ["H", "Z"])
+def test_an_absent_box_gets_no_command_and_its_rows_are_not_run(dry, lane, box):
+    # red-before (8c95b9f9, kit run 20261124T002523Z): R0 read MeshChat's identity on the absent box (R0-<box>-mcid.txt)
+    # before the row's ABSENT check; live, that was an ssh with the empty password line, and a STOP
+    full = dry(lane)                                     # the rows that address the box: those of its commands on a full bench
+    want = {m.group(1) for ln in full.lines if (m := re.match(rf"\s*\[dry\] {box} > (\d+)-", ln))}
+    d = dry(lane, **{f"BOX_{box}_HOST": ""})
+    assert d.rc == 0, d.err
+    assert not [ln for ln in d.lines if ln.lstrip().startswith(f"[dry] {box} > ")]   # not one command to the absent box
+    got = d.report()
+    assert want & {"5", "12", "13"} and want >= rows_using(lane, f"{box}:")            # a Reticulum row is among them
+    assert {k: r for k, r in got.items() if k[0] in want} == {k: f"NOT RUN: absent: box {box}" for k in got if k[0] in want}
+
+
 def test_a_frequency_mismatch_on_a_frame_row_is_a_fail(dry, base):
     row = next(r for r in lane_rows("fast") if r[3] == "H:H433" and r[4] == "Z:Z433")[0]
     d = dry("fast", DRY_STATUS_Z_r1="STATUS ID=r1 FREQ=434.500000 SF=11 POWER=10 HIGHPOWER=0")

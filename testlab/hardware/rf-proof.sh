@@ -546,14 +546,19 @@ sshrun() { local b=$1 in=$2 c=$3 pw; [ "$b" = H ] && pw=$PW_H || pw=$PW_Z
   if [ "$in" = - ]; then SSHPASS=$pw sshpass -e ssh -n -o PubkeyAuthentication=no -o ConnectTimeout=10 "$(boxvar "$b" USER)@$(boxvar "$b" HOST)" "bash -lc $(printf %q "$c")"
   else printf '%s\n' "$in" | SSHPASS=$pw sshpass -e ssh -o PubkeyAuthentication=no -o ConnectTimeout=10 "$(boxvar "$b" USER)@$(boxvar "$b" HOST)" "bash -lc $(printf %q "$c")"; fi; }
 drylog() { [ "$MODE" = dry ] && printf '%s\n' "$*" >> "$DRYLOG"; return 0; }
-X() { local w=$1 f=$2; shift 2; local c; c=$(rt "$w" "$*"); drylog "CMD[${PCTX:-}] $w: $c"
+# nobox <box|PC> <file>: a box that is ABSENT (no password line, or no answer to R0's probe) gets no command at all: STOP first
+# (while recovering: recorded and skipped, XRC 255, so the recovery goes on to its scan and RESULT)
+nobox() { case $1 in H|Z) [ -z "${ABSENT[$1]:-}" ] && return 0
+    [ "${RECOVERING:-0}" = 1 ] || stop "$2: box $1 is absent: no command to it"
+    rec "$2: box $1 is absent: no command to it (skipped in the recovery)" || true; XRC=255; return 1;; esac; return 0; }
+X() { local w=$1 f=$2; shift 2; nobox "$w" "$f" || return 0; local c; c=$(rt "$w" "$*"); drylog "CMD[${PCTX:-}] $w: $c"
   guard "$f" "$c" -
   if [ "$MODE" = dry ]; then echo "  [dry] $w > $f: $c"; dryout "$w" "$f" "$c"; XRC=0; echo 0 > "$OUT/$f.rc"; dryframes "$w" "$c" ""; SPAWN=
     [ "${XBG:-0}" = 1 ] && { ( exec -a "rfkit-dry-listener${DRY_TAG:+:$DRY_TAG}" sleep 60 ) </dev/null >/dev/null 2>&1 & SPAWN=$!; SPAWNF[$SPAWN]=$f; }; return 0; fi
   if [ "${XBG:-0}" = 1 ]; then case $w in H|Z) ( capture "$f" sshrun "$w" - "$c" ) & SPAWN=$!; SPAWNF[$SPAWN]=$f; return 0;; *) stop "X: XBG only on a box";; esac; fi
   case $w in H|Z) capture "$f" sshrun "$w" - "$c";; PC) capture "$f" bash -c "$c";; *) stop "X: '$w'";; esac
   [ "$XRC" -ne 255 ] || [ "${XNOSTOP:-0}" = 1 ] || stop "$f: ssh transport rc 255"; }
-XIN() { local w=$1 f=$2 in; in=$(rt "$w" "$3" raw); shift 3; local c; c=$(rt "$w" "$*"); drylog "CMD[${PCTX:-}] $w: (stdin) $c"
+XIN() { local w=$1 f=$2 in; nobox "$w" "$f" || return 0; in=$(rt "$w" "$3" raw); shift 3; local c; c=$(rt "$w" "$*"); drylog "CMD[${PCTX:-}] $w: (stdin) $c"
   guard "$f" "$c" "$in"
   if [ "$MODE" = dry ]; then echo "  [dry] $w > $f: (stdin) $c"; dryout "$w" "$f" "$c"; XRC=0; echo 0 > "$OUT/$f.rc"; dryframes "$w" "$c" "$in"; return 0; fi
   capture "$f" sshrun "$w" "$in" "$c"; [ "$XRC" -ne 255 ] || [ "${XNOSTOP:-0}" = 1 ] || stop "$f: ssh transport rc 255"; }
@@ -943,10 +948,12 @@ row_R0() {
   INTHEAD_H=${INTHEAD_H:-$INTHEAD}; [[ "$INTHEAD_H" =~ ^[0-9a-f]{40}$ ]] || stop "INTHEAD_H: 40 hex"; data "R0: lane $LANE, rows $RUN; boxes present: '${BOXES}'"
   [ "$MODE" = dry ] || [ "$FORMS_HEAD" = "$INTHEAD" ] || stop "FORMS_HEAD '$FORMS_HEAD' is not INTHEAD: confirm the forms at this head first"
   [ "$MODE" = dry ] || [ "$(cd "$REPO" && gh run view "$INTCI" --json headSha,conclusion -q '.headSha + " " + .conclusion')" = "$INTHEAD success" ] || stop "INTCI is not a green run of INTHEAD"
-  T0=$(date -u +%s); keep T0 "$T0"; usbsnap R0-usb; local b want p
+  T0=$(date -u +%s); keep T0 "$T0"; usbsnap R0-usb; local b want p w
   for b in $BOXES; do [ "$MODE" = dry ] && break   # a box that does not answer one short probe is ABSENT (its rows NOT RUN)
-    XNOSTOP=1 X $b "R0-$b-probe.txt" "true"; [ "$XRC" = 0 ] || { ABSENT[$b]="absent: box $b"; data "R0: box $b does not answer (rc $XRC): absent"; }; done
-  p=; for b in $BOXES; do [ -n "${ABSENT[$b]:-}" ] || p="$p $b"; done; BOXES=${p# }; keep BOXES "$BOXES"
+    XNOSTOP=1 X $b "R0-$b-probe.txt" "true"; [ "$XRC" = 0 ] && continue
+    ABSENT[$b]="absent: box $b"; data "R0: box $b does not answer (rc $XRC): absent"   # out of BOXES and the journal at once: a
+    p=; for w in $BOXES; do [ "$w" = "$b" ] || p="$p $w"; done; BOXES=${p# }; keep BOXES "$BOXES"; done   # STOP now recovers without it
+  keep BOXES "$BOXES"
   for b in $BOXES; do
     want=$INTHEAD; [ $b = H ] && want=$INTHEAD_H
     must $b "R0-$b-head.txt" "git -C {RT}/src/loraham-pi-control rev-parse HEAD"; [ "$MODE" = dry ] || eq "R0 $b: the real install is its expected head" "$(body "R0-$b-head.txt")" "$want"
@@ -973,7 +980,7 @@ row_R0() {
   done
   local r e ep k o why devs= rdevs= pr pk bud held wv i w; declare -A SUM=() MCOK=()
   for r in $RUN; do why=; for ep in $(reps "$r"); do case "$ep" in -) continue;; esac
-      case "$(rowname "$r")" in reticulum*) [ "${ep%%:*}" = peer ] || mcid "${ep%%:*}" || why="${why}box ${ep%%:*}: MeshChat has no identity yet (no state/meshchat/identity: it never started there); prerequisite: start MeshChat on it once before the run (the row reads its LXMF address before its start); ";; esac
+      case "$(rowname "$r")" in reticulum*) [ "${ep%%:*}" = peer ] || [ -n "${ABSENT[${ep%%:*}]:-}" ] || mcid "${ep%%:*}" || why="${why}box ${ep%%:*}: MeshChat has no identity yet (no state/meshchat/identity: it never started there); prerequisite: start MeshChat on it once before the run (the row reads its LXMF address before its start); ";; esac
       if [ "${ep%%:*}" = peer ]; then peerok "${ep#*:}"; o=$PK; [ -z "$o" ] || why="$why$o; "
         k="PEER_${ep#*:}"; read -r pk pr _ <<< "${!k:-}"; [ -n "$o" ] || [[ "$pr" == *:*:* ]] || devs="$devs $(shq "/dev/serial/by-id/$pr")"
         [ -n "$o" ] || [ "$pk" != rnode ] || rdevs="$rdevs /dev/serial/by-id/$pr "   # the Reticulum rows' RNode: the PC's rnsd holds it (hpower)
@@ -1718,6 +1725,7 @@ runall() {   # the run's rows, in the worker
 # One inherited from the environment would open the guard: STOP (also before the test-only return below).
 [ -z "${PCTX:-}${TXCTX:-}" ] || stop "PCTX/TXCTX are set in the environment: the guard's context comes only from tx, pset and pread"
 unset PCTX TXCTX
+declare -A ABSENT=()   # the boxes found absent (the run block fills it; tests source up to here)
 [ "${RFPROOF_SOURCE_ONLY:-0}" = 1 ] && return 0   # tests: the functions and constants only; no args, stdin, lab file, box or peer
 
 # ==== the run ==================================================================================================================

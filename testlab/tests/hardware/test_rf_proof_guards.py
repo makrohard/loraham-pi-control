@@ -190,6 +190,43 @@ def test_r0_runs_the_box_status_and_key_read_and_records_the_running_set(tmp_pat
     assert f"{box}/rt/venv/lhpc/bin/lhpc status" in log and "{" + "LH}" not in log and "{" + "RT}" not in log
 
 
+@pytest.mark.parametrize("mode", ["dry", "live"])
+@pytest.mark.parametrize("call", ['X H f-h.txt "true"', 'XIN H f-h.txt "x" "true"'])
+def test_a_command_to_an_absent_box_stops_before_anything_runs(tmp_path, mode, call):
+    # red-before (8c95b9f9): X and XIN ran a command on a box that was ABSENT (live: an ssh with no password)
+    stubs = (f'MODE={mode}; ABSENT[H]="absent: box H"; BOX_H_HOST=box-h; BOX_Z_HOST=box-z; DRYLOG="$EVD/cmd.log"; '
+             ': > "$DRYLOG"; sshrun() { : > "$RAN"; }; dryout() { : > "$RAN"; }; dryframes() { :; }; ')
+    r, evd = source_only(tmp_path, stubs + call)
+    assert r.returncode == 2 and stop_lines(r) == ["STOP: f-h.txt: box H is absent: no command to it"], r.stderr
+    assert not (evd / "ran").exists() and (evd / "cmd.log").read_text() == ""   # nothing ran, nothing logged for H
+    (tmp_path / "z").mkdir()
+    r, evd = source_only(tmp_path / "z", stubs + 'X Z f-z.txt "true" && echo X-DONE')   # a present box: as before
+    assert "X-DONE" in r.stdout and (evd / "ran").exists(), r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("call", ['X H f-h.txt "true"', 'XIN H f-h.txt "x" "true"'])
+def test_the_recovery_skips_an_absent_box_records_it_and_goes_on(tmp_path, call):
+    # the recovery (RECOVERING=1) must reach its secret scan and RESULT: an absent box is recorded and skipped, never a STOP
+    # (after the skip X/XIN return 0 with XRC=255: a `must` around them would still STOP; the recovery's box calls, its
+    # undos and verify_set, are X with XNOSTOP=1)
+    r, evd = source_only(tmp_path, 'ABSENT[H]="absent: box H"; BOX_H_HOST=box-h; RECOVERING=1; sshrun() { : > "$RAN"; }; '
+                         + call + '; echo "GOES-ON XRC=$XRC"')
+    assert r.returncode == 0 and "GOES-ON XRC=255" in r.stdout and not stop_lines(r), r.stdout + r.stderr
+    assert not (evd / "ran").exists()
+    assert (evd / "UNRESOLVED.txt").read_text() == "f-h.txt: box H is absent: no command to it (skipped in the recovery)\n"
+
+
+def test_r0_takes_a_box_that_does_not_answer_out_of_the_journal_before_the_next_probe(tmp_path):
+    # red-before (8c95b9f9): BOXES was narrowed and journalled only after every probe; a STOP or a signal during box Z's
+    # probe ran the recovery with box H (absent) still in BOXES
+    _box, setup, env = box_stand_in(tmp_path)
+    probe = ('sshrun() { [ "$1" = H ] && return 255; [ -e "$RAN.boxes" ] '        # the journal as Z's probe (the first Z call) sees it
+             '|| grep "^BOXES=" "$OUT/state.env" | tail -n 1 > "$RAN.boxes"; return 0; }; ')
+    r, evd = source_only(tmp_path, setup + 'BOXES="H Z"; PW_Z=pw-z-Q72; BOX_Z_HOST=box-z; ' + probe
+                         + 'EVD="$EVD/run"; OUT=$EVD; row_R0', **env)
+    assert (evd / "ran.boxes").read_text() == "BOXES=Z\n", r.stdout + r.stderr
+
+
 def test_the_end_check_runs_the_box_status_and_finds_the_recorded_set(tmp_path):
     # red-before (f256f271): verify_set (RS and the recovery) sent a literal "{LH} status": rc 127, "status/key read failed"
     box, setup, env = box_stand_in(tmp_path)
