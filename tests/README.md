@@ -238,6 +238,10 @@ in full, the line links to it. The mark after a rule says what enforces it:
 - **C12** A fake pid that the code under test compares with `os.getpid()` (or the parent's pid) lies above
   `pid_max`.
 - **C13** A "dead" pid is a spawned and reaped child, not a constant.
+- **C14** A browser state that lasts one poll or refresh or less (the TX pill's pulse) is recorded as it is
+  painted (a `MutationObserver`, as in `testlab/tests/browser/test_dash_tx_pill_counter.py`), or the test asserts a
+  stable state; it is never sampled later. A test never waits on two independently polled elements together before
+  it reads a transient one: the slower one's catch-up can outlast the pulse.
 
 ### D. Isolation
 
