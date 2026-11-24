@@ -1,4 +1,4 @@
-// fixture: LoRaHAM_Daemon loraham_daemon/hardware_profile.cpp at 402b7c032b313f8b439b4ce71ede9e2500198a3a (v1.6.1), verbatim below this line; refreshed with every daemon pin move
+// fixture: LoRaHAM_Daemon loraham_daemon/hardware_profile.cpp at b231569f73f2358fa9ec070efe5aef507f2d54c5 (v1.6.2), verbatim below this line; refreshed with every daemon pin move
 #include "hardware_profile.h"
 
 #include <string.h>
