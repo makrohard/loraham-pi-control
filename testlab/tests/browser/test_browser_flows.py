@@ -327,6 +327,8 @@ def test_a_start_marks_its_stack_and_reloads_the_page_once_when_it_finishes(page
 
     navigations = []
     page.on("framenavigated", lambda f: navigations.append(f.url) if f is page.main_frame else None)
+    # beforeunload fires inside location.reload(), so a reload the banner asks for is seen in the pass that asks
+    page.add_init_script("addEventListener('beforeunload', () => { window.lhpcLeaving = true; });")
 
     page.goto(page.lab_base + "/stacks", wait_until="networkidle")
     assert page.locator(".radiogrid").count() == 0, "this page must not be the reload owner"
@@ -342,9 +344,13 @@ def test_a_start_marks_its_stack_and_reloads_the_page_once_when_it_finishes(page
     assert len(navigations) == 2, f"expected exactly one reload, saw {navigations}"
 
     # The remembered attempt is what stops a second reload: the feed still lists the finished
-    # job, and the banner must leave the page alone from here.
+    # job, and the banner must leave the page alone from here. The reloaded page's first poll
+    # draws the done job's banner row in the same pass that decides a reload, so once the row is
+    # there a second reload has already fired beforeunload (tests/README C14).
     page.wait_for_function(
-        "() => document.querySelectorAll('.badge[data-task]').length === 0", timeout=15000)
+        "() => document.querySelector('#task-banner > .taskitem-done') !== null", timeout=15000)
+    assert page.evaluate("() => window.lhpcLeaving === true") is False, "the reloaded page reloads again"
+    assert page.locator(".badge[data-task]").count() == 0
     assert len(navigations) == 2, f"reloaded more than once: {navigations}"
 
 
