@@ -56,10 +56,16 @@ on every radio of the node).
 The PC announces at launch and once more after the release (its TX checks passed again), right before its message: the
 box's node runs only from MeshChat's start, and its own send needs the PC's path. The PC's client of the shared rnsd takes
 that rnsd's RPC key from its config (`RNS_CONFIG`), else every request to it is refused.
-Row 12 also calls one MeshChat announce (`rt_announce`) after the release's go file, at least 2 s after MeshChat answers
-on 127.0.0.1:8790 (waited for at most 60 s, else the row FAILs with no call): the start's own announce can lose its
-emission second to RNS's path-response announce of the same destinations, and then nothing goes on air (2 more frames
-on the row's radio). A row-12 PASS so proves the announce call on air, not the announce at start.
+Row 12 proves both of the box's announces on air, by the PC's UTC second: MeshChat's START announce (the product's post
+step, about 3 s after MeshChat answers, so that RNS's own register-time announce of the same destinations cannot swallow
+it) is the first the PC hears (the peer's `BOX-ANNOUNCE heard`), strictly before the kit's own call; the call's (`rt_announce`,
+the Announce button's) is a later one (`BOX-ANNOUNCE again`) at or after it. Either missing is the peer -> box FAIL by name
+("the start's announce NOT heard before the kit's call", "the kit's announce call ...: API accepted, not heard on air"); the exchange
+still runs out, box -> peer is then NOT RUN. The call comes after the release's go file, 10 s after MeshChat answers on
+127.0.0.1:8790 (waited for at most 60 s, else the row FAILs with no call; 2 more frames on the row's radio). Row 12 runs
+with the box's announce awaited (never `known`: no cached path response counts). Limit: that MeshChat opens its port only
+after it has registered its destinations is read from MeshChat 45f89a8 (meshchat.py:126, :151 before :2063), not tested
+here.
 Row 5's prerequisite (an operator step before the run): save `backend = spi` on the Zero's board radio
 (`lhpc config reticulum@<rid> backend spi`); the product's default is `daemon`, and row 5 stops on it.
 The Reticulum rows' prerequisite on each of their boxes: MeshChat started there once (its first start writes

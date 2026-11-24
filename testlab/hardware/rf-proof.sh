@@ -1257,14 +1257,14 @@ rnsx() {   # rnsx <id> <tag> <box> <rid> <rnode key> <key>...: one exchange with
   [ "${RNSCALL:-0}" != 1 ] || for x in "${@:2}"; do tx "$x" "$ANNF" control --reserve; done   # the announce call below
   tx "$pk" 1 "$n1" -- X PC "$tg-tx2-go.txt" "LHPC_PROOF=$b:meshchat@$r printf '%s\n' '$n1' > $(shq "$go")"
   [ "$MODE" = live ] || printf '%s\n' "$n1" > "$go" || stop "row $id: the dry release file"   # dry: right after its tx
-  if [ "${RNSCALL:-0}" = 1 ]; then   # row 12: one announce call; the start's own announce (its detached post step) can lose
-    # its emission second to RNS's path-response announce of the same destinations, and then nothing goes on air. The wait
-    # counts from MeshChat's port: it opens only after both destinations are registered (MeshChat 45f89a8 meshchat.py:126,
-    # :151 before :2063), so >= 2 s later is a later second than both. The peer waits for the box's announce first.
+  if [ "${RNSCALL:-0}" = 1 ]; then   # row 12: one announce call (the Announce button's), 10 s after MeshChat answers: the
+    # start's own announce (its post step, about 3 s after the port answers) comes first. The port opens only after both
+    # destinations are registered (MeshChat 45f89a8 meshchat.py:126, :151 before :2063), so the call is a later emission
+    # second than RNS's register-time announce too. RNSCT = the PC's UTC second right before it (the peer's clock, ts()).
     X "$b" "$tg-meshchat.txt" "$(mcready 60)"; [ "$MODE" = live ] || case " ${DRY_MCDOWN:-} " in *" $tg "*) XRC=3;; esac   # DRY_MCDOWN=<tag>...
     [ "$XRC" = 0 ] || fail "row $id: MeshChat does not answer on 127.0.0.1:8790 within 60 s ($tg-meshchat.txt): no announce call"
-    [ "$MODE" = dry ] || sleep 2
-    tx "$q" "$ANNF" control -- must "$b" "$tg-announce.txt" "$(form rt_announce)"; fi
+    [ "$MODE" = dry ] || sleep 10
+    RNSCT=$(date -u +%Y-%m-%dT%H:%M:%SZ); tx "$q" "$ANNF" control -- must "$b" "$tg-announce.txt" "$(form rt_announce)"; fi
   RNSNOPATH=; if [ "${RNSSEND:-1}" = 1 ] && needs rt_send; then [ "$MODE" = dry ] || sleep 60; dest=$(cat "$pcd" 2>/dev/null || echo dry)
     [ "$MODE" = dry ] || [[ "$dest" =~ ^[0-9a-f]{32}$ ]] || stop "row $id: no PC destination hash"
     tx "$pk" 1 control --reserve   # the PC's delivery proof of the box's message: an RNode frame
@@ -1297,7 +1297,18 @@ row_rns() {   # row_rns <id> <box:KEY> <backend>: Reticulum + MeshChat on one bo
   hpower "R$id-rnode" "$id-rnode-power.txt"
   leg "peer->box"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   rnsx "$id" "$id" "$b" "$r" "R$id-rnode" "$q"
-  REPORT "$id" "$(rowname "$id")" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "peer -> box" "yes: LXMF delivered (the box's proof) and stored$([ "${RNSCALL:-0}" != 1 ] || echo "; the box heard by the kit's announce call, not its start's")" "the RNode at $(getk "P_R$id-rnode" unrecorded) dBm" PASS
+  if [ "${RNSCALL:-0}" = 1 ]; then   # both box announces on air, by the PC's second (the peer's lines; dry: fake_peer's):
+    # the start's (the product's) = the first heard, strictly before the call; the call's = a later one, at or after it
+    local ha ag hc= x; ha=$(sed -n 's/^BOX-ANNOUNCE heard //p' "$OUT/$id-peer.txt" 2>/dev/null | head -n 1)
+    ag=$(sed -n 's/^BOX-ANNOUNCE again //p' "$OUT/$id-peer.txt" 2>/dev/null)
+    if [ "$MODE" != live ]; then   # DRY_ANNLATE / DRY_ANN2AT / DRY_ANN2MISS=<id>...: first heard at the call / the call heard in
+      case " ${DRY_ANNLATE:-} " in *" $id "*) ha=$RNSCT;; esac   # its own second / the call not heard
+      case " ${DRY_ANN2AT:-} " in *" $id "*) ag=$RNSCT;; esac; case " ${DRY_ANN2MISS:-} " in *" $id "*) ag=;; esac; fi
+    for x in $ag; do [[ "$x" < "$RNSCT" ]] || { hc=$x; break; }; done
+    data "row $id: the PC heard the box at ${ha:-never}, again at or after the kit's announce call ($RNSCT) at ${hc:-never}"
+    [[ -n "$ha" && "$ha" < "$RNSCT" ]] || fail "row $id peer -> box: the start's announce NOT heard before the kit's call at $RNSCT (heard ${ha:-never})"
+    [ -n "$hc" ] || fail "row $id peer -> box: the kit's announce call at $RNSCT: API accepted, not heard on air"; fi
+  REPORT "$id" "$(rowname "$id")" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "peer -> box" "yes: LXMF delivered (the box's proof) and stored$([ "${RNSCALL:-0}" != 1 ] || echo "; start's announce heard $ha (product), the kit's call heard on air $hc (button)")" "the RNode at $(getk "P_R$id-rnode" unrecorded) dBm" PASS
   leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   if needs rt_send && [ -z "${RNSNOPATH:-}" ]; then rnsback "$id"
     REPORT "$id" "$(rowname "$id")" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "box -> peer" yes "$(getk "P_$q" as-is) dBm (as-is)" PASS

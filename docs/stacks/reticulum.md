@@ -136,8 +136,9 @@ through the LHPC proxy ([webserver](../webserver.md#stack-web-ui-proxies)). Its 
 **without** system site-packages, so it cannot import the SPI driver.
 
 At every MeshChat start LHPC sends **one announce**, the same call as MeshChat's Announce button
-(`GET /api/v1/announce` on loopback), so the box is discoverable on the air without anyone pressing
-it; a failed announce is logged in the post-start log and the start stands. LHPC writes nothing into
+(`GET /api/v1/announce` on loopback), about 3 s after MeshChat answers (an announce at once can be
+swallowed by Reticulum's own announce of the same destinations at their registration), so the box is
+discoverable on the air without anyone pressing it; a failed announce is logged in the post-start log and the start stands. LHPC writes nothing into
 MeshChat: its own auto-announce setting stays yours.
 
 MeshChat reads the interface list **once, at startup**: after an interface change, restart it

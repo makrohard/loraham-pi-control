@@ -33,6 +33,12 @@ from seams import seed_framing_driver
 
 _SCRIPT = repo_paths.REPO / "lhpc" / "data" / "scripts" / "meshchat-announce.py"
 _OK = b'{"message": "announcing"}'
+SETTLE_S = 3.0                                       # the script's wait before its call (meshchat-announce.py SETTLE_S)
+
+
+def _after_settle(seconds):
+    """A --timeout value: `seconds` after the settle."""
+    return f"{SETTLE_S + seconds:g}"
 
 
 def _response(code=200, body=_OK, length=None, chunked=False):
@@ -52,7 +58,7 @@ class FakeMeshChat:
 
     def __init__(self, code=200, body=_OK, length=None, chunked=False, drip=0.0, drip_from="body",
                  raw=None, stream=None):
-        self.calls, self.called, self.stop = [], threading.Event(), threading.Event()
+        self.calls, self.at, self.called, self.stop = [], [], threading.Event(), threading.Event()
         self.stream = stream                           # "chunked" | "unframed" | "chunk-minus-1": 8 MB fast, then it stalls
         if stream == "chunked":
             raw = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
@@ -90,6 +96,7 @@ class FakeMeshChat:
                     return
                 req += got
             self.calls.append(req.split(b" ", 2)[1].decode())
+            self.at.append(time.monotonic())               # wallclock: when the request arrived (the settle's proof)
             self.called.set()
             try:
                 conn.sendall(self.data[:self.cut])
@@ -135,7 +142,7 @@ def alarm_kept():
     setitimer(signal.ITIMER_REAL, *timer)
 
 
-def _script(api, timeout="5", env=None):
+def _script(api, timeout=_after_settle(5), env=None):
     """The script as the runner runs it: its own process, here under a 30 s subprocess timeout (a
     regression of the bound fails the test instead of holding the run). -> (rc, output, seconds)."""
     t0 = time.monotonic()                            # wallclock: measures the script's real bound
@@ -158,6 +165,25 @@ def test_the_announce_is_the_buttons_call_and_its_answer_is_checked(meshchat):
     assert (rc, fake.calls) == (0, ["/api/v1/announce"]) and "announced" in out, out
 
 
+@pytest.mark.wallclock("the settle is a real wait in the child: the request's arrival after the spawn is the property")
+def test_the_call_waits_out_the_settle_after_the_start(meshchat):
+    """RNS announces a just-registered destination itself, as a path response the node never airs; an announce of the
+    same destination in that emission second is dropped. So the call comes SETTLE_S after the start, once."""
+    fake = meshchat()
+    t0 = time.monotonic()                            # wallclock: before the spawn
+    rc, out, _secs = _script(fake.api)
+    assert (rc, fake.calls) == (0, ["/api/v1/announce"]), out
+    assert fake.at[0] - t0 >= SETTLE_S, fake.at[0] - t0
+
+
+@pytest.mark.wallclock("the settle runs inside the one deadline: a deadline inside it ends the run, nothing sent")
+def test_a_deadline_inside_the_settle_ends_the_run_and_sends_nothing(meshchat):
+    fake = meshchat()
+    rc, out, secs = _script(fake.api, timeout="1")
+    assert rc == 1 and "announce timed out" in out and secs < 4, (out, secs)
+    assert not fake.called.wait(1), fake.calls        # the process has ended: no call, none in flight
+
+
 @pytest.mark.parametrize("kw,why", [
     pytest.param({"code": 500, "body": b"{}"}, "HTTP 500", id="http-500"),
     pytest.param({"body": b"<html>"}, "not JSON", id="not-json"),
@@ -173,8 +199,8 @@ def test_an_announce_it_cannot_confirm_fails_by_name(meshchat, kw, why):
 @pytest.mark.wallclock("the bound is the script's real deadline")
 def test_a_meshchat_that_never_listens_ends_by_the_deadline():
     """Only a refused connect is retried, until the one deadline."""
-    rc, out, secs = _script(f"127.0.0.1:{_free_port()}", timeout="1")
-    assert rc == 1 and "announce timed out" in out and secs < 4, (out, secs)
+    rc, out, secs = _script(f"127.0.0.1:{_free_port()}", timeout=_after_settle(1))
+    assert rc == 1 and "announce timed out" in out and secs < SETTLE_S + 4, (out, secs)
 
 
 @pytest.mark.wallclock("a dropped connection fails at once, well inside the deadline")
@@ -190,11 +216,12 @@ def test_an_error_other_than_refused_is_not_retried():
     t = threading.Thread(target=drop, daemon=True)
     t.start()
     try:
-        rc, out, secs = _script(f"127.0.0.1:{srv.getsockname()[1]}", timeout="10")
+        rc, out, secs = _script(f"127.0.0.1:{srv.getsockname()[1]}", timeout=_after_settle(10))
     finally:
         t.join(5)
         srv.close()
-    assert rc == 1 and "GET /api/v1/announce" in out and secs < 5, (out, secs)
+    assert not t.is_alive(), "the script never connected"
+    assert rc == 1 and "GET /api/v1/announce" in out and secs < SETTLE_S + 5, (out, secs)
 
 
 @pytest.mark.wallclock("a stalled server: the bound is the script's real deadline")
@@ -203,10 +230,13 @@ def test_a_meshchat_that_accepts_and_never_answers_ends_by_the_deadline():
     srv.bind(("127.0.0.1", 0))
     srv.listen(1)                                      # accepted by the kernel; nobody ever reads
     try:
-        rc, out, secs = _script(f"127.0.0.1:{srv.getsockname()[1]}", timeout="1")
+        rc, out, secs = _script(f"127.0.0.1:{srv.getsockname()[1]}", timeout=_after_settle(1))
+        srv.settimeout(0)
+        conn, _a = srv.accept()                        # the script's connect, queued by the kernel
+        conn.close()
     finally:
         srv.close()
-    assert rc == 1 and "announce timed out" in out and secs < 4, (out, secs)
+    assert rc == 1 and "announce timed out" in out and secs < SETTLE_S + 4, (out, secs)
 
 
 @pytest.mark.wallclock("a trickling answer: the bound is the script's real deadline")
@@ -218,17 +248,21 @@ def test_a_meshchat_that_accepts_and_never_answers_ends_by_the_deadline():
 ])
 def test_an_answer_that_trickles_in_ends_by_the_deadline(meshchat, kw):
     """One byte every 0.3 s from the status line, the headers, the body or the chunk framing on:
-    every read completes in time, only the one deadline ends it — by its 1 s (code re-rounds 1, 2)."""
-    rc, out, secs = _script(meshchat(drip=0.3, **kw).api, timeout="1")
-    assert rc == 1 and "announce timed out" in out and secs < 3, (out, secs)
+    every read completes in time, only the one deadline ends it — 1 s after the settle (code re-rounds 1, 2)."""
+    fake = meshchat(drip=0.3, **kw)
+    rc, out, secs = _script(fake.api, timeout=_after_settle(1))
+    assert fake.calls == ["/api/v1/announce"], "the trickle was never reached"
+    assert rc == 1 and "announce timed out" in out and secs < SETTLE_S + 3, (out, secs)
 
 
 @pytest.mark.parametrize("stream", ["chunked", "unframed"])
 def test_an_answer_without_a_declared_length_is_capped_by_the_bytes_read(meshchat, stream):
     """Chunked, or no Content-Length at all, streaming far past 64 KB: refused once more than 64 KB
     has arrived — not read on until the deadline (code re-round 3, B1)."""
-    rc, out, secs = _script(meshchat(stream=stream).api, timeout="10")
-    assert rc == 1 and "larger than 65536 bytes" in out and secs < 5, (out, secs)
+    fake = meshchat(stream=stream)
+    rc, out, secs = _script(fake.api, timeout=_after_settle(10))
+    assert fake.calls == ["/api/v1/announce"], fake.calls
+    assert rc == 1 and "larger than 65536 bytes" in out and secs < SETTLE_S + 5, (out, secs)
 
 
 @pytest.mark.parametrize("kw", [
@@ -241,9 +275,11 @@ def test_malformed_chunk_framing_is_refused_before_any_unbounded_read(meshchat, 
     """G2-FINAL1A B (chunk framing): a chunk size of -1 made http.client read to the end of the stream below the
     64 KB read (`fp.read(-1)`): the 8 MB were read on until the deadline. Now every read below the chunk decoding
     is bounded and a negative one is the named failure, at once (-2 was a bare ValueError, G2-GROUP11 r3 B2)."""
-    rc, out, secs = _script(meshchat(**kw).api, timeout="10")
+    fake = meshchat(**kw)
+    rc, out, secs = _script(fake.api, timeout=_after_settle(10))
     want = "larger than 65536 bytes" if kw.get("stream") == "trailers" else "malformed chunk framing"
-    assert rc == 1 and want in out and secs < 5, (out, secs)
+    assert fake.calls == ["/api/v1/announce"], fake.calls
+    assert rc == 1 and want in out and secs < SETTLE_S + 5, (out, secs)
     assert "Traceback" not in out and "read length must" not in out.lower(), out
 
 
@@ -290,7 +326,7 @@ def test_the_final_line_never_holds_the_process_past_its_bound(meshchat, out, er
     made = {k: (_full_pipe() if v == "full" else _closed_pipe()) for k, v in (("out", out), ("err", err)) if v != "devnull"}
     fd = {k: made[k][1] if k in made else subprocess.DEVNULL for k in ("out", "err")}
     t0 = time.monotonic()
-    p = subprocess.Popen([sys.executable, str(_SCRIPT), "--api", api, "--timeout", "1"], stdout=fd["out"], stderr=fd["err"])
+    p = subprocess.Popen([sys.executable, str(_SCRIPT), "--api", api, "--timeout", _after_settle(1)], stdout=fd["out"], stderr=fd["err"])
     for r, w in made.values():
         os.close(w)
     try:
@@ -305,7 +341,7 @@ def test_the_final_line_never_holds_the_process_past_its_bound(meshchat, out, er
             if r is not None:
                 os.close(r)
     assert rc == (0 if ok else 1), rc
-    assert secs < 1 + 1 + 1.5, secs                  # --timeout 1 + REPORT_S 1 + 1.5 s start-up (G2-RETI NOTE1)
+    assert secs < SETTLE_S + 1 + 1 + 1.5, secs       # --timeout SETTLE_S + 1, REPORT_S 1, 1.5 s start-up (G2-RETI NOTE1)
 
 
 def test_a_redirect_is_refused_and_never_followed(meshchat):
@@ -536,14 +572,14 @@ def test_a_failed_announce_is_logged_and_never_fails_the_start(meshchat, box):
 @pytest.mark.wallclock("a trickling answer through the real runner: its bound is the step's real deadline")
 def test_a_trickling_meshchat_ends_the_step_by_its_bound_and_the_start_stands(meshchat, box):
     """The re-rounds' case through `lhpc stack start`: MeshChat sends its headers one byte every 0.3 s;
-    the step (its --timeout 2 s in the copied manifest) ends `failed` rc 1 by its bound, "announce timed
+    the step (its --timeout SETTLE_S + 2 s in the copied manifest) ends `failed` rc 1 by its bound, "announce timed
     out" is in the post-start log, and the start exits 0."""
     fake = meshchat(drip=0.3, drip_from="headers")
-    rc, out, svc = box(fake, step_timeout="2")
+    rc, out, svc = box(fake, step_timeout=_after_settle(2))
     assert rc == 0, out
     assert fake.called.wait(30)
     (step,) = _runner_result(svc, deadline_s=20.0)
     assert (step["label"], step["outcome"], step["rc"]) == ("announce", "failed", 1)
-    assert step["elapsed_s"] < 6.0, step
+    assert step["elapsed_s"] < SETTLE_S + 6.0, step
     (rec,) = svc._lifecycle().owned_records("meshchat", role="post")
     assert "not announced — announce timed out" in open(rec["log_path"]).read()

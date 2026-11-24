@@ -18,6 +18,12 @@ draws on one byte budget, and a negative or unbounded one (a chunk size of -1) i
 final line is expendable: it gets its own REPORT_S, a full pipe drops it, and the process ends without an
 exit-time flush — so the run ends by `--timeout` + REPORT_S whatever its stdout and stderr. The post-start
 runner's own kill of an exec step after 120 s is the backstop.
+The call waits SETTLE_S first, inside that deadline. MeshChat's port opens only after it has registered its
+destinations (meshchat.py:126, :151, before web.run_app at :2063), and this step runs only once the port answers. RNS
+(the node's pin e40191b3, 1.5.5-1) announces each newly registered client destination itself 0.25 s after its
+registration, as a path response (Transport.py:2911-2916), which the node never airs (:2351); an announce of the same
+destination in the same emission second (1 s resolution, Destination.py:283) is then dropped as not newer (:2238). So
+a call at once could put nothing on the air; SETTLE_S puts it in a later second.
 A failure is logged by a fixed message plus at most an exception type, an errno or the HTTP status —
 never a value from MeshChat's answer. RE-AUDIT AT EVERY MESHCHAT BUMP: the route and its answer.
 """
@@ -37,6 +43,7 @@ MAX_BODY = 64 * 1024                                       # the answer is ~27 b
 RAW_BUDGET = MAX_BODY + 4096                               # what the parser consumes below the decoding (+ chunk
                                                            # framing); the socket may read one buffer ahead of it
 REPORT_S = 1.0                                             # the final line's own bound
+SETTLE_S = 3.0                                             # before the call: RNS's own register-time announce first
 
 
 class Failure(Exception):
@@ -79,8 +86,9 @@ class _Capped:
 
 
 def announce(api: str, pause=time.sleep) -> None:
-    """The call and its answer; unbounded in time here: `main` bounds the whole run."""
+    """The call and its answer, SETTLE_S after the start; unbounded in time here: `main` bounds the whole run."""
     host, _, port = api.rpartition(":")
+    pause(SETTLE_S)
     while True:
         conn = http.client.HTTPConnection(host, int(port), timeout=10)
         try:

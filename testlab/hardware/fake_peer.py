@@ -5,8 +5,10 @@ MeshCore or RNS module, opens nothing and sends nothing; it prints what the real
 
 A send prints its FRAME, then `SENT <nonce> <time>`. A read prints `SEEN <nonce> <time>`, a power action `POWER <value>`
 (the value it was given, else DRY_POWER_<peer> from the dry inventory, else 2); neither prints a FRAME.
-rns-exchange prints the announce's FRAME at once, then waits at most RELEASE_WAIT_S for <go-file>: when it appears, the
-second announce, the message (<nonce-out>) and at most one path request; without it `TX2-NOT-GATED`, exit 3, as the real
+rns-exchange prints the announce's FRAME at once and `BOX-ANNOUNCE heard 1970-01-01T00:00:00Z` (the real action's line once it
+hears the box; a fixed early second: the runner's row 12 checks it is before its announce call), then waits at most
+RELEASE_WAIT_S for <go-file>: when it appears, the second announce, `BOX-ANNOUNCE again 9999-12-31T23:59:59Z` (the box's
+next announce, a fixed late second: row 12's call), the message (<nonce-out>) and at most one path request; without it `TX2-NOT-GATED`, exit 3, as the real
 action.
 """
 import importlib.util
@@ -30,6 +32,10 @@ def driver():
 TABLE = driver()
 
 
+BOX_HEARD = "1970-01-01T00:00:00Z"                                     # the box's announce, heard (dry: earlier than any call)
+BOX_AGAIN = "9999-12-31T23:59:59Z"                                     # its next one, after the go file (dry: later than any call)
+
+
 def ts():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
@@ -43,6 +49,7 @@ def rns_exchange(inn, out, go_file):
         print("RFPROOF_RNS_CONFIG is not set (the shared rnsd's config)", file=sys.stderr)
         return 1
     frame("rnode", "control")                                        # the PC's announce, at launch
+    print(f"BOX-ANNOUNCE heard {BOX_HEARD}")
     end = time.monotonic() + RELEASE_WAIT_S
     while not os.path.exists(go_file):
         if time.monotonic() >= end:
@@ -51,6 +58,7 @@ def rns_exchange(inn, out, go_file):
             return NOT_SEEN
         time.sleep(0.1)
     frame("rnode", "control")                                        # the PC's second announce, after the go file
+    print(f"BOX-ANNOUNCE again {BOX_AGAIN}")                         # the box's next announce (row 12: its kit's call)
     frame("rnode", out)                                              # the LXMF message
     frame("rnode", "control")                                        # its path request, at most one
     print(f"DELIVERED {out} {ts()}")

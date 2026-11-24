@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import os
 import pathlib
+import re
 import sys
 import tempfile
 import types
@@ -535,6 +536,9 @@ def _fake_rns(monkeypatch, sent, box=None):
 
         def handle_outbound(self, m):
             sent.append((m, lxmf.LXMRouter.MAX_DELIVERY_ATTEMPTS))
+            for x in handlers if (box or {}).get("again") else []:   # another node, then the box once more (row 12: the call)
+                x.received_announce(bytes(16), None, b"app")
+                x.received_announce(BOXH, None, b"app")
             if (box or {}).get("confirms"):
                 m.proof(m)
             if (box or {}).get("answers"):
@@ -801,6 +805,25 @@ def test_rns_exchange_tells_the_box_by_its_lxmf_address_not_its_name(monkeypatch
     assert peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == 0
     out = capsys.readouterr().out.splitlines()
     assert "BOX-NAME Anonymous Peer" in out and any(ln.startswith("BOX-ANNOUNCE heard ") for ln in out)
+
+
+def test_rns_exchange_records_each_later_box_announce_by_the_pcs_second(monkeypatch, tmp_path, capsys):
+    # red-before (6e3b790b): only the box's first announce was kept; row 12 must also see its kit's call on air (a later one)
+    sent, c = [], FastClock()
+    _fake_rns(monkeypatch, sent, {"answers": True, "confirms": True, "again": True})
+    monkeypatch.setattr(peer.time, "monotonic", c.monotonic)
+    monkeypatch.setattr(peer.time, "sleep", c.sleep)
+    (tmp_path / "go").write_text("")
+    assert peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == 0
+    out = capsys.readouterr().out.splitlines()
+    stamp = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
+    names = [ln for ln in out if ln.startswith("BOX-NAME ")]
+    heard = [ln for ln in out if ln.startswith("BOX-ANNOUNCE heard")]
+    again = [i for i, ln in enumerate(out) if ln.startswith("BOX-ANNOUNCE again")]
+    assert names == ["BOX-NAME Anonymous Peer"], out
+    assert len(heard) == 1 and re.fullmatch("BOX-ANNOUNCE heard " + stamp, heard[0]), out
+    assert len(again) == 1 and re.fullmatch("BOX-ANNOUNCE again " + stamp, out[again[0]]), out    # the other node's: none
+    assert out.index("PC-ANNOUNCE again") < again[0], out
 
 
 def test_rns_exchange_ignores_an_announce_of_another_address(monkeypatch, tmp_path, capsys):

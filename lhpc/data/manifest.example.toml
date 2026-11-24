@@ -4048,6 +4048,7 @@ note = "Sideband is provisioned into its own in-root venv by the build. It needs
   # button's own call (GET /api/v1/announce), so a box is discoverable on the air without anyone
   # pressing it. LHPC writes nothing into MeshChat; its auto-announce setting stays the operator's.
   # Not required: a failed announce is logged in the post-start log and the start stands.
+  # It waits 3 s after MeshChat answers (RNS's own register-time announce of the same destinations would swallow it).
   post_steps = [
     { kind = "exec", label = "announce", argv = [
         "{controller_python}", "{asset}/scripts/meshchat-announce.py", "--api", "127.0.0.1:8790", "--timeout", "60",

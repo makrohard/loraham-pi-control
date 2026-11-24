@@ -94,8 +94,33 @@ def test_row_12_calls_one_announce_after_the_release_once_meshchat_answers(tmp_p
     assert "seq 1 60" in lines[up[0]] and "/dev/tcp/127.0.0.1/8790" in lines[up[0]]
     assert re.match(r"TX \| H:r[0-9]+ \| 2 \| control \| must 12-announce\.txt", lines[an[0] - 1]), lines[an[0] - 1]
     assert "/api/v1/announce" in lines[an[0]]
-    assert "the box heard by the kit's announce call, not its start's" in block(d.out, 12)
+    assert ("; start's announce heard 1970-01-01T00:00:00Z (product), the kit's call heard on air 9999-12-31T23:59:59Z (button)"
+            in block(d.out, 12))
     assert "/api/v1/announce" not in block(d.out, 5) and "5-meshchat.txt" not in block(d.out, 5)
+
+
+def test_row_12_proves_both_announces_on_air_the_start_before_the_kits_call_and_the_call_after(tmp_path):
+    # red-before (6e3b790b): the PC took the box's FIRST announce, the start's or the kit's call's, and row 12 said nothing of
+    # which: the call masked the product, and a later announce was never recorded. Now the PC's second before the call is
+    # recorded: the first heard must be strictly earlier (the start's), a later one at or after it (the call's); either
+    # missing (DRY_ANNLATE: first heard at the call; DRY_ANN2MISS) is the peer -> box FAIL by name, and box -> peer is not run
+    # after it; the call heard in its own second (DRY_ANN2AT) is the call's
+    d = dry(tmp_path)
+    ln = [x for x in block(d.out, 12).splitlines() if x.startswith("data: row 12: the PC heard the box at ")]
+    ct = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
+    assert len(ln) == 1 and re.fullmatch(r"data: row 12: the PC heard the box at 1970-01-01T00:00:00Z, again at or after the "
+                                         rf"kit's announce call \({ct}\) at 9999-12-31T23:59:59Z", ln[0]), ln
+    assert "NOT heard" not in d.out + d.err and "the PC heard the box" not in block(d.out, 5)
+    for knob, why in (("DRY_ANNLATE", rf"the start's announce NOT heard before the kit's call at ({ct}) \(heard \1\)"),
+                      ("DRY_ANN2MISS", rf"the kit's announce call at {ct}: API accepted, not heard on air")):
+        r = dry(tmp_path, **{knob: "12"})
+        res = {x.split(" | ")[6]: x.split(" | ")[9] for x in block(r.out, 12).splitlines() if x.startswith("REPORT | 12 | ")}
+        assert re.fullmatch("FAIL: row 12 peer -> box: " + why, res["peer -> box"]), (knob, res)
+        assert re.fullmatch("NOT RUN: after peer -> box FAIL: row 12 peer -> box: " + why, res["box -> peer"]), (knob, res)
+        assert "12-announce.txt" in block(r.out, 12)
+    at = dry(tmp_path, DRY_ANN2AT="12")
+    res = {x.split(" | ")[6]: x.split(" | ")[9] for x in block(at.out, 12).splitlines() if x.startswith("REPORT | 12 | ")}
+    assert res == {"peer -> box": "DRY-PASS", "box -> peer": "DRY-PASS"}, res
 
 
 def test_row_12_fails_without_an_announce_call_when_meshchat_does_not_answer(tmp_path):

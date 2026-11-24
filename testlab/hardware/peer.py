@@ -30,7 +30,8 @@ The runner holds an exclusive flock around every call, so two peers never act at
   peer.py mc-read       <nonce> <s>    T-Deck Pro: a channel or contact message with the nonce
   peer.py rns-exchange  <nonce-in> <box-dest> <s> <dest-file> <nonce-out> <go-file> [known]   a client of the PC's shared rnsd:
                                        announce, write the PC's LXMF destination hash to <dest-file>, wait for the box's announce
-                                       (its display name), send <nonce-out> to it and wait for its delivery proof (the box's
+                                       (its display name; `BOX-ANNOUNCE heard <time>`, each later one `BOX-ANNOUNCE again
+                                       <time>`), send <nonce-out> to it and wait for its delivery proof (the box's
                                        receipt: `DELIVERED <nonce-out> <time>`), and wait for an LXMF message carrying <nonce-in>;
                                        prints SEEN on it. The message, and right before it one more announce (`PC-ANNOUNCE
                                        again`: the box's node now runs), go only once the runner has written <go-file> (after
@@ -501,9 +502,13 @@ def rns_run(d, instance, key, inn, box_dest, secs, dest_file, out, go_file, know
         receive_path_responses = known                       # `known`: the shared rnsd's cached announce of the box
 
         def received_announce(self, destination_hash, announced_identity, app_data):
-            if destination_hash.hex() == box_dest and not box:   # the box's LXMF address; its name only for the log
+            if destination_hash.hex() != box_dest:              # the box's LXMF address; its name only for the log
+                return
+            if not box:
                 print(f"BOX-NAME {LXMF.display_name_from_app_data(app_data) if app_data else '-'}")
                 box.append((ts(), destination_hash))
+            else:                                                # each later one, by the PC's second (row 12: the call's)
+                print(f"BOX-ANNOUNCE again {ts()}")
     RNS.Transport.register_announce_handler(Ann())
     with open(dest_file, "w") as f:
         f.write(RNS.hexrep(me.hash, delimit=False) + "\n")
