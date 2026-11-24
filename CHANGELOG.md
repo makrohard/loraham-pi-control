@@ -2,71 +2,16 @@
 
 ## 0.14.0
 
-- Radios: the hardware list (config/radios.toml, written by `lhpc hardware <setup>` or the Hardware page) names each
-  radio; a daemon runs per enabled radio, with its own sockets, settings and RF log.
-- USB radios: Meshstick and PINE64 adapter (868 MHz), CH341A + RFM98PW stick (433 MHz); Hardware adds and binds a
-  stick. A USB radios page and a build guide for the 433 MHz stick are in the docs.
-- Radio power: USB radios start at 14 dBm, SPI radios at 17; a POWER set by hand stays. The limit is the chip's range:
-  SX127x 2–17, SX1262 0–20, high power: SX127x 20, Meshstick 21–22. A MeshCom node gets the radio's POWER at every start.
-- KISS: the TNC (v0.6.5, power 0–22) reads config/files/<rid>/loraham_kiss_tnc.conf (kiss's POWER, at the next start);
-  the keys of its loraham_kiss_tnc.conf.example (sf, bw, cr, syncword, ldro, TX timings) are unread: shipped defaults.
-- A stick next to the board's radio: two radios on one band each run their own daemon: address one by its radio id
-  (`lhpc stack stop daemon@rN`).
-- Voice runs on 433 radios only and Reticulum on 868 radios only. Before upgrading, stop Voice on an 868 radio and
-  Reticulum on a 433 radio; afterwards they have no instance there (their old settings files stay unused).
-- Stack instances: every stack runs as `<stack>@<rid>` on each radio of its bands (Reticulum once per box), started,
-  stopped and restored alone; ports base + 133 × (n − 1), r1 keeps today's.
-- Home radio cards: "Running on rN" names the stacks running on that radio with their call or node name ("Running on
-  r1 MeshCom (QEMU) XX0XXA-11"; the daemon alone: "Running on r1 LoRaHAM daemon"); a stack's title no longer shows it.
-- Home: a box opened or closed in one browser tab is no longer reopened or reclosed by another tab's refresh.
-- Home radio cards: "Start a stack on rN" starts collapsed; the box keeps the viewer's last open/closed choice.
-- Home: the nav line links the Apps page: "All menus · Home · Apps".
-- Every stack verb, `lhpc kill` and the console's Kill name the instance; `--band` is gone (`lhpc config kiss@r2 …`,
-  `lhpc rflog daemon@r1`).
-- Daemon parameters per radio (`lhpc config daemon@<rid> --daemon-param`) and per instance (`<stack>@<rid>.toml`,
-  applied over the radio's row when it starts there).
-- LoRaHAM daemon v1.6.1 (402b7c03): the PA over-current limit per radio (`lhpc hardware --ocp <rid> <auto|mA>`), the
-  Meshstick library (a source-built daemon: see the update steps); a failing USB stick is re-opened, not fatal.
-- Reticulum: `rnode_framing` defaults to `yes` (was `no`), so LHPC boxes and RNode devices hear each other; a framed
-  box and a bare box cannot.
-- Reticulum now reaches the radio through the daemon (any radio, USB too); `backend = spi` per radio
-  (`lhpc config reticulum@<rid>`) keeps the direct driver on an SPI radio.
-- Reticulum on the daemon: its radio values are on the radio's Daemon radio parameters panel (Reticulum's defaults);
-  re-enter yours there (the Config page keeps frequency, SF, BW, CR and power for `backend = spi` only).
-- Stopping or restarting MeshChat no longer disconnects the node's other radios, and starting a client on the
-  node's own radio is no longer refused while another radio is connected.
-- Stopping a radio's daemon takes that radio out of the Reticulum node first: a connected radio disconnects, on the
-  node's own radio the node stops; the confirm names it. A daemon restart keeps the node and its radios.
-- A failed stop no longer offers a kill with nothing to kill: the kill page names an unverifiable process without a
-  Kill button, and with no process left the stop's message says so.
-- MeshChat announces itself once at every start, so a box is discoverable on the air; a failed announce is logged and
-  the start stands.
-- MeshChat is selected to start with Reticulum by default (saved choices stay; untick it on Settings). If it is not built
-  it is blocked with its printed remedy and the stack start fails while the node is up: run the remedy or untick it.
-- Updates: a bare `lhpc update <stack>` keeps the installed lane; `lhpc source-check`, the stack page and `lhpc status
-  --versions` give one verdict per source: current, update available, update LHPC first, could not check, unknown or unchecked.
-- `lhpc self-update` updates from the checkout's own origin, whatever repo it is, and names it (the check, the result and
-  the console's update panel); a checkout without an origin is still refused.
-- `lhpc known-working` and the "Confirm this stack as working" button are gone: `--source pinned` is the manifest pin.
-- Binaries: install and update take the newest published binary that covers every component; changed build inputs
-  or a moved binary pin no longer refuse a start (the stack page says "Rebuild available").
-- A self-update no longer changes saved settings to a release's new defaults, and its result lists the stacks with an
-  update (from the next self-update on).
-- MeshCore: a frame the daemon holds on a busy channel (about 8 s at SF12) is no longer logged `unconfirmed`
-  with a reconnect: the host waits out the daemon's whole channel-busy wait for its result.
-- meshcom-qemu-raspi: 722b5e8e5 -> b4d3bc0c2 (pin/b4d3bc0), used by meshcom-gps-relay, meshcom-qemu
-- meshcom-loraham-bridge: 8500df8bf -> 5c7843b3b (v0.3.1), used by meshcom-bridge
-- loraham-rns-interface: 015540bd2 -> 6c92f2291 (v0.4.1), used by rns-lora-interface
-- MeshCom-Firmware: 4f60051ce -> bcc3b3ef8 (v4.40a.11.22-18-gbcc3b3ef), used by meshcom-firmware
-- LoRaHAM_Voice: 2547c4b80 -> 96c95f19e (96c95f1), used by loraham-voice, loraham-voice-cli
+Breaking release!
 
-Known limitations
+0.14.0 names every radio by its id and runs each stack per radio: settings, ports, commands and the firewall rows
+change. A 0.13.x box needs the steps under "Upgrading from 0.13.x", in their order. Or start fresh:
 
-- An interactive app's command on the Apps page runs only after its first start from the console (the start writes
-  that radio's own config directory).
-- A client's stop also stops its radio's daemon when no other client uses it, also a daemon started by hand.
-- The Apps page without `?radio=` shows each stack's Settings for one instance: the radio it runs on, else the first
-  radio able to run it.
+- Fresh start (all settings and stack data are lost): first copy away what you keep;
+  `~/loraham-pi-control/config/secrets/` holds the MeshCore and repeater identities.
+- With the managed firewall installed: `sudo bash ~/loraham-pi-control/config/files/firewall/firewall-reset.sh`.
+- Then `bash ~/loraham-pi-control/src/loraham-pi-control/uninstall.sh --purge` and install 0.14.0 as the README
+  says, or flash the ready-made 0.14.0 image.
 
 Upgrading from 0.13.x
 
@@ -76,6 +21,8 @@ In this order. Before the update:
   its recovery): 0.14.0 refuses the older binary-install journal by name.
 - Reticulum links switch to RNode framing together: on every box, stop Reticulum first (`lhpc stack stop
   reticulum@<rid> --yes`; an update never stops a running stack).
+- Voice runs on 433 radios only and Reticulum on 868 radios only: stop Voice on an 868 radio and Reticulum on a
+  433 radio; afterwards they have no instance there (their old settings files stay unused).
 
 The update, then before the reboot:
 
@@ -117,14 +64,18 @@ Radios and settings:
 
 Stacks:
 
+- Reticulum on the daemon: its radio values are on the radio's Daemon radio parameters panel (Reticulum's defaults);
+  re-enter yours there (the Config page keeps frequency, SF, BW, CR and power for `backend = spi` only).
 - Reticulum, on every box: `lhpc config reticulum@<rid> rnode_framing yes` (where `no` was saved; harmless
   elsewhere), then `lhpc update reticulum --source pinned --yes` and `lhpc build reticulum --yes`.
 - Go on only when that succeeded on every box. Set the RNode devices on the link to the boxes' frequency,
   bandwidth, spreading factor and coding rate.
+- MeshChat starts with Reticulum by default (saved choices stay). If it is not built it is blocked with its printed
+  remedy and the stack start fails while the node is up: run the remedy or untick it on Settings.
 - Then on every box `lhpc stack start reticulum@<rid>`: `rnstatus` shows the LoRa interface's MTU 508 (255 = still
   bare). Until every box has started, a started box and one not yet started cannot hear each other.
-- Every other installed stack whose pin moved (from 0.13.8: daemon, chat, kiss, meshcom; from 0.13.0–0.13.7 also
-  meshcore, voice), in this order: stop it (`lhpc stack stop <stack>@<rid> --yes`);
+- Every other installed stack whose pin moved (from 0.13.8: daemon, chat, kiss, meshcom, voice; from 0.13.0–0.13.7
+  also meshcore), in this order: stop it (`lhpc stack stop <stack>@<rid> --yes`);
 - for a source-built daemon: install `libusb-1.0-0-dev`, then once `lhpc install daemon --source <your lane> --yes`
   (adds the Meshstick library clone);
 - `lhpc update <stack> --yes`, then for a source-built daemon `lhpc build daemon --yes`, then start it.
@@ -145,6 +96,37 @@ Stacks:
   later boot either: start it by hand.
 - No longer read, remove them if you like: `~/loraham-pi-control/profiles/known-working/`,
   `~/loraham-pi-control/state/last-start/` and `~/loraham-pi-control/state/selfupdate-migrate.json`.
+
+Main features
+
+- USB radios: Meshstick and PINE64 adapter (868 MHz), CH341A + RFM98PW stick (433 MHz), added and bound on the
+  Hardware page; a USB radios page and a build guide for the 433 MHz stick are in the docs.
+- Per radio: the hardware list names each radio; a daemon and every stack run per radio (`<stack>@<rid>`, own
+  settings, RF log and ports).
+- Two radios on one band each run their own daemon: address one by its radio id (`lhpc stack stop daemon@rN`).
+- Radio cards on Home, one per radio: what runs there with its call or node name, its clients,
+  "Start a stack on rN"; boxes keep their open/closed choice, the nav line links the Apps page.
+- Reticulum reaches the radio through the daemon (any radio, USB too; `backend = spi` keeps the direct driver),
+  frames like RNode devices, and MeshChat starts with it and announces the box on the air.
+- Stopping a radio's daemon first takes that radio out of the Reticulum node; the confirm names it.
+- Radio power per radio: USB radios start at 14 dBm, SPI radios at 17, the PA over-current limit per radio
+  (LoRaHAM daemon v1.6.1); a POWER set by hand stays.
+- MeshCore: a frame the daemon holds on a busy channel (about 8 s at SF12) is no longer logged `unconfirmed`
+  with a reconnect: the host waits out the daemon's whole channel-busy wait for its result.
+- MeshCom bridge: a TX's time limit covers the daemon's channel wait plus the frame's time on air, so a slow
+  frame (SF12/BW125) no longer closes the link as a TX timeout.
+- SX126x radios at BW 125 kHz: the daemon no longer reads an idle channel as busy, so a managed TX is no longer
+  refused with CHANNEL_BUSY (LoRaHAM daemon v1.6.2).
+- Upstream pins: LoRaHAM daemon v1.6.2, KISS TNC v0.6.5, libch341 745bd06 (new), MeshCom QEMU b4d3bc0, bridge v0.3.2,
+  rns-interface v0.4.1, MeshCom firmware v4.40a.11.22-18, Voice 96c95f1.
+
+Known limitations
+
+- An interactive app's command on the Apps page runs only after its first start from the console (the start writes
+  that radio's own config directory).
+- A client's stop also stops its radio's daemon when no other client uses it, also a daemon started by hand.
+- The Apps page without `?radio=` shows each stack's Settings for one instance: the radio it runs on, else the first
+  radio able to run it.
 
 ## 0.13.8
 
