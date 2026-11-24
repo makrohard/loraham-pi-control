@@ -111,6 +111,8 @@ Main features
 - Stopping a radio's daemon first takes that radio out of the Reticulum node; the confirm names it.
 - Radio power per radio: USB radios start at 14 dBm, SPI radios at 17, the PA over-current limit per radio
   (LoRaHAM daemon v1.6.1); a POWER set by hand stays.
+- MeshChat's start announce waits 3 s after MeshChat answers, so Reticulum's own announce at registration no
+  longer swallows it.
 - MeshCore: a frame the daemon holds on a busy channel (about 8 s at SF12) is no longer logged `unconfirmed`
   with a reconnect: the host waits out the daemon's whole channel-busy wait for its result.
 - MeshCom bridge: a TX's time limit covers the daemon's channel wait plus the frame's time on air, so a slow
