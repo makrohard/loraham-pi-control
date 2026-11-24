@@ -57,6 +57,9 @@ def _pill(page) -> list:
 def test_a_removed_radios_home_badge_says_so_and_the_others_do_not(flask_page, tmp_path):
     page, _posts = flask_page(path="/", allowed_errors=_R3_404)
     page.wait_for_function("() => document.getElementById('rd-badge-r3').textContent.trim() !== ''", timeout=10000)
+    # r1's badge is snapshot after r1's OWN poll painted it (the cache entry and the paint are one synchronous pass),
+    # not when r3's server-rendered badge is there: the two radios poll on their own (tests/README C14)
+    page.wait_for_function("() => window.lhpcDaemonState('r1') !== null", timeout=10000)
     r1 = page.evaluate("() => document.getElementById('rd-badge-r1').textContent")
     _drop_r3(tmp_path)
     page.wait_for_function("t => document.getElementById('rd-badge-r3').textContent === t", arg=GONE, timeout=10000)
