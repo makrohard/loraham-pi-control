@@ -196,7 +196,7 @@ def reset(svc) -> ActionResult:
     # NOT an operator stop, so it must not leave a stop-intent tombstone that pins the stack
     # "stay stopped" past the reset. Fail CLOSED — do not erase runtime state over a stack we
     # could not stop (a half-stopped box is not a clean baseline).
-    stopped, stop_failed, unowned = 0, [], []
+    stopped, stop_failed, manual = 0, [], []
     for s in svc.stacks():
         try:
             if svc.stack_running(s.id):
@@ -205,8 +205,10 @@ def reset(svc) -> ActionResult:
                     stopped += 1
                 else:
                     stop_failed.append(s.id)
-                    # the lab's procfs is the host's: a matching process this root never started reads as its stack
-                    unowned += [f"{c.component}: {c.summary}" for c in getattr(res, "results", ())
+                    # what the stop left to an operator (MANUAL_REQUIRED), each with its own reason: e.g. a matching
+                    # process this root never started (the lab's procfs is the host's), a system service, an
+                    # interactive dependent, a node member, a process left after its stop
+                    manual += [f"{c.component}: {c.summary}" for c in getattr(res, "results", ())
                                 if c.outcome is Outcome.MANUAL_REQUIRED]
         except Exception as exc:
             stop_failed.append(f"{s.id} ({exc})")
@@ -225,9 +227,9 @@ def reset(svc) -> ActionResult:
         return ActionResult(False, "Reset refused — another daemon serves " + ", ".join(foreign)
                             + ": a second lab root (or a real daemon) on this host shares the radio sockets; stop it "
                             "first.", details=[*details, *(f"  live foreign socket: {p}" for p in foreign)])
-    if stop_failed and unowned:
-        return ActionResult(False, f"Reset aborted — could not stop: {', '.join(stop_failed)}: a process this lab did not "
-                            "start runs on this host (" + "; ".join(unowned) + "); stop it first.", details=details)
+    if stop_failed and manual:
+        return ActionResult(False, f"Reset aborted — could not stop: {', '.join(stop_failed)}: manual intervention "
+                            "required (" + "; ".join(manual) + ").", details=details)
     if stop_failed:
         return ActionResult(False, f"Reset aborted — could not stop: {', '.join(stop_failed)}.", details=details)
     _clear_runtime_state(svc)                      # clean baseline (no surviving state/config)

@@ -120,10 +120,15 @@ def test_a_lab_reset_refuses_while_a_foreign_daemon_serves_its_radio_sockets(tmp
         sockdir.rmdir()
 
 
-def test_a_lab_reset_names_a_host_process_it_did_not_start(tmp_path, monkeypatch):
-    """The lab's procfs is the host's, so a matching process this root never started (a hardware run's meshtasticd on
-    the dev PC) reads as its running stack, and the stop refuses to kill a process LHPC does not own. The reset still
-    refuses (its baseline is not clean), and its refusal names that process instead of a stack of its own."""
+@pytest.mark.parametrize("why", [
+    "a matching process is running but not owned by LHPC — stop it yourself: kill 4242",   # lifecycle: not this root's
+    "system service — stop as root: sudo systemctl stop lab-x.service",                    # service_stop: systemd unit
+    "interactive dependent — stop it yourself before this stack"])                          # service_stop: cascade
+def test_a_lab_reset_names_what_its_stop_left_to_an_operator(tmp_path, monkeypatch, why):
+    """A stop can leave a component to an operator (MANUAL_REQUIRED) for several reasons: the lab's procfs is the host's,
+    so a matching process this root never started (a hardware run's meshtasticd on the dev PC) reads as its running
+    stack; or a system service; or an interactive dependent. The reset still refuses (its baseline is not clean), and
+    its refusal says manual intervention is required with each component's own reason, never one assumed cause."""
     from lhpc_testlab import ops
     from lhpc_testlab.testing import make_lab_root, stop_lab_fakes
 
@@ -134,7 +139,6 @@ def test_a_lab_reset_names_a_host_process_it_did_not_start(tmp_path, monkeypatch
         paths = make_lab_root(tmp_path, monkeypatch)
         svc = ControllerService(paths=paths)
         sid = svc.stacks()[0].id
-        why = "a matching process is running but not owned by LHPC — stop it yourself: kill 4242"
         monkeypatch.setattr(svc, "stack_running", lambda s: s == sid)
         monkeypatch.setattr(svc, "stop", lambda *a, **k: ActionResult(False, "not fully verified", results=(
             CompResult(f"{sid}-main", "stop", Outcome.MANUAL_REQUIRED, stack=sid, summary=why),
@@ -142,8 +146,8 @@ def test_a_lab_reset_names_a_host_process_it_did_not_start(tmp_path, monkeypatch
         monkeypatch.setattr(ops, "_foreign_live_sockets", list)       # no foreign daemon on the sockets
         r = ops.reset(svc)
         assert not r.ok, r.summary
-        assert f"could not stop: {sid}: a process this lab did not start runs on this host ({sid}-main: {why})" \
-            in r.summary, r.summary
+        # red-before (504c301d): "a process this lab did not start runs on this host" for every reason
+        assert r.summary.endswith(f"could not stop: {sid}: manual intervention required ({sid}-main: {why})."), r.summary
         assert "no owned process" not in r.summary                     # only the process it could not stop is named
     finally:
         stop_lab_fakes(tmp_path)
