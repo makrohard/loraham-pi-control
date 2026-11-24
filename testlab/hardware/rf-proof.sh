@@ -650,9 +650,11 @@ drystatus() { local v="DRY_STATUS_${1}_$2" bd f sf; [ -n "${!v:-}" ] && { printf
   bd=$(dryradios "$1" | awk -v r="$2" '$1 == "ROW" && $2 == r {print $4}'); case "$bd" in 433) f=433.775000; sf=11;; *) f=869.525000; sf=11;; esac
   echo "STATUS RADIO=READY TX=0 TXMODE=MANAGED TXQUEUE=1 RXREADY=1 HIGHPOWER=0 CHIPFAMILY=SX127x OCP=100 USBWAIT=- BOUND=- ID=$2 FREQ=$f SF=$sf POWER=10"; }
 dryradios() { local v="DRY_RADIOS_$1"; printf '%s\n' "${!v:-STATE valid}"; }
-dryout() { local w=$1 f=$2 c=$3; : > "$OUT/$f"
+dryout() { local w=$1 f=$2 c=$3 o; : > "$OUT/$f"
   case "$c" in *"$RADIOS_PY"*) dryradios "$w" > "$OUT/$f";; *"$STATUS_PY"*) drystatus "$w" "${c##* }" > "$OUT/$f";;
-    *"$CPORT_PY"*) [ -z "${DRY_MC_OTHER:-}" ] || echo "OTHER $DRY_MC_OTHER" > "$OUT/$f";;
+    *"$CPORT_PY"*) for o in ${DRY_MC_OTHER:-}; do   # DRY_MC_OTHER=<client>...; a dry stop of the Web UI ends it (DRY_MC_WEBUI_STAYS=1: not)
+        [ "$o" = meshcore-webui ] && [ -e "$SCRATCH/dry-webui-stopped" ] && [ -z "${DRY_MC_WEBUI_STAYS:-}" ] || echo "OTHER $o"; done > "$OUT/$f";;
+    *" stack stop meshcore-webui@"*) : > "$SCRATCH/dry-webui-stopped";;
     *'echo "MCID none"'*) case " ${DRY_NOMCID:-} " in *" $w "*) echo "MCID none";; *) echo "MCID yes";; esac > "$OUT/$f";;   # DRY_NOMCID=<box>...
     *"$MCHASH_PY"*) echo "LXMF ${DRY_MCHASH:-00112233445566778899aabbccddeeff}" > "$OUT/$f";; esac; }   # another MeshCore client
 frame() { echo "FRAME | $1 | $2"; drylog "FRAME $1 $2"; }
@@ -1182,8 +1184,12 @@ row_4() {   # MeshCore box radio 869.618 (eu_uk_narrow) <-> the T-Deck Pro (BLE;
   must "$b" 4-listen.txt "ss -Htlnp 'sport = :$cp'"; [ "$MODE" = dry ] || check_listener 4-listen.txt "$cp"
   must "$b" 4-listener.txt "ps -o pgid= -p ${LP:-0} | tr -d ' '"; [ "$MODE" = dry ] || body 4-cport.txt | grep -qx "OWNED $(body 4-listener.txt)" \
     || stop "row 4: the listener pid $LP on $cp is not in a live owned meshcore-node group of meshcore@$r"
-  # the app check pops the node's queue: another client of it (the web UI, an interactive meshcore-cli) would drain the word first
-  ot=$(body 4-cport.txt | sed -n 's/^OTHER //p' | tr '\n' ' '); [ -z "$ot" ] || { undo_to "$m" || stop "row 4: undo failed"
+  # the app check pops the node's queue: another client of it (the web UI, an interactive meshcore-cli) would drain the word first.
+  # The stack's own start also starts its Web UI (autostart_default; R1 stopped every recorded instance, so it is this run's):
+  # stop that ONE component, read again; the guard reads the second answer (any client left, the Web UI too, = NOT RUN)
+  local oc=4-cport.txt; if body 4-cport.txt | grep -qx "OTHER meshcore-webui"; then oc=4-cport2.txt
+    must "$b" 4-webui-stop.txt "$(form stop inst="meshcore-webui@$r")"; must "$b" "$oc" "cd {RT} && ./venv/lhpc/bin/python -c '$CPORT_PY' meshcore@$r"; fi
+  ot=$(body "$oc" | sed -n 's/^OTHER //p' | tr '\n' ' '); [ -z "$ot" ] || { undo_to "$m" || stop "row 4: undo failed"
     notrun_row 4 "another MeshCore client of meshcore@$r runs (${ot% }): it would drain the messages the app check reads"; return 0; }
   spower "$b" mc_pget "$r" "R4-$b-$r"
   pread PC 4-peer-power.txt mc-power; [ "$XRC" = 0 ] || stop "row 4: the T-Deck Pro power read failed (rc $XRC)"   # a READ, never a write

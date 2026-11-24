@@ -588,11 +588,18 @@ def test_meshcore_on_the_box_is_read_as_json_with_the_word_anchored(base):
     assert f"""grep -F -- '{n1}"'""" in app, app
 
 
-@pytest.mark.parametrize("other", ["meshcore-webui", "meshcore-cli"])
-def test_another_meshcore_client_makes_row_4_not_run(dry, base, other):
+WEBUI_STOP = r"\[dry\] (H|Z) > 4-webui-stop\.txt: \S+/lhpc stack stop meshcore-webui@r\d+ --yes$"
+
+
+@pytest.mark.parametrize("env, other, stopped", [
+    ({"DRY_MC_OTHER": "meshcore-cli"}, "meshcore-cli", False),                    # not the stack's own Web UI: never stopped
+    ({"DRY_MC_OTHER": "meshcore-webui meshcore-cli"}, "meshcore-cli", True),      # the Web UI stopped, the cli remains
+    ({"DRY_MC_OTHER": "meshcore-webui", "DRY_MC_WEBUI_STAYS": "1"}, "meshcore-webui", True)])   # still there on the re-read
+def test_another_meshcore_client_makes_row_4_not_run(dry, base, env, other, stopped):
     """D4: the app check pops the node's queue; another client of it running at the row's start would drain the word
-    first (a false FAIL), so row 4 is NOT RUN by that name and sends nothing; every other row is as in the base run."""
-    d = dry("full", DRY_MC_OTHER=other)
+    first (a false FAIL), so row 4 is NOT RUN by that name and sends nothing; every other row is as in the base run. The
+    stack's own Web UI is stopped first and the guard reads the answer after it."""
+    d = dry("full", **env)
     # the rehearsal's completeness check rightly names row 4's forms, never reached (and nothing else)
     assert d.rc == 2 and "STOP: dry self-check all-forms-printed: needed but never printed: mc_pget mc_send rx_mc rx_mc_app" \
         in d.err, d.err[-1500:]
@@ -600,4 +607,17 @@ def test_another_meshcore_client_makes_row_4_not_run(dry, base, other):
     assert got and all(re.fullmatch(rf"NOT RUN: another MeshCore client of meshcore@r\d+ runs \({other}\): it would drain "
                                     r"the messages the app check reads", r) for r in got.values()), got
     assert not [line for line in d.lines if re.search(r"\[dry\] \S+ > 4-(peer-send|box-send)\.txt", line)]
+    assert len([ln for ln in d.lines if re.search(WEBUI_STOP, ln.strip())]) == (1 if stopped else 0)
     assert {k: r for k, r in d.report().items() if k[0] != "4"} == {k: r for k, r in base.report().items() if k[0] != "4"}
+
+
+def test_row_4_stops_the_stacks_own_web_ui_and_runs(dry, base):
+    # red-before (ef3267b0, kit run 20261124T002949Z): the stack's start also started its Web UI (autostart_default) and
+    # row 4 was NOT RUN by its own start's client
+    d = dry("full", DRY_MC_OTHER="meshcore-webui")
+    assert d.rc == 0, d.err[-1500:]
+    lines = [ln.strip() for ln in d.lines]
+    stop = [i for i, ln in enumerate(lines) if re.search(WEBUI_STOP, ln)]
+    reread = [i for i, ln in enumerate(lines) if re.match(r"\[dry\] (H|Z) > 4-cport2\.txt: ", ln)]
+    assert len(stop) == 1 and len(reread) == 1 and stop[0] < reread[0], (stop, reread)   # stopped once, then read again
+    assert d.report() == base.report()                                                    # row 4 runs as on a bench without it
