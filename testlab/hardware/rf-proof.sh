@@ -71,7 +71,7 @@ ROWS=(
 # member <-> the Zero on 868.3 (the RNode hears neither): the owner 3 (start's announce, proof) + 5 (the announce call, the send,
 # its slip, the proof of the Zero's message: reserved on every node radio, the node picks one) + 1 (the leave's proof) = 9; the
 # member 5; the Zero 5 (its MeshChat start's announce, its send and slip, its proof of H's message).
-declare -A WORST=([1]="3 4" [2]="1 1" [3]="1 1" [4]="1 1" [5]="5 4" [6]="1 1" [12]="5 4" [13]="9 6 5 5")
+declare -A WORST=([1]="3 4" [2]="1 1" [3]="1 1" [4]="1 1" [5]="5 5" [6]="1 1" [12]="5 5" [13]="9 8 5 5")
 declare -A RROW=(); RIDS=
 for l in "${ROWS[@]}"; do read -r id lane kind a b pw fl <<< "$l"; RROW[$id]="$l"; RIDS="$RIDS $id"; done
 rowf() { local id lane kind a b pw fl; read -r id lane kind a b pw fl <<< "${RROW[$1]}"; case $2 in lane) echo "$lane";; kind) echo "$kind";;
@@ -1251,7 +1251,8 @@ rnsx() {   # rnsx <id> <tag> <box> <rid> <rnode key> <key>...: one exchange with
     *) stop "row $id: RNSANN '$RNSANN' (start, call or known)";;
   esac
   # 2. release, every check right before the second phase: the RNode's power again, its path request, the box's delivery proof
-  hpower "$pk" "$tg-rnode-power-2.txt"; tx "$pk" 1 control --reserve; for x in "$@"; do tx "$x" 1 control --reserve; done
+  # the RNode's 2 control frames: the PC's second announce (the box's node runs now; it needs the PC's path) + a path request
+  hpower "$pk" "$tg-rnode-power-2.txt"; tx "$pk" 2 control --reserve; for x in "$@"; do tx "$x" 1 control --reserve; done
   tx "$pk" 1 "$n1" -- X PC "$tg-tx2-go.txt" "LHPC_PROOF=$b:meshchat@$r printf '%s\n' '$n1' > $(shq "$go")"
   [ "$MODE" = live ] || printf '%s\n' "$n1" > "$go" || stop "row $id: the dry release file"   # dry: right after its tx
   RNSNOPATH=; if [ "${RNSSEND:-1}" = 1 ] && needs rt_send; then [ "$MODE" = dry ] || sleep 60; dest=$(cat "$pcd" 2>/dev/null || echo dry)
@@ -1648,7 +1649,7 @@ ROW r4 pinedio-usb-1262 868 True serial= port=1-1 hp=True'
   before() { case "$(declare -f "$1")" in *"$2"*"$3"*) return 0;; *) return 1;; esac; }
   before row_1 'R1-$b-$r-d' 1-start.txt && before row_2 'R2-$b-$r-d' 2-start.txt && before row_3 'pmust "$b" 3-cap.txt mt_cap' 3-start.txt && before row_4 'R4-$b-$r-d' 4-start.txt \
     || sc power-guards "a stack starts before its power read"
-  before rnsx 'tx "$pk" 1 control --reserve' '-tx2-go.txt' && before rnsx 'tx "$x" 1 control --reserve' '-tx2-go.txt' && before row_2 'tx R2-tracker 1 control --reserve' '2-box-send.txt' \
+  before rnsx 'tx "$pk" 2 control --reserve' '-tx2-go.txt' && before rnsx 'tx "$x" 1 control --reserve' '-tx2-go.txt' && before row_2 'tx R2-tracker 1 control --reserve' '2-box-send.txt' \
     || sc power-guards "an automatic send is not reserved before the send that triggers it"
   [ "$(bash -c 'printf %s "${MC_PIN-unset}${PW_H-unset}${PW_Z-unset}${OPERATOR_CALL-unset}"')" = unsetunsetunsetunset ] || sc power-guards "a secret is in a child's environment"
   scok power-guards
@@ -1755,6 +1756,7 @@ VMT=$(pcpath "$VENV_MT")/bin/python; VRNS=$(pcpath "$VENV_RNS")/bin/python; RNSC
 EVDROOT=$(pcpath "$EVD_ROOT"); case "$EVDROOT" in /tmp|/tmp/*) stop "EVD_ROOT is under /tmp: the evidence lives under /home";; /*) ;; *) stop "EVD_ROOT is not an absolute path";; esac
 . "$HERE/zstatus.sh" || stop "zstatus.sh"
 for v in $(compgen -v PEER_); do [[ $v =~ ^PEER_[a-z0-9]+$ ]] && export "$v"; done   # peer.py reads its devices from these
+export RFPROOF_RNS_CONFIG=$RNSCFG   # the peer's Reticulum exchange takes the shared rnsd's RPC key from its config
 [[ "$NPREFIX" =~ ^[a-z]{2,6}$ ]] || stop "NONCE_PREFIX: 2..6 of a-z"
 # the rows of this run (the table order)
 LANE=${LANE:-fast}; case "$LANE" in fast|full|rns) ;; *) stop "LANE=fast|full|rns";; esac

@@ -90,13 +90,24 @@ def exchange(monkeypatch, capsys, tmp_path, clock):
     monkeypatch.setattr(fake.time, "monotonic", clock.monotonic)
     monkeypatch.setattr(fake.time, "sleep", clock.sleep)
     monkeypatch.setenv(CTX, "tx")
+    monkeypatch.setenv("RFPROOF_RNS_CONFIG", str(tmp_path / "rnsd"))
     rc = fake.main(["rns-exchange", IN1, "6326b7e6a36b7912ba02bfc8260bfc77", "60", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
     return rc, capsys.readouterr().out
 
 
+def test_rns_exchange_without_the_shared_rnsd_config_sends_nothing(monkeypatch, capsys, tmp_path):
+    # as the driver: the runner exports RFPROOF_RNS_CONFIG (the lab's RNS_CONFIG); without it the exchange opens nothing
+    monkeypatch.delenv("RFPROOF_RNS_CONFIG", raising=False)
+    monkeypatch.setenv(CTX, "tx")
+    (tmp_path / "go").write_text("")
+    assert fake.main(["rns-exchange", IN1, "6326b7e6a36b7912ba02bfc8260bfc77", "60", "d", OUT1, str(tmp_path / "go")]) == 1
+    assert frames(capsys.readouterr().out) == []
+
+
 def test_rns_exchange_sends_its_message_only_after_the_release_file(monkeypatch, capsys, tmp_path):
     rc, out = exchange(monkeypatch, capsys, tmp_path, Clock(go=tmp_path / "go", at=3.0))
-    assert rc == 0 and frames(out) == ["FRAME | PC:rnode | control", f"FRAME | PC:rnode | {OUT1}", "FRAME | PC:rnode | control"]
+    assert rc == 0 and frames(out) == ["FRAME | PC:rnode | control", "FRAME | PC:rnode | control", f"FRAME | PC:rnode | {OUT1}",
+                                       "FRAME | PC:rnode | control"]
     assert f"SEEN {IN1} " in out and not (tmp_path / "dest").exists()
 
 

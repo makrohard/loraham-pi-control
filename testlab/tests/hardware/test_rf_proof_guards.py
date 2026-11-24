@@ -1528,14 +1528,15 @@ def test_a_key_matching_two_radios_is_ambiguous_not_the_first(tmp_path):
         f"NOT RUN: row {n} daemon {d}: ambiguous: radio Z868 (2 match)" for n in (8, 9, 11) for d in ("A->B", "B->A")]
 
 
-def test_row_5s_worst_case_is_five_frames_on_the_box_and_four_on_the_rnode(tmp_path):
+def test_row_5s_worst_case_is_five_frames_on_the_box_and_five_on_the_rnode(tmp_path):
     # mutant K5: row 5 counted one frame per end (the box: MeshChat's announce of 2 frames, its delivery proof, own send and
-    # the one retry a late cancel can let slip; the RNode's three + its proof of the box's message). red-before (da24e83c):
-    # Z:r2 3 (one frame per announce); (80068d70): Z:r2 4, PC:rnode 3 (the box's send counted as never sent)
+    # the one retry a late cancel can let slip; the RNode's four (announce, second announce, message, path request) + its
+    # proof of the box's message). red-before (da24e83c): Z:r2 3 (one frame per announce); (80068d70): Z:r2 4, PC:rnode 3
+    # (the box's send counted as never sent); (8e52a31e): PC:rnode 4, one PC announce
     r = dry(tmp_path, LANE="full", ROWS_ONLY="5", FAKE_PEER=_null_peer(tmp_path))
     assert r.returncode == 0, r.stderr
     r0 = r.stdout.split("== ROW R0", 1)[1].split("== ROW R1", 1)[0]
-    assert [line for line in r0.splitlines() if line.split(" | ")[0] == "BUDGET"] == ["BUDGET | PC:rnode | 4 | 10", "BUDGET | Z:r2 | 5 | 10"]
+    assert [line for line in r0.splitlines() if line.split(" | ")[0] == "BUDGET"] == ["BUDGET | PC:rnode | 5 | 10", "BUDGET | Z:r2 | 5 | 10"]
 
 
 def r0_budget(r):
@@ -1544,11 +1545,11 @@ def r0_budget(r):
 
 
 @pytest.mark.parametrize("row, want", [
-    ("12", ["BUDGET | H:r5 | 5 | 10", "BUDGET | PC:rnode | 4 | 10"]),                       # row 5's five and four
+    ("12", ["BUDGET | H:r5 | 5 | 10", "BUDGET | PC:rnode | 5 | 10"]),                       # row 5's five and five
     # the owner: MeshChat started once (2) + the member leg's announce call (2) + the owner and leave proofs + the member leg's
-    # send, slip and proof of the Zero's message; the RNode 3 x 2 (owner, leave); the member: the announce call (2) + send,
-    # slip, proof; the Zero: its MeshChat start's announce (2) + send, slip, proof of H's message
-    ("13", ["BUDGET | H:r2 | 9 | 10", "BUDGET | H:r5 | 5 | 10", "BUDGET | PC:rnode | 6 | 10", "BUDGET | Z:r2 | 5 | 10"]),
+    # send, slip and proof of the Zero's message; the RNode (owner, leave): see the end; the member: the announce call (2) + send,
+    # slip, proof; the Zero: its MeshChat start's announce (2) + send, slip, proof of H's message; the RNode 4 x 2
+    ("13", ["BUDGET | H:r2 | 9 | 10", "BUDGET | H:r5 | 5 | 10", "BUDGET | PC:rnode | 8 | 10", "BUDGET | Z:r2 | 5 | 10"]),
 ])
 def test_a_reticulum_rows_worst_case_is_reserved_per_endpoint(tmp_path, row, want):
     # red-before (82dc98ad): "STOP: ROWS_ONLY: '12' is not a row id" (and '13'), rc 2; (da24e83c): one frame per announce

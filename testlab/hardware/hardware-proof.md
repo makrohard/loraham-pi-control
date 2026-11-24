@@ -53,6 +53,9 @@ it). They prove the shipped defaults: each reads `rnode_framing` (it must be `ye
 rows 12 and 13 `daemon`), else STOP; the kit sets neither. The PC listens before the MeshChat start, whose own announce it
 must hear (the kit asks for none; the start is counted as that send: 2 frames, MeshChat's LXMF and audio-call announces,
 on every radio of the node).
+The PC announces at launch and once more after the release (its TX checks passed again), right before its message: the
+box's node runs only from MeshChat's start, and its own send needs the PC's path. The PC's client of the shared rnsd takes
+that rnsd's RPC key from its config (`RNS_CONFIG`), else every request to it is refused.
 Row 5's prerequisite (an operator step before the run): save `backend = spi` on the Zero's board radio
 (`lhpc config reticulum@<rid> backend spi`); the product's default is `daemon`, and row 5 stops on it.
 The Reticulum rows' prerequisite on each of their boxes: MeshChat started there once (its first start writes

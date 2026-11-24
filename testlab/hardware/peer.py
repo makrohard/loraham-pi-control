@@ -32,9 +32,10 @@ The runner holds an exclusive flock around every call, so two peers never act at
                                        announce, write the PC's LXMF destination hash to <dest-file>, wait for the box's announce
                                        (its display name), send <nonce-out> to it and wait for its delivery proof (the box's
                                        receipt: `DELIVERED <nonce-out> <time>`), and wait for an LXMF message carrying <nonce-in>;
-                                       prints SEEN on it. The message is sent only once the runner has written
-                                       <go-file> (after its TX checks passed again), and exactly once (no retry); without it:
-                                       `TX2-NOT-GATED`, NOT-SEEN. `known`: no box announce is awaited; the box's path comes from
+                                       prints SEEN on it. The message, and right before it one more announce (`PC-ANNOUNCE
+                                       again`: the box's node now runs), go only once the runner has written <go-file> (after
+                                       its TX checks passed again), and exactly once (no retry); without it: `TX2-NOT-GATED`,
+                                       NOT-SEEN. The client config carries the shared rnsd's RPC key (RFPROOF_RNS_CONFIG). `known`: no box announce is awaited; the box's path comes from
                                        the shared rnsd's path table (a request it answers locally, no RF); not cached there:
                                        `BOX-PATH not cached`, NOT-SEEN, and no request is sent (it would go out on the RNode)
 """
@@ -439,20 +440,49 @@ def rns_exchange(inn, box_dest, secs, dest_file, out, go_file, known=False):
     import tempfile
     device("rnode")
     instance = rns_instance()
+    key = rns_rpc_key(rns_config_dir())
     d = tempfile.mkdtemp(prefix="rfproof-rns-")
     try:
-        return rns_run(d, instance, inn, box_dest, secs, dest_file, out, go_file, known)
+        return rns_run(d, instance, key, inn, box_dest, secs, dest_file, out, go_file, known)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
 
-def rns_run(d, instance, inn, box_dest, secs, dest_file, out, go_file, known=False):
+def rns_config_dir():
+    """The PC's shared rnsd config directory: the lab's RNS_CONFIG, which the runner exports as RFPROOF_RNS_CONFIG."""
+    d = os.environ.get("RFPROOF_RNS_CONFIG", "")
+    if not d or not os.path.isdir(d):
+        raise RuntimeError("RFPROOF_RNS_CONFIG names no directory (the shared rnsd's config, the lab's RNS_CONFIG)")
+    return d
+
+
+def rns_rpc_key(cfgdir):
+    """The shared rnsd's RPC key (hex), derived as rnsd derives it (RNS 1.5.4 Reticulum.py:360-361, :499-505): its
+    config's [reticulum] rpc_key when that is hex, else the full hash of its transport identity's private key. A client
+    without it derives the key from its own new identity, and the rnsd refuses every RPC of it. Never printed."""
+    import RNS
+    from RNS.vendor.configobj import ConfigObj
+    section = ConfigObj(os.path.join(cfgdir, "config")).get("reticulum", {})
+    if "rpc_key" in section:
+        try:
+            return bytes.fromhex(section["rpc_key"]).hex()
+        except (TypeError, ValueError):
+            pass                                          # rnsd falls back to the derived key as well
+    path = os.path.join(cfgdir, "storage", "transport_identity")
+    ident = RNS.Identity.from_file(path) if os.path.isfile(path) else None
+    if ident is None:
+        raise RuntimeError("the shared rnsd's transport identity is not readable (storage/transport_identity under "
+                           "RFPROOF_RNS_CONFIG): no RPC key for its clients")
+    return RNS.Identity.full_hash(ident.get_private_key()).hex()
+
+
+def rns_run(d, instance, key, inn, box_dest, secs, dest_file, out, go_file, known=False):
     import LXMF
     import RNS
     with open(os.path.join(d, "config"), "w") as f:
         f.write("[reticulum]\n  enable_transport = False\n  share_instance = Yes\n"   # a client of the PC's shared rnsd
                 f"  instance_name = {instance[0]}\n  shared_instance_port = {instance[1]}\n"
-                f"  instance_control_port = {instance[2]}\n[interfaces]\n")
+                f"  instance_control_port = {instance[2]}\n  rpc_key = {key}\n[interfaces]\n")   # the rnsd's own key
     r = RNS.Reticulum(configdir=d, loglevel=RNS.LOG_ERROR)
     if not getattr(r, "is_connected_to_shared_instance", False):
         raise RuntimeError("not attached to the shared rnsd (refusing to open the RNode port)")
@@ -495,6 +525,10 @@ def rns_run(d, instance, inn, box_dest, secs, dest_file, out, go_file, known=Fal
     if not os.path.exists(go_file):
         print("TX2-NOT-GATED: no go file from the sheet, the message is not sent")
         return None
+    # once more, now that the box's node runs (its announce came): the launch announce went out before MeshChat's start
+    # brought that node up, so it had no path to the PC for its own send
+    router.announce(me.hash)
+    print("PC-ANNOUNCE again")
     dest = RNS.Destination(RNS.Identity.recall(box[0][1]), RNS.Destination.OUT, RNS.Destination.SINGLE, "lxmf", "delivery")
     msg = LXMF.LXMessage(dest, me, out, title="rfproof", desired_method=LXMF.LXMessage.OPPORTUNISTIC)
     done = []

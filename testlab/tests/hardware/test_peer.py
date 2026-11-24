@@ -4,6 +4,7 @@ the devices named by the lab's local file, and rns-exchange's second send waitin
 PEER=<path> picks the module under test (a red-before runs these against an older driver)."""
 import ast
 import asyncio
+import hashlib
 import importlib.util
 import os
 import pathlib
@@ -40,6 +41,20 @@ def lab_peers(monkeypatch):
     for name, value in LAB_PEERS.items():
         monkeypatch.setenv(f"PEER_{name}", value)
     monkeypatch.setenv(CTX, "tx")       # the runner's tx context for the sends these rows make; the refusal rows set their own
+
+
+TRANSPORT_ID = b"T" * 64                                         # the shared rnsd's transport identity (its private key)
+
+
+@pytest.fixture(autouse=True)
+def rnsd_config(monkeypatch, tmp_path):
+    """The shared rnsd's config directory the runner exports (RFPROOF_RNS_CONFIG): no rpc_key, a transport identity."""
+    d = tmp_path / "rnsd"
+    (d / "storage").mkdir(parents=True)
+    (d / "config").write_text("[reticulum]\n  share_instance = Yes\n")
+    (d / "storage" / "transport_identity").write_bytes(TRANSPORT_ID)
+    monkeypatch.setenv("RFPROOF_RNS_CONFIG", str(d))
+    return d
 
 
 class Clock:
@@ -416,6 +431,21 @@ def test_the_device_is_the_by_id_name_the_local_file_gives(clock, monkeypatch):
 
 
 CONFIGS = []                                                     # the scratch configs the fake Reticulum was given
+ANNOUNCES = []                                                   # per PC announce: was the box's announce heard before it
+
+
+class _ConfigObj(dict):
+    """RNS.vendor.configobj's ConfigObj, as far as the driver reads it: `[section]` and `key = value` lines."""
+    def __init__(self, path):
+        super().__init__()
+        sec = None
+        for raw in (pathlib.Path(path).read_text().splitlines() if os.path.exists(path) else []):
+            line = raw.strip()
+            if line.startswith("[") and line.endswith("]"):
+                sec = self.setdefault(line[1:-1], {})
+            elif "=" in line and sec is not None:
+                k, v = line.split("=", 1)
+                sec[k.strip()] = v.strip()
 
 
 # rns-exchange's second TX (the LXMF message) waits for the runner's go file; no go file = no handle_outbound
@@ -424,6 +454,11 @@ def _fake_rns(monkeypatch, sent, box=None):
     rns = types.ModuleType("RNS")
     lxmf = types.ModuleType("LXMF")
     rns.LOG_ERROR = 0
+    rns.vendor = types.ModuleType("RNS.vendor")
+    rns.vendor.configobj = types.ModuleType("RNS.vendor.configobj")
+    rns.vendor.configobj.ConfigObj = _ConfigObj
+    ANNOUNCES.clear()
+    heard = []
 
     class Ret:
         is_connected_to_shared_instance = True
@@ -454,6 +489,15 @@ def _fake_rns(monkeypatch, sent, box=None):
         def recall(h):
             return "ident"
 
+        @staticmethod
+        def from_file(path):                                     # RNS: None when the data is not a valid identity
+            data = pathlib.Path(path).read_bytes() if os.path.isfile(path) else b""
+            return types.SimpleNamespace(get_private_key=lambda: data) if len(data) == 64 else None
+
+        @staticmethod
+        def full_hash(data):                                     # RNS: SHA-256
+            return hashlib.sha256(data).digest()
+
         def __init__(self):
             pass
     rns.Identity = Ident
@@ -480,10 +524,12 @@ def _fake_rns(monkeypatch, sent, box=None):
             self.incoming = cb
 
         def announce(self, h):
-            for x in handlers if not (box or {}).get("silent") else []:   # the box's announce is heard at once
+            ANNOUNCES.append(bool(heard))
+            for x in handlers if not (box or {}).get("silent") and not heard else []:   # the box's announce: at once, once
                 for h in (box or {}).get("others", []):           # another node's announce, before the box's
                     x.received_announce(h, None, b"app")
                 x.received_announce(BOXH, None, b"app")
+                heard.append(1)
 
         MAX_DELIVERY_ATTEMPTS = 5                                # LXMF 1.1.1's value
 
@@ -506,6 +552,8 @@ def _fake_rns(monkeypatch, sent, box=None):
             self.proof = cb
     lxmf.LXMessage = Msg
     monkeypatch.setitem(sys.modules, "RNS", rns)
+    monkeypatch.setitem(sys.modules, "RNS.vendor", rns.vendor)
+    monkeypatch.setitem(sys.modules, "RNS.vendor.configobj", rns.vendor.configobj)
     monkeypatch.setitem(sys.modules, "LXMF", lxmf)
 
 
@@ -572,6 +620,70 @@ def test_rns_exchange_succeeds_only_with_the_boxs_message_and_its_delivery_proof
     (tmp_path / "go").write_text("")
     assert peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == rc
     assert " ".join(capsys.readouterr().out.splitlines()[-1].split()[:3]) == last
+
+
+@pytest.mark.parametrize("go, want", [(True, [False, True]), (False, [False])])
+def test_rns_exchange_announces_again_after_the_boxs_announce_and_the_go_file(rns_sent, tmp_path, capsys, go, want):
+    # red-before (a21's kit run, row 5 box -> peer NO-PATH): the PC announced once, at launch, before the box's node ran
+    # (MeshChat's start brings it up), so the node never had a path to the PC. Now once more after the box's announce,
+    # gated like the message by the runner's go file (its TX checks passed again).
+    if go:
+        (tmp_path / "go").write_text("")
+    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+    assert want == ANNOUNCES and ("PC-ANNOUNCE again" in capsys.readouterr().out) == go
+
+
+@pytest.mark.parametrize("rnsd, want", [
+    ("", hashlib.sha256(TRANSPORT_ID).hexdigest()),                              # derived from its transport identity
+    ("  rpc_key = 00ff10ab\n", "00ff10ab"),                                      # its config's own key
+    ("  rpc_key = 0zz\n", hashlib.sha256(TRANSPORT_ID).hexdigest()),             # invalid: rnsd falls back to the derived
+])
+def test_the_client_config_carries_the_shared_rnsds_rpc_key(rns_sent, rnsd_config, tmp_path, capsys, rnsd, want):
+    # red-before (a21's kit run: "digest rejected"): without rpc_key the client derived the key from its own new
+    # identity (RNS 1.5.4 Reticulum.py:360-361), so every RPC to the shared rnsd (path table, first-hop timeout) was refused
+    (rnsd_config / "config").write_text("[reticulum]\n  share_instance = Yes\n" + rnsd)
+    CONFIGS.clear()
+    (tmp_path / "go").write_text("")
+    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+    assert len(CONFIGS) == 1 and [ln.strip() for ln in CONFIGS[0].splitlines() if "rpc_key" in ln] == [f"rpc_key = {want}"]
+    out = capsys.readouterr()
+    assert want not in out.out + out.err                                          # the key is never printed
+
+
+def test_an_explicit_rpc_key_needs_no_transport_identity(rns_sent, rnsd_config, tmp_path):
+    # the identity is read only to derive the default key: a valid rpc_key in the rnsd's config is taken as it is
+    (rnsd_config / "config").write_text("[reticulum]\n  rpc_key = 00ff10ab\n")
+    (rnsd_config / "storage" / "transport_identity").unlink()
+    CONFIGS.clear()
+    (tmp_path / "go").write_text("")
+    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+    assert len(CONFIGS) == 1 and "  rpc_key = 00ff10ab\n" in CONFIGS[0]
+
+
+NODIR = "RFPROOF_RNS_CONFIG names no directory"
+
+
+@pytest.mark.parametrize("break_it, why", [("unset", NODIR), ("no-dir", NODIR),
+                                           ("no-identity", "transport identity"), ("bad-identity", "transport identity"),
+                                           ("bad-key-no-identity", "transport identity")])
+def test_no_shared_rnsd_key_is_refused_before_anything_opens(rns_sent, rnsd_config, monkeypatch, tmp_path, break_it, why):
+    made = []
+    monkeypatch.setattr(tempfile, "mkdtemp", lambda **k: made.append("mkdtemp") or str(tmp_path / "scratch"))
+    monkeypatch.setattr(sys.modules["RNS"], "Reticulum", lambda **k: made.append("reticulum"))
+    if break_it == "unset":
+        monkeypatch.delenv("RFPROOF_RNS_CONFIG")
+    elif break_it == "no-dir":
+        monkeypatch.setenv("RFPROOF_RNS_CONFIG", str(tmp_path / "absent"))
+    elif break_it == "no-identity":
+        (rnsd_config / "storage" / "transport_identity").unlink()
+    elif break_it == "bad-key-no-identity":                     # an invalid rpc_key falls back to the derived key
+        (rnsd_config / "config").write_text("[reticulum]\n  rpc_key = 0zz\n")
+        (rnsd_config / "storage" / "transport_identity").unlink()
+    else:
+        (rnsd_config / "storage" / "transport_identity").write_bytes(b"short")
+    with pytest.raises(RuntimeError, match=why) as e:
+        peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+    assert made == [] and rns_sent == [] and hashlib.sha256(TRANSPORT_ID).hexdigest() not in str(e.value)
 
 
 def test_the_shared_rnsd_instance_comes_from_the_local_file(rns_sent, tmp_path):

@@ -6,7 +6,8 @@ MeshCore or RNS module, opens nothing and sends nothing; it prints what the real
 A send prints its FRAME, then `SENT <nonce> <time>`. A read prints `SEEN <nonce> <time>`, a power action `POWER <value>`
 (the value it was given, else DRY_POWER_<peer> from the dry inventory, else 2); neither prints a FRAME.
 rns-exchange prints the announce's FRAME at once, then waits at most RELEASE_WAIT_S for <go-file>: when it appears, the
-message (<nonce-out>) and at most one path request; without it `TX2-NOT-GATED`, exit 3, as the real action.
+second announce, the message (<nonce-out>) and at most one path request; without it `TX2-NOT-GATED`, exit 3, as the real
+action.
 """
 import importlib.util
 import os
@@ -38,6 +39,9 @@ def frame(peer, what):
 
 
 def rns_exchange(inn, out, go_file):
+    if not os.environ.get("RFPROOF_RNS_CONFIG"):                     # as the driver: the shared rnsd's config (its RPC key)
+        print("RFPROOF_RNS_CONFIG is not set (the shared rnsd's config)", file=sys.stderr)
+        return 1
     frame("rnode", "control")                                        # the PC's announce, at launch
     end = time.monotonic() + RELEASE_WAIT_S
     while not os.path.exists(go_file):
@@ -46,6 +50,7 @@ def rns_exchange(inn, out, go_file):
             print("NOT-SEEN")
             return NOT_SEEN
         time.sleep(0.1)
+    frame("rnode", "control")                                        # the PC's second announce, after the go file
     frame("rnode", out)                                              # the LXMF message
     frame("rnode", "control")                                        # its path request, at most one
     print(f"DELIVERED {out} {ts()}")

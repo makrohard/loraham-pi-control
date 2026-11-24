@@ -291,9 +291,9 @@ def test_every_frame_of_the_dry_run_is_covered_by_its_own_tx(base):
     frames = [line for line in base.lines if line.startswith("FRAME |")]
     assert uncovered(base.lines) == [] and unsent_tx(base.lines) == []
     kinds = Counter((f.split("|")[1].strip(), f.split("|")[2].strip() == "control") for f in frames)
-    # rows 5 and 12, each the RNode's announce and path request (control) and its message
-    # red-before (82dc98ad): 2 and 1 (row 5 alone: the full lane had no row 12)
-    assert kinds[("PC:rnode", True)] == 4 and kinds[("PC:rnode", False)] == 2
+    # rows 5 and 12, each the RNode's announce, its second announce after the release and its path request (control) and
+    # its message. red-before (82dc98ad): 2 and 1 (row 5 alone: the full lane had no row 12); (8e52a31e): 4, one announce
+    assert kinds[("PC:rnode", True)] == 6 and kinds[("PC:rnode", False)] == 2
     assert kinds[("PC:tracker", True)] == 1                                          # the tracker's ACK
     assert any(r.partition(":")[0] == "Z" and c for r, c in kinds)                  # the box's LXMF delivery proof
 
@@ -312,20 +312,20 @@ def within_budget(d):
 
 
 def test_every_radio_stays_within_its_budget(base):
-    # rows 5 and 12 share the RNode: 4 frames each (3 + its proof of the box's message). red-before (82dc98ad): (3, 3),
-    # row 5 alone; (80068d70): (6, 6), the box's send never sent
-    assert within_budget(base)["PC:rnode"] == (8, 8)
+    # rows 5 and 12 share the RNode: 5 frames each (4 + its proof of the box's message), TXMAX. red-before (82dc98ad): (3, 3),
+    # row 5 alone; (80068d70): (6, 6), the box's send never sent; (8e52a31e): (8, 8), one PC announce per exchange
+    assert within_budget(base)["PC:rnode"] == (10, 10)
 
 
 def test_the_rns_lane_keeps_the_rnode_within_its_budget(dry):
-    # row 13: two RNode exchanges (owner, owner after the member's stop), 3 RNode frames each; the member leg is H's member <->
+    # row 13: two RNode exchanges (owner, owner after the member's stop), 4 RNode frames each; the member leg is H's member <->
     # the Zero on 868.3: the owner 3 + 5 (announce call, send, slip, proof: on every node radio) + 1 = 9, the member 5, the
     # Zero 5 (its start's announce, send, slip, proof); every frame dispatched is reserved at R0
     # red-before (82dc98ad): "STOP: LANE=fast|full", rc 2 (no TX or BUDGET line); (da24e83c): 9 and 3, 1 frame per announce;
     # (80068d70): 9 / 10 / 4, sends reserved in every exchange but never sent
     d = dry("rns")
     assert d.rc == 0, d.err[-2000:]
-    assert within_budget(d) == {"PC:rnode": (6, 6), "H:r2": (9, 9), "H:r5": (5, 5), "Z:r2": (5, 5)}
+    assert within_budget(d) == {"PC:rnode": (8, 8), "H:r2": (9, 9), "H:r5": (5, 5), "Z:r2": (5, 5)}
     assert uncovered(d.lines) == [] and unsent_tx(d.lines) == []
 
 
