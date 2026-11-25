@@ -569,9 +569,15 @@ def rns_run(d, instance, key, inn, box_dest, secs, dest_file, out, go_file, anno
         print(f"PC-ANNOUNCE NOT SENT: {len(anns)} of {announces} box announces heard" if len(anns) < announces
               else "PC-ANNOUNCE NOT SENT: the box did not go quiet")
         return None
+    if time.monotonic() >= end:                         # quiet only at the deadline: nothing more goes
+        print("PC-ANNOUNCE NOT SENT: the deadline passed")
+        return None
     router.announce(me.hash)
     print(f"PC-ANNOUNCE again {tsms()}")
-    time.sleep(ANNOUNCE_AIR_S)                          # the announce on air alone, before the message (ANNOUNCE_AIR_S)
+    time.sleep(max(0.0, min(ANNOUNCE_AIR_S, end - time.monotonic())))   # the announce on air alone (ANNOUNCE_AIR_S)
+    if time.monotonic() >= end:
+        print(f"NOT-SENT {out}: the deadline passed while the PC's announce aired")
+        return None
     dest = RNS.Destination(RNS.Identity.recall(box[0][1]), RNS.Destination.OUT, RNS.Destination.SINGLE, "lxmf", "delivery")
     msg = LXMF.LXMessage(dest, me, out, title="rfproof", desired_method=LXMF.LXMessage.OPPORTUNISTIC)
     done = []

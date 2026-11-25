@@ -1372,9 +1372,11 @@ row_rns() {   # row_rns <id> <box:KEY> <backend>: Reticulum + MeshChat on one bo
   REPORT "$id" "$(rowname "$id")" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "peer -> box" "yes: LXMF delivered (the box's proof) and stored$([ "${RNSCALL:-0}" != 1 ] || echo "; start's announce heard $ha (product), the kit's call heard on air $hc (button)")" "the RNode at $(getk "P_R$id-rnode" unrecorded) dBm" PASS
   leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
   ! needs rt_send || { pcann "$id" "$b" "$r"; data "row $id: $PCANN"; }   # the PC's announce on air: the box's own RX
+  # a delivered send proves the box's path to the PC by itself (judged by its delivery, the aired check only recorded); the
+  # aired check is the NO-PATH diagnostic: heard and still no path = a path defect, not heard = the send could not be tried
   if needs rt_send && [ -z "${RNSNOPATH:-}" ]; then rnsback "$id"
     REPORT "$id" "$(rowname "$id")" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "box -> peer" yes "$(getk "P_$q" as-is) dBm (as-is)" PASS
-  elif [ -n "${RNSNOPATH:-}" ]; then   # heard and still no path: a path defect; not heard: the send could not be tried
+  elif [ -n "${RNSNOPATH:-}" ]; then
     [ "$PCHEARD" != 1 ] || fail "row $id box -> peer: $PCANN, yet the box's node had no path to the PC (a path defect)"
     notrun "$id" box-\>peer "$PCANN, so the node had no path to the PC, nothing sent"
   else notrun "$id" box-\>peer "form not confirmed: rt_send"; fi

@@ -400,6 +400,16 @@ def test_a_no_path_box_send_after_the_box_heard_the_pcs_announce_is_a_fail(tmp_p
     assert "data: row 5: PC-ANNOUNCE heard by the box (9999-12-31T23:59:59.500Z)" in ok.stdout.splitlines()
 
 
+def test_a_delivered_box_send_passes_whatever_the_aired_check_found(tmp_path):
+    # G2 280 B2, the rule (handler: option b): a delivered box -> peer send proves the box's path to the PC by itself; the
+    # aired check is the NO-PATH diagnostic only, recorded here as a data line
+    from test_rf_proof_guards import dry
+    r = dry(tmp_path, LANE="full", DRY_PCANNMISS="12")
+    assert r.returncode == 0, r.stderr[-1500:]
+    assert _leg(r, 12, "box -> peer")[0].endswith(" | DRY-PASS")
+    assert "data: row 12: PC-ANNOUNCE NOT heard by the box (9999-12-31T23:59:59.500Z)" in r.stdout.splitlines()
+
+
 # ---- R0's prerequisite of the Reticulum rows: MeshChat's identity on each of their boxes ----------------------------------
 
 NOMCID = "MeshChat has no identity yet (no state/meshchat/identity: it never started there); prerequisite: start MeshChat on it"
