@@ -180,6 +180,8 @@ declare -A F=(
   # the word in MeshCore on the box: sync_msgs POPS the node's queue (a read deletes it, no undo); each poll bounded
   [rx_mc_app]="timeout -k 2 10 {RT}/src/meshcore-cli/.venv/bin/meshcore-cli -j -t 127.0.0.1 -p {cport} sync_msgs 2>/dev/null | grep -F -- '{n}\"'"
   [rx_mchat]="grep -rlF -- '{n}' {RT}/state/meshchat 2>/dev/null"
+  # a radio heard a destination: an RX line of its Reticulum RF log from line {from} on whose frame hex holds {n} (row 13)
+  [rt_rfseen]="tail -n +{from} {RT}/logs/{rid}/rf-reticulum.log 2>/dev/null | grep -F -- ' RX ' | grep -F -- '{n}'"
   # MeshCom group text <src>>*:<text>, matched in the frame's hex: `>*:` (3e2a3a), the nonce ({nh}), its 0x00 terminator
   # (aprs_functions.cpp:1097; HW, MOD, FCS, FW, LH follow, so the ascii field never ends at the text). The line forms are the
   # daemon's RF-log writer's (daemon_rflog.cpp:153 RX, :167 TX); a TX counts only with outcome=ok (daemon_tx.cpp:222).
@@ -195,7 +197,7 @@ CHAT_READY='Ctrl-K: Konf'   # the chat client's footer
 # its two bounded sends, so it needs it).
 declare -A RFORMS=([1]="start stop tx_mcom rx_mcom rx_mcom_app" [2]="start stop" [3]="start stop mt_cap mt_send mt_pget rx_mt rx_mt_app" [4]="start stop mc_send mc_pget rx_mc rx_mc_app"
   [5]="start stop rt_get rt_pget rx_mchat" [6]="start stop chat_client rx_rf" [12]="start stop rt_get rt_dpget rx_mchat rt_announce"
-  [13]="start stop rt_get rt_dpget rt_pget rx_mchat rt_join rt_own rt_dfreq rt_zfreq rt_announce rt_send")
+  [13]="start stop rt_get rt_dpget rt_pget rx_mchat rt_join rt_own rt_dfreq rt_rfseen rt_zfreq rt_announce rt_send")
 # The pre-step M (mcset.py, from the RF sheet's MCSET-PRESTEP-v4): per stack row, the instance settings it copies from the stack's
 # source file into <sid>@<rid> of endpoint A's radio ({band} = that radio's band). J1's value is the input MCSET_J1.
 declare -A MJOB=([1]="J1 meshcom meshcom.toml mc_callsign" [2]="J2 graywolf graywolf@{band}.toml call"
@@ -1395,6 +1397,16 @@ ifis() { local n u; n=$(body "$1" | grep -cE "^IF .*LoRa $2(]|\$)"); u=$(body "$
 rfgrew() { local d a c m; for d in RX TX; do a=$(body "$1" | sed -n "s/^$d //p"); c=$(body "$2" | sed -n "s/^$d //p")   # rfgrew <before> <after> [min TX]
   m=1; [ "$d" = RX ] || m=${3:-1}; [[ $a =~ ^[0-9]+$ && $c =~ ^[0-9]+$ ]] && [ $((c - a)) -ge "$m" ] || return 1; done; }
 memgrew() { rfgrew "$1" "$2" $((ANNF + 1)); }   # memgrew <before> <after>: row 13's member leg: an RX, and a TX beyond the announce
+rnsmark() { echo "wc -l < {RT}/logs/$1/rf-reticulum.log 2>/dev/null || echo 0"; }   # rnsmark <rid>: its RF log's line count now
+rfline() { local n; n=$(body "$1" | tail -n 1); [[ $n =~ ^[0-9]+$ ]] || n=0; echo $((n + 1)); }   # rfline <mark file>: the first new line
+rfheard() {   # rfheard <tag> <box> <rid> <hex> <from line>: rt_rfseen polled 20 s (SEEN/NOT-SEEN); never retried, nothing sent.
+  # On a miss: the box's RX/TX lines from <from line> on copied (<tag>-win.txt), rc 1. DRY_UNHEARD=<tag>...: rehearses the miss
+  boxrx "$2" "$1.txt" rt_rfseen "$3" "$4" 20 from="$5"; local rc=$?
+  if [ "$MODE" = dry ]; then case " ${DRY_UNHEARD:-} " in *" $1 "*) rc=1;; esac; fi
+  [ "$rc" = 0 ] && return 0
+  must "$2" "$1-win.txt" "tail -n +$5 {RT}/logs/$3/rf-reticulum.log 2>/dev/null | grep -E -- ' (RX|TX) ' || true"; return 1; }
+rnsquiet() {   # rnsquiet <rid>: 2 s with no new TX line on its RF log, bounded 20 s: QUIET, or BUSY at the bound (the call goes then)
+  echo "f={RT}/logs/$1/rf-reticulum.log; c=\$(grep -cF ' TX ' \$f 2>/dev/null); q=0; for i in \$(seq 1 20); do sleep 1; n=\$(grep -cF ' TX ' \$f 2>/dev/null); if [ \"\$n\" = \"\$c\" ]; then q=\$((q + 1)); [ \$q -lt 2 ] || { echo QUIET; exit 0; }; else c=\$n; q=0; fi; done; echo BUSY"; }
 rnsnode() {   # rnsnode <tag> <box> <member rid> <up|gone> [meshchat]: the node kept its pid and start time (13-pid0.txt), the
   # member's interface is up in it (or gone from it: the radio is free), and (meshchat) MeshChat still answers
   must "$2" "$1-pid.txt" "$(rnspid)"; must "$2" "$1-if.txt" "$RNSIF"; [ -z "${5:-}" ] || X "$2" "$1-meshchat.txt" "$MCREADY"; [ "$MODE" = dry ] && return 0
@@ -1435,12 +1447,20 @@ row_13() {   # Reticulum: two radios, one node: the owner (A) opens as row 12 do
   zh=$(sed -n 's/^LXMF //p' "$SCRATCH/13-zero-lxmf.raw" | tail -n 1); bh=$(sed -n 's/^LXMF //p' "$SCRATCH/13-member-lxmf.raw" | tail -n 1)
   [ "$MODE" = dry ] || { [[ "$zh" =~ ^[0-9a-f]{32}$ ]] && [[ "$bh" =~ ^[0-9a-f]{32}$ ]]; } || stop "row 13: no LXMF address of a MeshChat (13-zero/member-lxmf.txt)"
   keep "STARTED_${zb}_$zr" 1; undo_push "$zb" "$(gstop "meshchat@$zr")"; undo_push "$zb" "$(gstop "reticulum@$zr")"   # newest first: the node
+  # each side's announce must be heard by the other before the sends (no retry: a lost announce stays this leg's FAIL); the
+  # RF logs' line counts first, so only this leg's lines count (the identities, and so their hex, are the same every run)
+  must "$b" 13-member-rfmark.txt "$(rnsmark "$rm")"; must "$zb" 13-zero-rfmark.txt "$(rnsmark "$zr")"
   tx "$qz" "$ANNF" control -- must "$zb" 13-zero-start.txt "$(form start inst="meshchat@$zr")"
   must "$b" 13-member-rf0.txt "$(rnslog "$rm")"
+  rfheard 13-zero-heard "$b" "$rm" "${zh:-dry}" "$(rfline 13-member-rfmark.txt)" \
+    || fail "row 13 member: the Zero's start announce not heard on H $rm (13-zero-heard.txt; H's RX/TX lines: 13-zero-heard-win.txt)"
+  must "$zb" 13-zero-quiet.txt "$(rnsquiet "$zr")"   # H's call only once the Zero is quiet (it does not listen before it keys)
   for x in "$qm"; do tx "$x" "$ANNF" control --reserve; done; tx "$q" "$ANNF" control -- must "$b" 13-member-announce.txt "$(form rt_announce)"
+  rfheard 13-member-heard "$zb" "$zr" "${bh:-dry}" "$(rfline 13-zero-rfmark.txt)" \
+    || fail "row 13 member: H's announce not heard on the Zero $zr (13-member-heard.txt; the Zero's RX/TX lines: 13-member-heard-win.txt)"
   [ "$MODE" = dry ] || sleep 30
-  # each direction's own outcome: delivered (its receive check passed) or NOT RUN (NO-PATH: nothing sent); the leg is a PASS
-  # only with both delivered, else NOT RUN naming each direction
+  # each direction's own outcome: delivered (its receive check passed) or NO-PATH (nothing sent); both announces were heard,
+  # so a NO-PATH is this leg's FAIL naming each direction; the leg is a PASS only with both delivered
   local ok=() nr=()
   nh=$(nonce); nz=$(nonce)
   tx "$qz" 1 control --reserve   # the Zero's delivery proof of H's message
@@ -1456,7 +1476,7 @@ row_13() {   # Reticulum: two radios, one node: the owner (A) opens as row 12 do
   undo_to "$mp" || stop "row 13: the Zero's stop or channel restore failed (UNRESOLVED.txt)"
   if [ ${#nr[@]} = 0 ]; then
     REPORT 13 "$(rowname 13)" "$b ($rm)" "868.3 MHz, SF8" "the Zero ($zb:$zr, SPI)" "$(dirtext member)" "yes: LXMF H -> Zero and Zero -> H on 868.3 MHz, stored on each side; RX and >= 3 TX (the announce's 2 + the exchange) on $rm's RF log" "$rm $(getk "P_$qm" as-is) dBm, the Zero's $zr $(getk "P_$qz" as-is) dBm (as-is)" PASS
-  else notrun 13 member "$(IFS=';'; echo "${nr[*]}${ok[*]:+;${ok[*]}}" | sed 's/;/; /g')"; fi
+  else fail "row 13 member: heard, no path: $(IFS=';'; echo "${nr[*]}${ok[*]:+;${ok[*]}}" | sed 's/;/; /g')"; fi
   leg leave; must "$b" 13-leave.txt "$(form stop inst="reticulum@$rm")"; rnsnode 13-leave "$b" "$rm" gone
   RNSSEND=0 RNSANN=known rnsx 13 13-leave "$b" "$ro" "$pk" "$q"; rnsback 13-leave "the member leg"
   REPORT 13 "$(rowname 13)" "$b ($ro)" "$bd" "$rn" "$(dirtext leave)" "yes: the node's pid unchanged, LoRa $rm gone, LXMF delivered over $ro$RNSB" "$ro $(getk "P_$q" as-is) dBm (as-is)" PASS

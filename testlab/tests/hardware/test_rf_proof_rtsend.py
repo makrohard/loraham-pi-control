@@ -301,13 +301,15 @@ def _leg(r, row, direction):
 
 @pytest.mark.parametrize("nopath, want", [
     ("", None),
-    ("13-member-send", "NOT RUN: H -> Zero: H's node had no path to the Zero, nothing sent; Zero -> H delivered and stored"),
-    ("13-zero-send", "NOT RUN: Zero -> H: the Zero's node had no path to H, nothing sent; H -> Zero delivered and stored"),
-    ("13-member-send 13-zero-send", "NOT RUN: H -> Zero: H's node had no path to the Zero, nothing sent; Zero -> H: the "
-                                    "Zero's node had no path to H, nothing sent")])
+    ("13-member-send", "FAIL: row 13 member: heard, no path: H -> Zero: H's node had no path to the Zero, nothing sent; Zero -> H "
+                       "delivered and stored"),
+    ("13-zero-send", "FAIL: row 13 member: heard, no path: Zero -> H: the Zero's node had no path to H, nothing sent; H -> Zero "
+                     "delivered and stored"),
+    ("13-member-send 13-zero-send", "FAIL: row 13 member: heard, no path: H -> Zero: H's node had no path to the Zero, nothing "
+                                    "sent; Zero -> H: the Zero's node had no path to H, nothing sent")])
 def test_row_13s_member_leg_passes_only_with_both_directions_delivered(tmp_path, nopath, want):
     # red-before (d7f86ac8, G2 row 240 B1): a NO-PATH direction still gave the leg's PASS, "both directions ... stored on
-    # each side", with the NOT RUN note appended
+    # each side", with the NOT RUN note appended; (b7be347b, PLAN-D172 K-d): with both announces heard it was NOT RUN, not FAIL
     from test_rf_proof_guards import dry
     r = dry(tmp_path, LANE="rns", DRY_NOPATH=nopath)
     assert r.returncode == 0, r.stderr[-1500:]
@@ -316,7 +318,74 @@ def test_row_13s_member_leg_passes_only_with_both_directions_delivered(tmp_path,
         assert leg.endswith(" | DRY-PASS") and "NOT RUN" not in leg, leg
     else:
         assert leg.endswith(" | " + want) and "stored on each side" not in leg, leg
-        assert f"NOT RUN: row 13 reticulum: two radios, one node member both ways: {want[9:]}" in r.stdout.splitlines()
+        assert not [ln for ln in r.stdout.splitlines() if ln.startswith("NOT RUN: row 13 ") and "member both ways:" in ln]
+
+
+def _cmds(r):
+    """The dry run's box commands, in order: (box, evidence file)."""
+    import re
+    return [m.groups() for ln in r.stdout.splitlines() if (m := re.match(r"  \[dry\] (\S+) > (\S+): ", ln))]
+
+
+@pytest.mark.parametrize("unheard, want, called", [
+    ("13-zero-heard", "the Zero's start announce not heard on H r5 (13-zero-heard.txt; H's RX/TX lines: 13-zero-heard-win.txt)",
+     False),
+    ("13-member-heard", "H's announce not heard on the Zero r2 (13-member-heard.txt; the Zero's RX/TX lines: "
+                        "13-member-heard-win.txt)", True)])
+def test_row_13s_member_leg_fails_on_an_announce_the_other_side_did_not_hear(tmp_path, unheard, want, called):
+    # red-before (b7be347b, PLAN-D172 K-a/K-c): no one checked the announces were heard; a lost one became NO-PATH, NOT RUN
+    from test_rf_proof_guards import dry
+    r = dry(tmp_path, LANE="rns", DRY_UNHEARD=unheard)
+    assert r.returncode == 0, r.stderr[-1500:]
+    (leg,) = _leg(r, 13, "member both ways")
+    assert leg.endswith(" | FAIL: row 13 member: " + want), leg
+    files = [f for _, f in _cmds(r)]
+    assert f"{unheard}-win.txt" in files and ("13-member-announce.txt" in files) == called, files
+    assert "13-member-send.txt" not in files and "13-zero-send.txt" not in files, files     # no retry, no send after a miss
+
+
+def test_row_13s_member_leg_hears_each_announce_before_the_next_step(tmp_path):
+    # red-before (b7be347b, PLAN-D172 K-a..K-c): H called its announce right after the Zero's start, into the Zero's burst
+    from test_rf_proof_guards import dry
+    r = dry(tmp_path, LANE="rns")
+    assert r.returncode == 0, r.stderr[-1500:]
+    c = _cmds(r)
+    order = [("H", "13-member-rfmark.txt"), ("Z", "13-zero-rfmark.txt"), ("Z", "13-zero-start.txt"), ("H", "13-zero-heard.txt"),
+             ("Z", "13-zero-quiet.txt"), ("H", "13-member-announce.txt"), ("Z", "13-member-heard.txt"), ("H", "13-member-send.txt")]
+    assert [c.index(x) for x in order] == sorted(c.index(x) for x in order), c
+    assert "13-zero-heard-win.txt" not in [f for _, f in c]
+
+
+def _rflog(tmp_path, lines):
+    log = tmp_path / "rt" / "logs" / "r5" / "rf-reticulum.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("".join(ln + "\n" for ln in lines))
+    return log
+
+
+def test_rt_rfseen_takes_only_this_legs_rx_lines_of_the_address(tmp_path):
+    # the identities are the same every run: an RX line of the address before the leg's mark is never this leg's
+    _rflog(tmp_path, [f"2026-11-25T07:00:00.000Z RX rssi=-50 snr=9 len=236 hex=0071ab{DEST}",
+                      f"2026-11-25T07:11:24.220Z TX rssi=- snr=- len=236 outcome=ok hex=0071ab{DEST}",
+                      "2026-11-25T07:11:25.646Z RX rssi=-58 snr=11 len=198 hex=0051abcb730d11"])
+    def run(frm):
+        return _sourced(tmp_path, f'c=$(form rt_rfseen rid=r5 n={DEST} from={frm}); bash -c "${{c//\\{{RT\\}}/{tmp_path}/rt}}"; echo "rc=$?"')
+    assert run(1).stdout.splitlines()[-1] == "rc=0" and DEST in run(1).stdout
+    assert run(2).stdout.splitlines() == ["rc=1"], run(2).stdout     # a TX of it and an RX of another address: not heard
+
+
+def test_rnsmark_and_rfline_give_the_first_line_after_the_mark(tmp_path):
+    _rflog(tmp_path, ["a RX x", "b TX y"])
+    r = _sourced(tmp_path, f'c=$(rnsmark r5); bash -c "${{c//\\{{RT\\}}/{tmp_path}/rt}}" > "$EVD/m.txt"; rfline m.txt; : > "$EVD/e.txt"; rfline e.txt')
+    assert r.stdout.splitlines() == ["3", "1"], (r.stdout, r.stderr)
+
+
+@pytest.mark.wallclock("rnsquiet polls its RF log once a second: 2 s without a new TX line")
+def test_rnsquiet_says_quiet_after_two_seconds_without_a_new_tx_line(tmp_path):
+    _rflog(tmp_path, ["a TX x"])
+    t0 = time.monotonic()
+    r = _sourced(tmp_path, f'c=$(rnsquiet r5); bash -c "${{c//\\{{RT\\}}/{tmp_path}/rt}}"')
+    assert r.stdout.splitlines() == ["QUIET"] and time.monotonic() - t0 >= 1.9, (r.stdout, r.stderr)   # wallclock: 2 polls
 
 
 def test_a_no_path_box_send_is_not_run_for_that_reason(tmp_path):

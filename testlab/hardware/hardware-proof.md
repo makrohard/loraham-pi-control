@@ -75,7 +75,10 @@ Row 13 opens the node on the owner as row 12 does (one exchange; MeshChat starts
 joins the member (`lhpc stack start reticulum@<rid> --join`): the node keeps its pid and start time, the member's
 interface is up and MeshChat answers. One exchange over the member follows with the owner at its minimum (restored after),
 heard through one announce call to MeshChat (`rt_announce`); the member's own RF log must gain an RX line and at least 3
-TX lines: the announce's 2 and the exchange, which the node relays over no other radio. Then the member's stop (the node
+TX lines: the announce's 2 and the exchange, which the node relays over no other radio. Each announce must be heard by
+the other side first (`rt_rfseen`: an RX line holding its LXMF address in the leg's part of the RF log, 20 s): the Zero's
+start announce on the member, then H's call (only once the Zero has sent nothing for 2 s) on the Zero; one not heard is
+the leg's FAIL with that side's RX/TX lines copied, never retried, and a NO-PATH after both were heard is a FAIL too. Then the member's stop (the node
 keeps its pid, the member's interface is gone) and one exchange over the owner without an announce: the PC takes the
 box's path from its shared rnsd, answered locally (absent: the exchange fails, no path request on air). Then the
 member's join again, and the owner's stop (no node process, no Reticulum instance left). Owner budget: 2 + 2 + 3 x 2
