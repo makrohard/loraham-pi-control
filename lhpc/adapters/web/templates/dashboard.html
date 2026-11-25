@@ -154,6 +154,13 @@
   {% endif %}
   <div class="radiogrid" data-pending-interactive="{{ '1' if pending_interactive else '0' }}"
        data-dash-sig="{{ dash_sig }}">
+    {% if not hardware_configured and radio_list_empty %}
+      {# no radio on the hardware list: one card in the radio cards' look, pointing at the first radio's setup; a stray
+         band daemon's card can follow it. Radios listed but none enabled, or a list that cannot be read: no card. #}
+      <div class="card radio-col" id="radio-none">
+        <div class="body"><p>No radio configured yet.<br><a href="{{ url_for('hardware_add_page') }}">Configure Hardware</a></p></div>
+      </div>
+    {% endif %}
     {% for r in radios %}
       {# W285/W286, DEC-W384bu/bv: one card per enabled radio ("<name> (<rid>, <band> MHz)"), every value its own
          (radio_overview); after them the §6 stray band daemons (stray_daemons: a band, no rid; W290-kept card + Stop).

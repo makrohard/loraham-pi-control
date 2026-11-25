@@ -747,7 +747,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
             welcome_dismissed=service.welcome_note_dismissed(),
             tasks=tasks,
             hardware_configured=service.hardware_configured(),
-            radios_listed=bool(_radios_mod.load(service._paths).radios),       # DEC-W384cl: radios, none enabled
+            radios_listed=bool((_rl := _radios_mod.load(service._paths)).radios),   # DEC-W384cl: radios, none enabled
+            radio_list_empty=_rl.kind != _radios_mod.INVALID and not _rl.radios,   # read fine, no radio (no list: none)
             hardware_changes=_hotplug.banner(service),            # W249/DEC-W42: the one hotplug banner
             attention=(_att := _attention_banner()),              # W272/W273: the "Needs attention" banner
             attention_set=_attention.set_key(_att),                         # C23 B2: the ✕ posts the identity of the set shown

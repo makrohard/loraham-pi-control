@@ -73,7 +73,8 @@ def test_the_banner_tells_no_list_from_radios_none_enabled(web, tmp_path, case):
     rows = None if case == "no-list" else tuple(dataclasses.replace(x, enabled=False) for x in TWO_433)
     r, doc = _page(web, tmp_path, rows=rows)
     page = " ".join(doc.text.split())
-    assert r.status_code == 200 and not doc.find("div", class_="radio-col")
+    assert r.status_code == 200
+    assert [c["id"] for c in doc.find("div", class_="radio-col")] == (["radio-none"] if case == "no-list" else [])
     if case == "no-list":
         assert "No radio hardware is set up yet." in page and doc.find("a", href="/hardware/add")
         assert "none is enabled" not in page
@@ -88,3 +89,45 @@ def test_every_radio_count_is_the_same_wide_grid(web, tmp_path, rows):
     r, doc = _page(web, tmp_path, rows=rows)
     assert r.status_code == 200 and len(doc.find("div", class_="radio-col")) == len(rows)
     assert not doc.find("body")[0].has_class("dash-narrow")
+
+
+def _none_card(doc):
+    return [c for c in doc.find("div", class_="radio-col") if c["id"] == "radio-none"]
+
+
+@pytest.mark.no_default_hardware
+def test_without_a_radio_the_home_shows_one_card_pointing_at_the_hardware_setup(web, tmp_path):
+    # red-before (7ceeaf31, his 0.14.1 hotfix): a box with no radio showed no card at all, only the banners
+    r, doc = _page(web, tmp_path, rows=None)
+    assert r.status_code == 200
+    (card,) = _none_card(doc)
+    body = doc.within(card)
+    assert " ".join(body.text.split()) == "No radio configured yet. Configure Hardware"
+    assert [(a.text, a["href"]) for a in body.find("a")] == [("Configure Hardware", "/hardware/add")]
+    assert body.find("br")                                            # the link on its own line
+
+
+def test_with_a_radio_the_no_radio_card_is_not_shown(web, tmp_path):
+    r, doc = _page(web, tmp_path, rows=TWO_433[:1])
+    assert r.status_code == 200 and not _none_card(doc) and "No radio configured yet." not in doc.text
+
+
+@pytest.mark.no_default_hardware
+def test_without_a_radio_a_stray_band_daemon_keeps_its_card_after_the_no_radio_card(web, tmp_path, monkeypatch):
+    monkeypatch.setattr(ControllerService, "_daemon_installed", lambda self, dstat: True)
+    r, doc = _page(web, tmp_path, rows=None,
+                   replies={"/tmp/loraconf433.sock": b"STATUS RADIO=READY TX=0 TXMODE=MANAGED\n"})
+    assert r.status_code == 200
+    assert [c["id"] for c in doc.find("div", class_="radio-col")] == ["radio-none", "radio-433"]
+
+
+@pytest.mark.no_default_hardware
+def test_a_hardware_list_that_cannot_be_read_shows_no_no_radio_card(web, tmp_path):
+    # red-before (5715df27, G2 B1): an invalid list loads with no radios, so it showed "No radio configured yet." too;
+    # only a list that reads fine and is empty (or none at all) is "no radio configured"
+    p = radios.path(Paths(runtime_root=tmp_path))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("[[radio]\nnot toml", encoding="utf-8")
+    assert radios.load(Paths(runtime_root=tmp_path)).kind == radios.INVALID
+    r, doc = _page(web, tmp_path, rows=None)
+    assert r.status_code == 200 and not _none_card(doc) and "No radio configured yet." not in doc.text
