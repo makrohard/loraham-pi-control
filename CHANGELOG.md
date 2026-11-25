@@ -121,14 +121,16 @@ Main features
   frame (SF12/BW125) no longer closes the link as a TX timeout.
 - SX126x radios at BW 125 kHz: the daemon no longer reads an idle channel as busy, so a managed TX is no longer
   refused with CHANNEL_BUSY (LoRaHAM daemon v1.6.2).
-- LoRaHAM daemon v1.7.1 builds on RadioLib 8.0.0 (RadioLib 7 no longer builds it); protocol and settings stay.
+- LoRaHAM daemon v1.7.2 builds on RadioLib 8.0.0 (RadioLib 7 no longer builds it); protocol and settings stay.
+- A daemon TX waiting for a free channel no longer cuts off a frame the radio already reports as arriving: every
+  box on daemon 0.9.0 or later lost that frame. A frame in its first symbols can still be cut (LoRaHAM daemon v1.7.2).
 - A failed GPIO operation in the daemon's log names the lgpio call, the pin and lgpio's error (LoRaHAM daemon v1.7.1).
 - SX1262 LoRa: a received frame's RSSI is RadioLib 8's average over the packet, so it differs from 0.13.x.
 - SX127x FSK: a frame with a bad CRC is now dropped by the daemon and counted in `rx_drops` (the chip used to discard
   it unseen).
 - The frequency register is 1 step lower at SX127x 869.525 MHz (61 Hz) and SX1262 439.9125, 869.4625 and 869.525 MHz
   (0.95 Hz); every other tested frequency is unchanged.
-- Upstream pins: LoRaHAM daemon v1.7.1, RadioLib 8.0.0, KISS TNC v0.6.5, libch341 745bd06 (new), MeshCom QEMU b4d3bc0,
+- Upstream pins: LoRaHAM daemon v1.7.2, RadioLib 8.0.0, KISS TNC v0.6.5, libch341 745bd06 (new), MeshCom QEMU b4d3bc0,
   bridge v0.3.2, rns-interface v0.4.1, MeshCom firmware v4.40a.11.22-18, Voice 96c95f1.
 
 Known limitations
