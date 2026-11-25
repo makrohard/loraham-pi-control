@@ -242,7 +242,7 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
          systemctl_broken=False, systemctl_disabled="", wifi_iw_fail=False,
          wifi_iw_absent=False, fake_hwclock_absent=False, nm_devs=None, defroute_dev=None,
          chrony_conf=None, gpsd_default=None, lhpc_gps_source=None, runtime_root_env=True,
-         operator_home=None, systemd_running=True, usb_seams=True, extra_env=None, no_systemctl=False):
+         operator_home=None, systemd_running=True, udev_running=True, usb_seams=True, extra_env=None, no_systemctl=False):
     fb, apt, um = _fakebin(tmp_path, no_sudo=no_sudo)
     if operator_home is not None:
         # The operator's home from `getent passwd` — a tmp dir, never a real user's home.
@@ -303,10 +303,14 @@ def _run(tmp_path, args, *, sudo_user=_SUDO_BASH, nonroot=False, no_sudo=False, 
     if systemd_running:
         rundir.mkdir(exist_ok=True)
     env["SYSTEMD_RUNDIR"] = str(rundir)
+    udevctl = ts / "udev-control"                      # udevd's control socket: present = a udevd runs
+    if systemd_running and udev_running:
+        udevctl.touch()
+    env["UDEV_CONTROL"] = str(udevctl)
     usbroot = tmp_path / "usbroot"; (usbroot / "etc" / "udev" / "rules.d").mkdir(parents=True, exist_ok=True)
     env["LHPC_USB_ROOT"] = str(usbroot)                # the USB setup's rule file lands here, never in /etc
     if not usb_seams:                                  # the real call: neither seam is in the environment
-        env.pop("LHPC_USB_ROOT"); env.pop("SYSTEMD_RUNDIR")
+        env.pop("LHPC_USB_ROOT"); env.pop("SYSTEMD_RUNDIR"); env.pop("UDEV_CONTROL")
     # The NMEA pre-flight reads <runtime root>/config/local.toml. Always point it at a tmp root:
     # the default would resolve through the REAL operator's home and read their real config.
     rt = tmp_path / "runtime"; (rt / "config").mkdir(parents=True, exist_ok=True)
@@ -2073,6 +2077,17 @@ def test_usb_setup_on_an_image_build_writes_the_rule_without_udevadm(tmp_path):
     assert r.returncode == 0, r.stderr
     assert (tmp_path / _USB_RULE).is_file()
     assert _udevadm(tmp_path) == []
+
+
+def test_usb_setup_in_a_booted_image_build_without_udevd_runs_no_udevadm(tmp_path):
+    """red-before (96669e2c, image build v0.14.0): the image build boots its chroot (systemd-nspawn --boot), so systemd
+    runs but no udevd does; `udevadm control --reload-rules` failed there and the bootstrap exited 13."""
+    r, _cfg, _apt, _um = _run(tmp_path, ["--spi-mode", "skip"], udev_running=False,
+                              extra_env={"FAKE_UDEVADM_FAIL": "1"})       # as there: udevadm reaches no udevd
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / _USB_RULE).is_file()
+    assert _udevadm(tmp_path) == []
+    assert "[usb-setup] no running udev (an image build): udev reads the rule at the first boot." in r.stdout
 
 
 def test_usb_setup_a_failing_udevadm_exits_13(tmp_path, monkeypatch):

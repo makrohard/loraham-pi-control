@@ -74,6 +74,7 @@ NO_NETWORK=""
 NO_USB=""
 LHPC_USB_ROOT="${LHPC_USB_ROOT:-}"            # the USB setup's path prefix (a test seam; empty = /)
 SYSTEMD_RUNDIR="${SYSTEMD_RUNDIR:-/run/systemd/system}"   # a running system: udevadm may run
+UDEV_CONTROL="${UDEV_CONTROL:-/run/udev/control}"   # udevd's control socket: udevadm control reaches a udevd
 SWAP_SIZE_MB=""
 WITH_GUI=""
 WITH_GPS=""
@@ -1274,7 +1275,7 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="1a86", ATTR{idProduct}=="5512", MODE="0660", 
 	exit 13
 fi
 echo "[usb-setup] wrote ${LHPC_USB_ROOT}/etc/udev/rules.d/90-lhpc-usb-radio.rules"
-if [ -d "$SYSTEMD_RUNDIR" ]; then
+if [ -d "$SYSTEMD_RUNDIR" ] && [ -e "$UDEV_CONTROL" ]; then
 	if ! udevadm control --reload-rules; then
 		echo "ERROR: [usb-setup] udevadm control --reload-rules failed" >&2
 		exit 13
@@ -1284,7 +1285,7 @@ if [ -d "$SYSTEMD_RUNDIR" ]; then
 		exit 13
 	fi
 else
-	echo "[usb-setup] no running system (an image build): udev reads the rule at the first boot."
+	echo "[usb-setup] no running udev (an image build): udev reads the rule at the first boot."
 fi
 if usermod -aG plugdev "$OP"; then
 	echo "[usb-setup] granted plugdev to $OP; it takes effect at the next log-in."

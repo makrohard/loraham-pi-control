@@ -64,9 +64,11 @@ def test_the_standalone_block_writes_only_the_rule_and_leaves_the_kernel_module_
 @needs_bash
 def test_the_bootstrap_scaffold_writes_under_its_root_seam_and_reloads_udev_on_a_running_system(tmp_path):
     (tmp_path / "sysd").mkdir()
+    (tmp_path / "udev-control").touch()
     text = usb_flow.usb_setup_text("$OP", MODELS, root_env="LHPC_USB_ROOT")
     r, root, calls = _run(tmp_path, text, {"LHPC_USB_ROOT": str(tmp_path / "root"),
-                                           "SYSTEMD_RUNDIR": str(tmp_path / "sysd")})
+                                           "SYSTEMD_RUNDIR": str(tmp_path / "sysd"),
+                                           "UDEV_CONTROL": str(tmp_path / "udev-control")})
     assert r.returncode == 0, r.stderr
     assert calls == [RELOAD, TRIGGER, "usermod -aG plugdev tester"]
     assert (root / "etc/udev/rules.d/90-lhpc-usb-radio.rules").read_text(encoding="utf-8") == \
@@ -79,6 +81,19 @@ def test_the_bootstrap_scaffold_on_an_image_build_writes_the_rule_and_runs_no_ud
     text = usb_flow.usb_setup_text("$OP", MODELS, root_env="LHPC_USB_ROOT")
     r, root, calls = _run(tmp_path, text, {"LHPC_USB_ROOT": str(tmp_path / "root"),
                                            "SYSTEMD_RUNDIR": str(tmp_path / "absent")})
+    assert r.returncode == 0, r.stderr
+    assert calls == ["usermod -aG plugdev tester"]
+    assert (root / "etc/udev/rules.d/90-lhpc-usb-radio.rules").is_file()
+
+
+@needs_bash
+def test_the_bootstrap_scaffold_in_a_booted_image_build_without_udevd_runs_no_udevadm(tmp_path):
+    """systemd runs but no udevd (the image build's systemd-nspawn --boot): udevadm would fail there (exit 13)."""
+    (tmp_path / "sysd").mkdir()
+    text = usb_flow.usb_setup_text("$OP", MODELS, root_env="LHPC_USB_ROOT")
+    r, root, calls = _run(tmp_path, text, {"LHPC_USB_ROOT": str(tmp_path / "root"),
+                                           "SYSTEMD_RUNDIR": str(tmp_path / "sysd"),
+                                           "UDEV_CONTROL": str(tmp_path / "absent")})
     assert r.returncode == 0, r.stderr
     assert calls == ["usermod -aG plugdev tester"]
     assert (root / "etc/udev/rules.d/90-lhpc-usb-radio.rules").is_file()

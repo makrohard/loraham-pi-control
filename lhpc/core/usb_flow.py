@@ -206,8 +206,9 @@ def usb_setup_text(user, models, *, root="/", standalone=False, root_env=None) -
     """The USB block, built on `host_setup(models)`: the udev rule file, the udevadm reload and trigger, and the
     plugdev grant; no module blacklist (W226). `user` is "$OP" (the scaffold) or a literal account name, else
     ValueError. `root_env` (the bootstrap's form, "$OP" only) names a shell variable that prefixes every path at run
-    time instead of `root`, and runs udevadm only on a running system (`$SYSTEMD_RUNDIR` exists): on an image build
-    udev reads the rule at the first boot. Its own failures exit 13; a failed grant sets `_GROUPS_FAILED`, which only
+    time instead of `root`, and runs udevadm only on a running system with a running udev (`$SYSTEMD_RUNDIR` and
+    udevd's control socket `$UDEV_CONTROL` exist): on an image build, booted or not, no udevd runs and udev reads the
+    rule at the first boot. Its own failures exit 13; a failed grant sets `_GROUPS_FAILED`, which only
     the standalone block turns into exit 7."""
     if user != SCAFFOLD_USER and not _account_ok(user):
         raise ValueError(f"{user!r} is not a usable account name")
@@ -241,8 +242,8 @@ def usb_setup_text(user, models, *, root="/", standalone=False, root_env=None) -
     if root_env is None:
         out += run
     else:
-        out += ['if [ -d "$SYSTEMD_RUNDIR" ]; then', *("\t" + line for line in run), "else",
-                '\techo "[usb-setup] no running system (an image build): udev reads the rule at the first boot."',
+        out += ['if [ -d "$SYSTEMD_RUNDIR" ] && [ -e "$UDEV_CONTROL" ]; then', *("\t" + line for line in run), "else",
+                '\techo "[usb-setup] no running udev (an image build): udev reads the rule at the first boot."',
                 "fi"]
     out += [f'if usermod -aG {setup.group} "{user}"; then',
             f'\techo "[usb-setup] granted {setup.group} to {user}; it takes effect at the next log-in."',

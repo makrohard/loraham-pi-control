@@ -1048,6 +1048,7 @@ def render_bootstrap_script(raw_cmds, revision: str = "", gui_cmds=(), gps_cmds=
         'NO_USB=""',
         'LHPC_USB_ROOT="${LHPC_USB_ROOT:-}"            # the USB setup\'s path prefix (a test seam; empty = /)',
         'SYSTEMD_RUNDIR="${SYSTEMD_RUNDIR:-/run/systemd/system}"   # a running system: udevadm may run',
+        'UDEV_CONTROL="${UDEV_CONTROL:-/run/udev/control}"   # udevd\'s control socket: udevadm control reaches a udevd',
         'SWAP_SIZE_MB=""',
         'WITH_GUI=""',
         'WITH_GPS=""',
