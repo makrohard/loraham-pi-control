@@ -6,6 +6,7 @@ Fixed
 
 - Image builds: the bootstrap no longer stops at its USB setup when the build boots the image's system (no udev runs
   there); udev reads the rule at the first boot.
+- Home: with no radio configured, a card says so and links Configure Hardware.
 
 ## 0.14.0
 
