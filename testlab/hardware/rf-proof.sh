@@ -181,7 +181,7 @@ declare -A F=(
   [rx_mc_app]="timeout -k 2 10 {RT}/src/meshcore-cli/.venv/bin/meshcore-cli -j -t 127.0.0.1 -p {cport} sync_msgs 2>/dev/null | grep -F -- '{n}\"'"
   [rx_mchat]="grep -rlF -- '{n}' {RT}/state/meshchat 2>/dev/null"
   # a radio heard a destination: an RX line of its Reticulum RF log from line {from} on whose frame hex holds {n} (row 13)
-  [rt_rfseen]="tail -n +{from} {RT}/logs/{rid}/rf-reticulum.log 2>/dev/null | grep -F -- ' RX ' | grep -F -- '{n}'"
+  [rt_rfseen]="tail -n +{from} {RT}/logs/{rid}/rf-reticulum.log 2>/dev/null | grep -F -- ' RX ' | grep -F -- '{hex}'"
   # MeshCom group text <src>>*:<text>, matched in the frame's hex: `>*:` (3e2a3a), the nonce ({nh}), its 0x00 terminator
   # (aprs_functions.cpp:1097; HW, MOD, FCS, FW, LH follow, so the ascii field never ends at the text). The line forms are the
   # daemon's RF-log writer's (daemon_rflog.cpp:153 RX, :167 TX); a TX counts only with outcome=ok (daemon_tx.cpp:222).
@@ -1400,8 +1400,9 @@ memgrew() { rfgrew "$1" "$2" $((ANNF + 1)); }   # memgrew <before> <after>: row 
 rnsmark() { echo "wc -l < {RT}/logs/$1/rf-reticulum.log 2>/dev/null || echo 0"; }   # rnsmark <rid>: its RF log's line count now
 rfline() { local n; n=$(body "$1" | tail -n 1); [[ $n =~ ^[0-9]+$ ]] || n=0; echo $((n + 1)); }   # rfline <mark file>: the first new line
 rfheard() {   # rfheard <tag> <box> <rid> <hex> <from line>: rt_rfseen polled 20 s (SEEN/NOT-SEEN); never retried, nothing sent.
+  # The marker carries the tag, not the address: the evidence masks the address (lxmf.list), so a marker of it never matched.
   # On a miss: the box's RX/TX lines from <from line> on copied (<tag>-win.txt), rc 1. DRY_UNHEARD=<tag>...: rehearses the miss
-  boxrx "$2" "$1.txt" rt_rfseen "$3" "$4" 20 from="$5"; local rc=$?
+  boxrx "$2" "$1.txt" rt_rfseen "$3" "$1" 20 hex="$4" from="$5"; local rc=$?
   if [ "$MODE" = dry ]; then case " ${DRY_UNHEARD:-} " in *" $1 "*) rc=1;; esac; fi
   [ "$rc" = 0 ] && return 0
   must "$2" "$1-win.txt" "tail -n +$5 {RT}/logs/$3/rf-reticulum.log 2>/dev/null | grep -E -- ' (RX|TX) ' || true"; return 1; }
@@ -1446,6 +1447,7 @@ row_13() {   # Reticulum: two radios, one node: the owner (A) opens as row 12 do
   [ "$MODE" = live ] || { cp "$OUT/13-zero-lxmf.txt" "$SCRATCH/13-zero-lxmf.raw" && cp "$OUT/13-member-lxmf.txt" "$SCRATCH/13-member-lxmf.raw"; } || stop "row 13: the dry raw copies"
   zh=$(sed -n 's/^LXMF //p' "$SCRATCH/13-zero-lxmf.raw" | tail -n 1); bh=$(sed -n 's/^LXMF //p' "$SCRATCH/13-member-lxmf.raw" | tail -n 1)
   [ "$MODE" = dry ] || { [[ "$zh" =~ ^[0-9a-f]{32}$ ]] && [[ "$bh" =~ ^[0-9a-f]{32}$ ]]; } || stop "row 13: no LXMF address of a MeshChat (13-zero/member-lxmf.txt)"
+  printf '%s\n' "$zh" "$bh" >> "$SCRATCH/lxmf.list" || stop "row 13: lxmf.list not written"   # both masked in the evidence, both leak-scanned
   keep "STARTED_${zb}_$zr" 1; undo_push "$zb" "$(gstop "meshchat@$zr")"; undo_push "$zb" "$(gstop "reticulum@$zr")"   # newest first: the node
   # each side's announce must be heard by the other before the sends (no retry: a lost announce stays this leg's FAIL); the
   # RF logs' line counts first, so only this leg's lines count (the identities, and so their hex, are the same every run)

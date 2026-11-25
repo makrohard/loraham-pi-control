@@ -369,9 +369,38 @@ def test_rt_rfseen_takes_only_this_legs_rx_lines_of_the_address(tmp_path):
                       f"2026-11-25T07:11:24.220Z TX rssi=- snr=- len=236 outcome=ok hex=0071ab{DEST}",
                       "2026-11-25T07:11:25.646Z RX rssi=-58 snr=11 len=198 hex=0051abcb730d11"])
     def run(frm):
-        return _sourced(tmp_path, f'c=$(form rt_rfseen rid=r5 n={DEST} from={frm}); bash -c "${{c//\\{{RT\\}}/{tmp_path}/rt}}"; echo "rc=$?"')
+        return _sourced(tmp_path, f'c=$(form rt_rfseen rid=r5 hex={DEST} from={frm}); bash -c "${{c//\\{{RT\\}}/{tmp_path}/rt}}"; echo "rc=$?"')
     assert run(1).stdout.splitlines()[-1] == "rc=0" and DEST in run(1).stdout
     assert run(2).stdout.splitlines() == ["rc=1"], run(2).stdout     # a TX of it and an RX of another address: not heard
+
+
+ZADDR = "f0e1d2c3b4a5968778695a4b3c2d1e0f"   # made-up LXMF addresses (never a real device's)
+HADDR = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
+
+
+def test_rfheard_sees_a_masked_address_and_its_marker_keeps_it_out(tmp_path):
+    # red-before (baeaf04b, kit r10 row 13): the marker echoed the address, the evidence masked it (lxmf.list), result()
+    # never matched it: a heard announce was a STOP on every live run
+    _rflog(tmp_path, [f"2026-11-25T15:48:29.000Z RX rssi=-58.00 snr=9 len=236 hex=0071ab{DEST}"])
+    r = _sourced(tmp_path, f'SCRATCH=$EVD/s; mkdir -p "$SCRATCH"; echo {DEST} > "$SCRATCH/lxmf.list"; BOX_Z_RUNTIME={tmp_path}/rt; '
+                           f'sshrun() {{ bash -c "$3"; }}; rfheard 13-member-heard Z r5 {DEST} 1; echo "rc=$?"')
+    assert r.stdout.splitlines()[-1] == "rc=0", (r.stdout, r.stderr)
+    seen = (tmp_path / "evd" / "13-member-heard.txt").read_text()
+    assert seen.startswith("SEEN 13-member-heard ") and seen.rstrip().endswith(" rssi=-58.00") and DEST not in seen, seen
+
+
+ROW13M = ('MODE=live; SCRATCH=$EVD/s; mkdir -p "$SCRATCH"; needs() { return 0; }; undo_push() { :; }; undo_mark() { echo 0; }; '
+          'rmember() { echo H:KM; }; rzero() { echo Z:KZ; }; getk() { echo r5; }; rnsread() { :; }; spower() { :; }; '
+          'hpower() { :; }; leg() { :; }; rnsx() { :; }; rnsback() { RNSB=; }; REPORT() { :; }; rnsnode() { :; }; keep() { :; }; '
+          'must() { case $2 in 13-zero-lxmf.txt) echo "LXMF $ZA" > "$XRAW";; 13-member-lxmf.txt) echo "LXMF $HA" > "$XRAW";; '
+          '*freq0.txt) echo "OWN " > "$OUT/$2";; esac; XRC=0; }; tx() { cat "$SCRATCH/lxmf.list"; exit 0; }; row_13 H:KO')
+
+
+def test_row_13s_member_leg_masks_both_meshchat_addresses_it_reads(tmp_path):
+    # red-before (baeaf04b, kit r10 row 13): the Zero's address was read but never put on lxmf.list: unmasked in the evidence
+    # and not leak-scanned (H's only by the owner leg's list)
+    r = _sourced(tmp_path, ROW13M, ZA=ZADDR, HA=HADDR)
+    assert r.stdout.splitlines() == [ZADDR, HADDR], (r.stdout, r.stderr)
 
 
 def test_rnsmark_and_rfline_give_the_first_line_after_the_mark(tmp_path):
