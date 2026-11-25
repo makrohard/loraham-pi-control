@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.1
+
+Fixed
+
+- Image builds: the bootstrap no longer stops at its USB setup when the build boots the image's system (no udev runs
+  there); udev reads the rule at the first boot.
+
 ## 0.14.0
 
 Breaking release!
