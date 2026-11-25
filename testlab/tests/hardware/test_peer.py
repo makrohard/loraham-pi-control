@@ -568,7 +568,7 @@ def _fake_rns(monkeypatch, sent, box=None):
     monkeypatch.setitem(sys.modules, "LXMF", lxmf)
 
 
-BOXHEX = "6326b7e6a36b7912ba02bfc8260bfc77"            # the lab box's MeshChat LXMF address (2026-11-18)
+BOXHEX = "c0ffee00d15ea5e0b0a710ad5eed1e55"            # a made-up MeshChat LXMF address (never a real device's)
 BOXH = bytes.fromhex(BOXHEX)
 
 
@@ -951,6 +951,6 @@ def test_rns_exchange_ignores_an_announce_of_another_address(monkeypatch, tmp_pa
     assert "BOX-ANNOUNCE not heard" in capsys.readouterr().out and sent == []
 
 
-@pytest.mark.parametrize("dest", ["LHPC", "6326B7E6A36B7912BA02BFC8260BFC77", "6326b7e6", "6326b7e6a36b7912ba02bfc8260bfc77ff"])
+@pytest.mark.parametrize("dest", ["LHPC", "C0FFEE00D15EA5E0B0A710AD5EED1E55", "c0ffee00", "c0ffee00d15ea5e0b0a710ad5eed1e55ff"])
 def test_rns_exchange_refuses_a_box_address_that_is_not_32_hex(dest, tmp_path):
     assert peer.main(["rns-exchange", IN1, dest, "10", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"]) == 2

@@ -91,7 +91,7 @@ def exchange(monkeypatch, capsys, tmp_path, clock):
     monkeypatch.setattr(fake.time, "sleep", clock.sleep)
     monkeypatch.setenv(CTX, "tx")
     monkeypatch.setenv("RFPROOF_RNS_CONFIG", str(tmp_path / "rnsd"))
-    rc = fake.main(["rns-exchange", IN1, "6326b7e6a36b7912ba02bfc8260bfc77", "60", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"])
+    rc = fake.main(["rns-exchange", IN1, "c0ffee00d15ea5e0b0a710ad5eed1e55", "60", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"])
     return rc, capsys.readouterr().out
 
 
@@ -100,7 +100,7 @@ def test_rns_exchange_without_the_shared_rnsd_config_sends_nothing(monkeypatch, 
     monkeypatch.delenv("RFPROOF_RNS_CONFIG", raising=False)
     monkeypatch.setenv(CTX, "tx")
     (tmp_path / "go").write_text("")
-    assert fake.main(["rns-exchange", IN1, "6326b7e6a36b7912ba02bfc8260bfc77", "60", "d", OUT1, str(tmp_path / "go"), "1"]) == 1
+    assert fake.main(["rns-exchange", IN1, "c0ffee00d15ea5e0b0a710ad5eed1e55", "60", "d", OUT1, str(tmp_path / "go"), "1"]) == 1
     assert frames(capsys.readouterr().out) == []
 
 
