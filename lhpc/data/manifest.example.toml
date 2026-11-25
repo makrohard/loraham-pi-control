@@ -190,8 +190,8 @@ main = "loraham-daemon"
 
     [stack.component.source]
     path = "src/loraham-daemon"
-    pin_commit = "b231569f73f2358fa9ec070efe5aef507f2d54c5"
-    pin_tag = "v1.6.2"
+    pin_commit = "0492ce43426c7523c0c42699f72bab3073277118"
+    pin_tag = "v1.7.1"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "loraham-daemon-hardening"
@@ -272,8 +272,8 @@ main = "loraham-daemon"
     [stack.component.source]
     path = "src/RadioLib"
     # `--source pinned` adopts this pin; a bare install takes the binary channel above where published, else `pinned` — docs/cli.md § install.
-    pin_commit = "187ef24791c3d844939b2be13a68bd890bd04e4c"
-    pin_tag = "7.7.1-57-g187ef247"
+    pin_commit = "72be77dafe64ed10d8ade01b59744f684accf21c"
+    pin_tag = "8.0.0"
     remote = "https://github.com/jgromes/RadioLib"
     branch = "master"
 
@@ -346,8 +346,8 @@ main = "loraham-chat"
 
     [stack.component.source]
     path = "src/LoRaHAM_Daemon"
-    pin_commit = "b231569f73f2358fa9ec070efe5aef507f2d54c5"
-    pin_tag = "v1.6.2"
+    pin_commit = "0492ce43426c7523c0c42699f72bab3073277118"
+    pin_tag = "v1.7.1"
     remote = "https://github.com/makrohard/LoRaHAM_Daemon.git"
     branch = "main"
     local_dir = "LoRaHAM_Daemon"
