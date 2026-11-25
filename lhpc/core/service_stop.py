@@ -98,6 +98,19 @@ class StopOpsMixin:
                 release.append(b)
         return daemon_sid, release
 
+    def _member_daemons_to_release(self, stk, sid, members, exclude=()) -> list[tuple]:
+        """[(rid, daemon_stack_id, bands)] of the node members' daemons an owner's Stop releases: each member's own
+        radio band (its radio row, what its start launched), by the rule of the member's own Stop — only where no other
+        running dependent on that radio still needs it."""
+        out = []
+        for m in members:
+            mi = radio_start.daemon_inst(m)
+            mb = instances.radio_band(self, sid, mi)[0]
+            dsid, rel = self._daemon_bands_to_release(stk, sid, {mb} if mb else set(), mi, exclude=exclude)
+            if rel:
+                out.append((m, dsid, rel))
+        return out
+
     def _dep_stacks_to_release(self, stk, sid) -> list[str]:
         """Non-daemon dependency STACKS a stopping client no longer needs — stacks a component
         of `stk` depends on that are running with NO other running dependent (the stopping
@@ -237,6 +250,7 @@ class StopOpsMixin:
                 r for r in life.owned_records(_ri.NODE_ID, role=None, rid=_rid) if not r.get(instances.MEMBER_OF)]))
         _owner = not _member and self.stack_of(target) == _ri.STACK_ID and (_o := _rm.owner_record(self)) is not None \
             and _o.get("rid") == _rid and any(c.id == _ri.NODE_ID for _, c in items)   # a stop of the node, not MeshChat's
+        _mem = _rm.owner_members(self, _rid) if _owner else []        # read while the node runs (its records name them)
         # a member's whole-stack Stop: what its start ran (rns) + its own records, never the owner's clients (MeshChat)
         if _member and _target_is_stack:
             items = [(s, c) for s, c in items if c.id == _ri.NODE_ID or life.owned_records(c.id, rid=_rid)]
@@ -262,7 +276,8 @@ class StopOpsMixin:
                                                             inst, exclude=_deps_rel)   # N1: the apply's own calculation
                 for _b in _rel:
                     details.append(f"  [also stops] {_dsid} {_b} MHz: no other stack needs it")
-            _mem = _rm.owner_members(self, _rid) if _owner else []
+                for _m, _mdsid, _mrel in self._member_daemons_to_release(_stk, _psid, _mem, exclude=_deps_rel):
+                    details += [f"  [also stops] {_mdsid}@{_m} {_b} MHz: no other stack needs it" for _b in _mrel]
             details += [f"  [also disconnects] {_ri.STACK_ID}@{m}: a radio of this node" for m in _mem]      # B6 C4
             _leaves = _member and any(c.id == _ri.NODE_ID for _, c in items)   # B6 C3: what a member's Stop of rns does
             if _leaves:
@@ -436,6 +451,19 @@ class StopOpsMixin:
                              else f"{daemon_sid} {b} release NOT verified — {dres.summary}")))
                 details.append(f"  [{'stopped' if dres.ok else 'unverified'} daemon] "
                                f"{daemon_sid} {b}: no other stack needs it")
+        # An operator's Stop of the node's owner ends the memberships (above), so each member's daemon its own start
+        # pulled up is released as the member's own Stop would release it; a restart keeps the members and their
+        # daemons (its start reconciles them).
+        if own_ok and _owner and _operator and release_daemon and _target_is_stack:
+            for m, mdsid, mrel in self._member_daemons_to_release(_stk, sid, _mem):
+                for b in mrel:
+                    dres = self.stop(mdsid, apply=True, band=b, _operator=False, inst=radio_start.daemon_inst(m))
+                    results.append(CompResult(component=self.DAEMON_ID, stack=mdsid, action="stop",
+                        outcome=Outcome.STOPPED if dres.ok else Outcome.UNVERIFIED,
+                        summary=(f"released {mdsid}@{m} {b} (no other stack needs it)" if dres.ok
+                                 else f"{mdsid}@{m} {b} release NOT verified — {dres.summary}")))
+                    details.append(f"  [{'stopped' if dres.ok else 'unverified'} daemon] "
+                                   f"{mdsid}@{m} {b}: no other stack needs it")
         if not own_ok and not target_is_daemon and release_daemon and _target_is_stack:     # it released nothing: say so
             details.append("  [kept] daemon band(s) and dependency stacks: not released (this stop did not verify)")
         # A verified daemon stop clears the RX/TX activity window for the band(s) it served — a

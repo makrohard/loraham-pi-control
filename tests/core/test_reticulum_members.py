@@ -1025,3 +1025,79 @@ def test_a_band_daemon_stop_whose_member_does_not_leave_never_stops_the_node(box
         ("reticulum@r4", Outcome.UNVERIFIED), ("reticulum@r2", Outcome.BLOCKED)]
     assert "  [not attempted] dependent reticulum@r2: reticulum@r4 did not stop first" in res.details
     assert "  [blocked] loraham-daemon: a dependent is still running — daemon left up" in res.details
+
+
+def _band_release_spy(monkeypatch):
+    """Only the daemon's own band stop recorded, not run: [(band, rid)]; the daemon reachable. The dependents check is
+    the real one (an owner's Stop: the member's records already gone when its daemon is asked)."""
+    import types
+
+    from lhpc.core.service_base import ActionResult
+    released, real_stop = [], ControllerService.stop
+
+    def stop(self, target, apply=False, *a, **kw):
+        if kw.get("band"):
+            released.append((kw["band"], getattr(kw.get("inst"), "rid", "")))
+            return ActionResult(True, "stopped")
+        return real_stop(self, target, apply, *a, **kw)
+    monkeypatch.setattr(ControllerService, "stop", stop)
+    monkeypatch.setattr(ControllerService, "daemon_view", lambda self, b, rid="": types.SimpleNamespace(reachable=True))
+    return released
+
+
+def test_the_owners_stop_plan_names_the_member_daemon_it_releases(box, monkeypatch):
+    # red-before (3cbd363b): the plan named the disconnect, not the member's daemon its apply leaves or takes down
+    _owner_up(box)
+    _daemon_member(box)
+    released = _band_release_spy(monkeypatch)
+    plan = _stop(box, "r2", apply=False)
+    assert "  [also stops] daemon@r4 868 MHz: no other stack needs it" in plan.details, plan.details
+    assert released == [] and len(_member(box, "r4")) == 1
+
+
+def test_the_owners_stop_releases_the_daemon_its_member_brought_up(box, monkeypatch):
+    # red-before (3cbd363b, kit row 13): the owner's Stop ended the membership and left the member's daemon running
+    owner = _owner_up(box)
+    _daemon_member(box)
+    released = _band_release_spy(monkeypatch)
+    res = _stop(box, "r2")
+    assert res.ok, res.summary + "\n".join(res.details)
+    assert owner.wait(timeout=10) is not None and released == [("868", "r4")]
+    assert "  [stopped daemon] daemon@r4 868: no other stack needs it" in res.details, res.details
+    assert (_member(box, "r4"), _intent(box, "r4")) == ([], "")
+
+
+@pytest.mark.parametrize("on, want", [("r4", []), ("r1", [("868", "r4")])])
+def test_the_owners_stop_keeps_a_member_daemon_only_while_a_stack_on_that_radio_uses_it(box, monkeypatch, on, want):
+    # the member's radio decides: a stack on another radio's daemon never keeps the member's
+    import types
+    _owner_up(box)
+    _daemon_member(box)
+    real_insts = instances.running_insts
+    released = _release_spy(monkeypatch, "kiss")
+    monkeypatch.setattr(instances, "running_insts", lambda svc, d: [types.SimpleNamespace(rid=on)] if d == "kiss"
+                        else real_insts(svc, d))
+    plan = _stop(box, "r2", apply=False)
+    assert bool([d for d in plan.details if "daemon@r4" in d]) == bool(want), plan.details
+    res = _stop(box, "r2")
+    assert res.ok and released == want, (res.details, released)
+
+
+def test_the_owners_stop_releases_nothing_for_an_spi_member(box, monkeypatch):
+    # a member on its own radio's driver (no daemon) has no daemon to release
+    _owner_up(box)
+    assert cli.main(["stack", "start", "reticulum@r1", "--join", "--yes"]) == 0
+    released = _band_release_spy(monkeypatch)
+    plan = _stop(box, "r2", apply=False)
+    assert not [d for d in plan.details if "daemon@" in d], plan.details
+    res = _stop(box, "r2")
+    assert res.ok and released == [] and _member(box, "r1") == [], (res.details, released)
+
+
+def test_an_owner_restart_keeps_its_members_daemons(box, monkeypatch):
+    _owner_up(box)
+    _daemon_member(box)
+    released = _band_release_spy(monkeypatch)
+    res = box.svc.restart("reticulum", apply=True, inst=instances.copy_of(box.svc, "reticulum", "r2")[0])
+    assert res.ok, res.summary + "\n".join(res.details)
+    assert released == [] and _intent(box, "r4") == "r2"
