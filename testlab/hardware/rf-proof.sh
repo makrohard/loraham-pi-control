@@ -299,6 +299,46 @@ if count("-", "rns", "logs/rf-reticulum.log", out=False):
     for a in sys.argv[2:]:
         print("F", a.split(":")[0], "rns", "rf-reticulum.log", 0, "-", "LEGACY")'
 RUNTX="cd {RT} && ./venv/lhpc/bin/python -c '$TXC_PY'"
+# PCANN_PY <rid> <PC-ANNOUNCE UTC> <PC LXMF hash>: the PC's second announce as the box's radio heard it, read only: each RX line
+# of the radio's RF logs (<log>.1 + <log>, the product's parser) in [t - 2 s, t + 12 s] on the box clock that is an ANNOUNCE
+# (flags & 3 = 1) to the PC's LXMF hash, its destination by the header type (flags bit 6: HEADER_1 at [3:19], HEADER_2, as
+# the PC's rnsd re-sends a client's announce, at [19:35]; byte 0 = the RNode header). Prints `PCANN <ts> <log> <fields>` per
+# match and `WINDOW <lo> <hi> RX <n>`; never the hash.
+PCANN_PY='import calendar, os, sys, time
+from lhpc.core import rflog
+rid, t, dest = sys.argv[1], sys.argv[2], bytes.fromhex(sys.argv[3])
+def epoch(ts):
+    try:
+        e = calendar.timegm(time.strptime(ts[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return None
+    f = ts[19:].rstrip("Z")
+    return e + float(f) if f.startswith(".") else e
+def to_pc(h):
+    if len(h) < 35 or h[1] & 0x03 != 0x01:
+        return False
+    at = 19 if h[1] & 0x40 else 3
+    return h[at:at + 16] == dest
+a = epoch(t); lo, hi = a - 2, a + 12; n = 0; d = "logs/" + rid
+for name in sorted(os.listdir(d)) if os.path.isdir(d) else []:
+    if not (name.startswith("rf-") and name.endswith(".log")):
+        continue
+    for p in (d + "/" + name + ".1", d + "/" + name):
+        if not os.path.exists(p):
+            continue
+        with open(p, errors="replace") as f:
+            for ln in f:
+                r = rflog.parse_line(ln); e = epoch(r.get("ts") or "")
+                if r.get("dir") != "RX" or e is None or not lo <= e <= hi:
+                    continue
+                try:
+                    h = bytes.fromhex(r.get("hex") or "")
+                except ValueError:
+                    continue
+                n += 1
+                if to_pc(h):
+                    print("PCANN", r["ts"], name, "len=%d flags=0x%02x hops=%d header=%d" % (len(h), h[1], h[2], 2 if h[1] & 0x40 else 1))
+print("WINDOW", time.strftime("%H:%M:%S", time.gmtime(lo)), time.strftime("%H:%M:%S", time.gmtime(hi)), "RX", n)'
 USBLIST='for d in /sys/bus/usb/devices/[0-9]*-*; do case $d in *:*) continue;; esac; echo "${d##*/} $(cat $d/idVendor 2>/dev/null):$(cat $d/idProduct 2>/dev/null) dev=$(cat $d/devnum 2>/dev/null) ser=$(cat $d/serial 2>/dev/null)"; done'
 USBEV='USB disconnect|new (full|high|low|super)-speed USB|reset (full|high|low|super)-speed USB|over-current'
 rport() { local n=${2#r}; case "$n" in ''|*[!0-9]*) stop "rport: rid '$2'";; esac; echo $(( $1 + 133 * (n - 1) )); }   # a listed instance's port
@@ -656,7 +696,9 @@ dryout() { local w=$1 f=$2 c=$3 o; : > "$OUT/$f"
         [ "$o" = meshcore-webui ] && [ -e "$SCRATCH/dry-webui-stopped" ] && [ -z "${DRY_MC_WEBUI_STAYS:-}" ] || echo "OTHER $o"; done > "$OUT/$f";;
     *" stack stop meshcore-webui@"*) : > "$SCRATCH/dry-webui-stopped";;
     *'echo "MCID none"'*) case " ${DRY_NOMCID:-} " in *" $w "*) echo "MCID none";; *) echo "MCID yes";; esac > "$OUT/$f";;   # DRY_NOMCID=<box>...
-    *"$MCHASH_PY"*) echo "LXMF ${DRY_MCHASH:-00112233445566778899aabbccddeeff}" > "$OUT/$f";; esac; }   # another MeshCore client
+    *"$MCHASH_PY"*) echo "LXMF ${DRY_MCHASH:-00112233445566778899aabbccddeeff}" > "$OUT/$f";;
+    *"$PCANN_PY"*) { case " ${DRY_PCANNMISS:-} " in *" ${f%%-*} "*) ;; *) echo "PCANN dry rf-daemon.log";; esac   # DRY_PCANNMISS=<id>...
+      echo "WINDOW dry"; } > "$OUT/$f";; esac; }   # another MeshCore client
 frame() { echo "FRAME | $1 | $2"; drylog "FRAME $1 $2"; }
 dryframes() {   # dryframes <where> <command> <stdin>: the FRAME of a send form, from the command alone (never from a tx)
   local w=$1 c=$2 in=$3 send= base= rid='*' cls
@@ -1228,8 +1270,11 @@ rnsx() {   # rnsx <id> <tag> <box> <rid> <rnode key> <key>...: one exchange with
   # RNSANN: start (default) = MeshChat's start, which announces; call = one announce call to the running MeshChat; known = no
   # announce: the peer takes the box's path from the PC's shared rnsd (answered locally, no RF; absent: the exchange fails). One
   # announce is 2 frames on every radio of the node: LXMF delivery + audio call (MeshChat 45f89a8 meshchat.py:2073, :2080).
-  local id=$1 tg=$2 b=$3 r=$4 pk=$5; shift 5; local q=$1 x n1 n2 pr bh dest kn=()
-  [ "${RNSANN:-start}" != known ] || kn=(known)
+  local id=$1 tg=$2 b=$3 r=$4 pk=$5; shift 5; local q=$1 x n1 n2 pr bh dest kn=(1)
+  # kn: the box's LXMF announces of this phase the peer must HEAR before its second announce: the start's (1), + the call's
+  # (row 12: 2); known: none (0, the box's path from the shared rnsd)
+  [ "${RNSANN:-start}" != known ] || kn=(0 known)
+  [ "${RNSCALL:-0}" != 1 ] || kn=(2)
   local go=$SCRATCH/$tg-tx2.go pcd=$SCRATCH/$tg-pcdest.txt raw=$SCRATCH/$tg-lxmf.raw   # the peer's control files: private scratch, never the evidence
   n1=$(nonce); n2=$(nonce)
   # 1. launch: the exchange announces now, waits for the box's announce, and holds its message until the release file exists;
@@ -1255,8 +1300,6 @@ rnsx() {   # rnsx <id> <tag> <box> <rid> <rnode key> <key>...: one exchange with
   # the RNode's 2 control frames: the PC's second announce (the box's node runs now; it needs the PC's path) + a path request
   hpower "$pk" "$tg-rnode-power-2.txt"; tx "$pk" 2 control --reserve; for x in "$@"; do tx "$x" 1 control --reserve; done
   [ "${RNSCALL:-0}" != 1 ] || for x in "${@:2}"; do tx "$x" "$ANNF" control --reserve; done   # the announce call below
-  tx "$pk" 1 "$n1" -- X PC "$tg-tx2-go.txt" "LHPC_PROOF=$b:meshchat@$r printf '%s\n' '$n1' > $(shq "$go")"
-  [ "$MODE" = live ] || printf '%s\n' "$n1" > "$go" || stop "row $id: the dry release file"   # dry: right after its tx
   if [ "${RNSCALL:-0}" = 1 ]; then   # row 12: one announce call (the Announce button's), 10 s after MeshChat answers: the
     # start's own announce (its post step, about 3 s after the port answers) comes first. The port opens only after both
     # destinations are registered (MeshChat 45f89a8 meshchat.py:126, :151 before :2063), so the call is a later emission
@@ -1265,6 +1308,10 @@ rnsx() {   # rnsx <id> <tag> <box> <rid> <rnode key> <key>...: one exchange with
     [ "$XRC" = 0 ] || fail "row $id: MeshChat does not answer on 127.0.0.1:8790 within 60 s ($tg-meshchat.txt): no announce call"
     [ "$MODE" = dry ] || sleep 10
     RNSCT=$(date -u +%Y-%m-%dT%H:%M:%SZ); tx "$q" "$ANNF" control -- must "$b" "$tg-announce.txt" "$(form rt_announce)"; fi
+  # the release file only now, after the box's last announce call of this phase (row 12): the peer still sends its second
+  # announce only once it HEARD the box's expected announces (its count argument) and the box went quiet (peer.py QUIET_S)
+  tx "$pk" 1 "$n1" -- X PC "$tg-tx2-go.txt" "LHPC_PROOF=$b:meshchat@$r printf '%s\n' '$n1' > $(shq "$go")"
+  [ "$MODE" = live ] || printf '%s\n' "$n1" > "$go" || stop "row $id: the dry release file"   # dry: right after its tx
   RNSNOPATH=; if [ "${RNSSEND:-1}" = 1 ] && needs rt_send; then [ "$MODE" = dry ] || sleep 60; dest=$(cat "$pcd" 2>/dev/null || echo dry)
     [ "$MODE" = dry ] || [[ "$dest" =~ ^[0-9a-f]{32}$ ]] || stop "row $id: no PC destination hash"
     tx "$pk" 1 control --reserve   # the PC's delivery proof of the box's message: an RNode frame
@@ -1288,6 +1335,20 @@ rnsback() {   # rnsback <tag> [<where>]: the exchange's box -> peer word at the 
   XRC=$RNSRC; if [ -n "${2:-}" ]; then RNSB=" (box -> peer: in $2)"; elif ! needs rt_send; then RNSB=" (box -> peer NOT RUN: rt_send not confirmed)"
   elif [ -n "${RNSNOPATH:-}" ]; then RNSB=" (box -> peer NOT RUN: the node had no path to the PC, nothing sent)"
   else result "$1-peer.txt" "$RNSN2" || fail "not heard: $RNSN2"; RNSB=; fi; }
+pcann() {   # pcann <id> <box> <rid>: did the box's radio hear the PC's second announce? PCANN_PY on the box over the
+  # PC-ANNOUNCE time (the PC's UTC with ms) - 2 s .. + 12 s on the box clock: both NTP-synced, R0 records each box clock
+  # (R0-<b>-clock.txt) and the kit applies no skew bound, so the window's 2 s back / 12 s ahead hold it; the launch announce
+  # is >= 10 s earlier, outside. PCANN = the verdict words, PCHEARD = 1 when heard. The hash goes to the box's command only,
+  # as rt_send's dest does; the evidence ($id-pcann.txt) carries none
+  local id=$1 b=$2 r=$3 t d; PCHEARD=0
+  t=$(sed -n 's/^PC-ANNOUNCE again //p' "$OUT/$id-peer.txt" 2>/dev/null | head -n 1)
+  [[ "$t" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{3})?Z$ ]] || { PCANN="the PC sent no second announce"; return 0; }
+  d=$(cat "$SCRATCH/$id-pcdest.txt" 2>/dev/null); [ "$MODE" = live ] || d=00000000000000000000000000000000
+  [[ "$d" =~ ^[0-9a-f]{32}$ ]] || stop "row $id: no PC destination hash for the aired check"
+  X "$b" "$id-pcann.txt" "cd {RT} && ./venv/lhpc/bin/python -c '$PCANN_PY' $r $t $d"
+  [ "$XRC" = 0 ] || stop "$id-pcann.txt: the aired check ended $XRC"
+  if body "$id-pcann.txt" | grep -q '^PCANN '; then PCHEARD=1; PCANN="PC-ANNOUNCE heard by the box ($t)"
+  else PCANN="PC-ANNOUNCE NOT heard by the box ($t)"; fi; }
 row_rns() {   # row_rns <id> <box:KEY> <backend>: Reticulum + MeshChat on one box radio (868.5 SF8, the row's backend) <-> the RNode
   local id=$1 b=${2%%:*} k=${2#*:} be=$3
   needs $(rforms "$id") || { notrun_row "$id" "form not confirmed: $NEEDS_MISSING"; return 0; }
@@ -1310,9 +1371,12 @@ row_rns() {   # row_rns <id> <box:KEY> <backend>: Reticulum + MeshChat on one bo
     [ -n "$hc" ] || fail "row $id peer -> box: the kit's announce call at $RNSCT: API accepted, not heard on air"; fi
   REPORT "$id" "$(rowname "$id")" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "peer -> box" "yes: LXMF delivered (the box's proof) and stored$([ "${RNSCALL:-0}" != 1 ] || echo "; start's announce heard $ha (product), the kit's call heard on air $hc (button)")" "the RNode at $(getk "P_R$id-rnode" unrecorded) dBm" PASS
   leg "box->peer"   # the leg that runs now: a FAIL from here is its FAIL (runrow)
+  ! needs rt_send || { pcann "$id" "$b" "$r"; data "row $id: $PCANN"; }   # the PC's announce on air: the box's own RX
   if needs rt_send && [ -z "${RNSNOPATH:-}" ]; then rnsback "$id"
     REPORT "$id" "$(rowname "$id")" "$b ($r)" "868.5 MHz, SF8" "the RNode (the PC's shared rnsd)" "box -> peer" yes "$(getk "P_$q" as-is) dBm (as-is)" PASS
-  elif [ -n "${RNSNOPATH:-}" ]; then notrun "$id" box-\>peer "the node had no path to the PC, nothing sent"
+  elif [ -n "${RNSNOPATH:-}" ]; then   # heard and still no path: a path defect; not heard: the send could not be tried
+    [ "$PCHEARD" != 1 ] || fail "row $id box -> peer: $PCANN, yet the box's node had no path to the PC (a path defect)"
+    notrun "$id" box-\>peer "$PCANN, so the node had no path to the PC, nothing sent"
   else notrun "$id" box-\>peer "form not confirmed: rt_send"; fi
   undo_to "$m"; }
 row_5() { row_rns 5 "$1" spi; }       # the Zero's board radio, direct SPI (backend = spi saved there: hardware-proof.md)

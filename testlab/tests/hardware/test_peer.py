@@ -471,6 +471,8 @@ def _fake_rns(monkeypatch, sent, box=None):
             return (box or {}).get("paths", [])
     rns.Reticulum = Ret
     handlers = []
+    if box is not None:
+        box["handlers"] = handlers                               # a test's clock delivers the box's later frames through them
 
     class Transport:
         @staticmethod
@@ -526,16 +528,20 @@ def _fake_rns(monkeypatch, sent, box=None):
 
         def announce(self, h):
             ANNOUNCES.append(bool(heard))
+            if "clock" in (box or {}):
+                box.setdefault("at", []).append(box["clock"].t)  # when the PC announced, on the test's clock
             for x in handlers if not (box or {}).get("silent") and not heard else []:   # the box's announce: at once, once
                 for h in (box or {}).get("others", []):           # another node's announce, before the box's
                     x.received_announce(h, None, b"app")
-                x.received_announce(BOXH, None, b"app")
+                x.received_announce(BOXH, (box or {}).get("ident"), b"app")
                 heard.append(1)
 
         MAX_DELIVERY_ATTEMPTS = 5                                # LXMF 1.1.1's value
 
         def handle_outbound(self, m):
             sent.append((m, lxmf.LXMRouter.MAX_DELIVERY_ATTEMPTS))
+            if "clock" in (box or {}):
+                box.setdefault("sent_at", []).append(box["clock"].t)   # when the message went, on the test's clock
             for x in handlers if (box or {}).get("again") else []:   # another node, then the box once more (row 12: the call)
                 x.received_announce(bytes(16), None, b"app")
                 x.received_announce(BOXH, None, b"app")
@@ -575,6 +581,41 @@ class FastClock:
         self.t += s
 
 
+class EventClock(FastClock):
+    """FastClock that delivers the box's later frames at their times: events = [(t, destination hash | go file), ...]."""
+
+    def __init__(self, box, events):
+        self.t, self.box, self.events = 0.0, box, sorted(events)
+
+    def sleep(self, s):
+        self.t += s
+        while self.events and self.events[0][0] <= self.t:
+            _, dest = self.events.pop(0)
+            if isinstance(dest, pathlib.Path):                  # the runner's release file appears now
+                dest.write_text("")
+                continue
+            for x in list(self.box["handlers"]):
+                x.received_announce(dest, None if dest == bytes(16) else BOXID, b"app")
+
+
+BOXID = types.SimpleNamespace(hash=b"I" * 16)           # the box's identity: its LXMF and its audio-call destination share it
+BOXCALL = b"C" * 16                                     # the box's audio-call destination (MeshChat's second announce frame)
+
+
+def quiet_run(monkeypatch, capsys, tmp_path, announces, events, secs="30", go_at=None):
+    """One exchange on an EventClock, the go file there from the start or at `go_at`: (rc, output lines, the PC's announce
+    times, the messages sent)."""
+    sent, box = [], {"answers": True, "confirms": True, "ident": BOXID}
+    _fake_rns(monkeypatch, sent, box)
+    c = box["clock"] = EventClock(box, events + ([(go_at, tmp_path / "go")] if go_at is not None else []))
+    monkeypatch.setattr(peer.time, "monotonic", c.monotonic)
+    monkeypatch.setattr(peer.time, "sleep", c.sleep)
+    if go_at is None:
+        (tmp_path / "go").write_text("")
+    rc = peer.main(["rns-exchange", IN1, BOXHEX, secs, str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), announces])
+    return rc, capsys.readouterr().out.splitlines(), box["at"], sent
+
+
 @pytest.fixture
 def rns_sent(monkeypatch):
     sent, c = [], FastClock()
@@ -585,13 +626,13 @@ def rns_sent(monkeypatch):
 
 
 def test_rns_exchange_no_go_file_no_second_tx(rns_sent, tmp_path, capsys):
-    assert peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == peer.NOT_SEEN
+    assert peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"]) == peer.NOT_SEEN
     assert rns_sent == [] and "TX2-NOT-GATED" in capsys.readouterr().out   # the public path: the runner's own call form
 
 
 def test_rns_exchange_go_file_sends_once(rns_sent, tmp_path, capsys):
     (tmp_path / "go").write_text("")
-    peer.rns_exchange(IN1, BOXHEX, 5, str(tmp_path / "dest"), OUT1, str(tmp_path / "go"))
+    peer.rns_exchange(IN1, BOXHEX, 5, str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), 1)
     assert len(rns_sent) == 1 and "TX2-NOT-GATED" not in capsys.readouterr().out
 
 
@@ -601,7 +642,7 @@ def test_an_rnode_the_local_file_does_not_name_is_refused_before_anything_opens(
     monkeypatch.setattr(sys.modules["RNS"], "Reticulum", lambda **k: made.append("reticulum"))
     monkeypatch.delenv("PEER_rnode")
     with pytest.raises(RuntimeError, match="PEER_rnode is not set"):
-        peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+        peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"])
     assert made == [] and rns_sent == []
 
 
@@ -609,7 +650,7 @@ def test_rns_exchange_removes_its_scratch_config(rns_sent, monkeypatch, tmp_path
     made = []
     real = tempfile.mkdtemp
     monkeypatch.setattr(tempfile, "mkdtemp", lambda **k: made.append(real(dir=tmp_path, **k)) or made[-1])
-    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"])
     assert len(made) == 1 and not os.path.exists(made[0])
 
 
@@ -622,7 +663,7 @@ def test_rns_exchange_succeeds_only_with_the_boxs_message_and_its_delivery_proof
     monkeypatch.setattr(peer.time, "monotonic", c.monotonic)
     monkeypatch.setattr(peer.time, "sleep", c.sleep)
     (tmp_path / "go").write_text("")
-    assert peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == rc
+    assert peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"]) == rc
     assert " ".join(capsys.readouterr().out.splitlines()[-1].split()[:3]) == last
 
 
@@ -633,7 +674,7 @@ def test_rns_exchange_announces_again_after_the_boxs_announce_and_the_go_file(rn
     # gated like the message by the runner's go file (its TX checks passed again).
     if go:
         (tmp_path / "go").write_text("")
-    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"])
     assert want == ANNOUNCES and ("PC-ANNOUNCE again" in capsys.readouterr().out) == go
 
 
@@ -648,7 +689,7 @@ def test_the_client_config_carries_the_shared_rnsds_rpc_key(rns_sent, rnsd_confi
     (rnsd_config / "config").write_text("[reticulum]\n  share_instance = Yes\n" + rnsd)
     CONFIGS.clear()
     (tmp_path / "go").write_text("")
-    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"])
     assert len(CONFIGS) == 1 and [ln.strip() for ln in CONFIGS[0].splitlines() if "rpc_key" in ln] == [f"rpc_key = {want}"]
     out = capsys.readouterr()
     assert want not in out.out + out.err                                          # the key is never printed
@@ -660,7 +701,7 @@ def test_an_explicit_rpc_key_needs_no_transport_identity(rns_sent, rnsd_config, 
     (rnsd_config / "storage" / "transport_identity").unlink()
     CONFIGS.clear()
     (tmp_path / "go").write_text("")
-    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"])
     assert len(CONFIGS) == 1 and "  rpc_key = 00ff10ab\n" in CONFIGS[0]
 
 
@@ -686,14 +727,14 @@ def test_no_shared_rnsd_key_is_refused_before_anything_opens(rns_sent, rnsd_conf
     else:
         (rnsd_config / "storage" / "transport_identity").write_bytes(b"short")
     with pytest.raises(RuntimeError, match=why) as e:
-        peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+        peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"])
     assert made == [] and rns_sent == [] and hashlib.sha256(TRANSPORT_ID).hexdigest() not in str(e.value)
 
 
 def test_the_shared_rnsd_instance_comes_from_the_local_file(rns_sent, tmp_path):
     CONFIGS.clear()
     (tmp_path / "go").write_text("")
-    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"])
     assert len(CONFIGS) == 1 and [line.strip() for line in CONFIGS[0].splitlines() if "instance" in line] == [
         "share_instance = Yes", "instance_name = lab-rns", "shared_instance_port = 40001", "instance_control_port = 40002"]
 
@@ -710,7 +751,7 @@ def test_a_missing_or_malformed_rns_instance_is_refused_before_anything_opens(rn
     monkeypatch.setattr(tempfile, "mkdtemp", lambda **k: made.append("mkdtemp") or str(tmp_path / "scratch"))
     monkeypatch.setenv("PEER_rnode", f"rnode usb-Example_RNode-if00-port0 hub1 {fields}")
     with pytest.raises(RuntimeError, match=why):
-        peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+        peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"])
     assert made == [] and rns_sent == []
 
 
@@ -733,7 +774,8 @@ def test_rns_exchange_known_takes_the_boxs_path_from_the_shared_rnsd_only_when_c
     monkeypatch.setattr(peer.time, "monotonic", c.monotonic)
     monkeypatch.setattr(peer.time, "sleep", c.sleep)
     (tmp_path / "go").write_text("")
-    argv = ["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")] + (["known"] if known else [])
+    argv = ["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")] + (["0", "known"] if known
+                                                                                                   else ["1"])
     assert peer.main(argv) == rc
     out = capsys.readouterr().out
     assert box.get("asked", []) == asked and len(sent) == (1 if rc == 0 else 0)
@@ -743,7 +785,7 @@ def test_rns_exchange_known_takes_the_boxs_path_from_the_shared_rnsd_only_when_c
 def test_rns_exchange_message_sent_once_no_retries(rns_sent, tmp_path):
     # the opportunistic message goes with MAX_DELIVERY_ATTEMPTS 0 = exactly one send (no retry)
     (tmp_path / "go").write_text("")
-    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")])
+    peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"])
     assert [a for _m, a in rns_sent] == [0]
 
 
@@ -802,20 +844,16 @@ def test_rns_exchange_tells_the_box_by_its_lxmf_address_not_its_name(monkeypatch
     monkeypatch.setattr(peer.time, "monotonic", c.monotonic)
     monkeypatch.setattr(peer.time, "sleep", c.sleep)
     (tmp_path / "go").write_text("")
-    assert peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == 0
+    assert peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert "BOX-NAME Anonymous Peer" in out and any(ln.startswith("BOX-ANNOUNCE heard ") for ln in out)
 
 
 def test_rns_exchange_records_each_later_box_announce_by_the_pcs_second(monkeypatch, tmp_path, capsys):
-    # red-before (6e3b790b): only the box's first announce was kept; row 12 must also see its kit's call on air (a later one)
-    sent, c = [], FastClock()
-    _fake_rns(monkeypatch, sent, {"answers": True, "confirms": True, "again": True})
-    monkeypatch.setattr(peer.time, "monotonic", c.monotonic)
-    monkeypatch.setattr(peer.time, "sleep", c.sleep)
-    (tmp_path / "go").write_text("")
-    assert peer.main(["rns-exchange", IN1, BOXHEX, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == 0
-    out = capsys.readouterr().out.splitlines()
+    # red-before (6e3b790b): only the box's first announce was kept; row 12 must also see its kit's call on air (a later one).
+    # Another node's announce and then the box's call come 1 s in; the PC's second announce follows the box's last one
+    rc, out, _, _ = quiet_run(monkeypatch, capsys, tmp_path, "2", [(1.0, bytes(16)), (1.0, BOXH)])
+    assert rc == 0, out
     stamp = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
     names = [ln for ln in out if ln.startswith("BOX-NAME ")]
     heard = [ln for ln in out if ln.startswith("BOX-ANNOUNCE heard")]
@@ -823,7 +861,56 @@ def test_rns_exchange_records_each_later_box_announce_by_the_pcs_second(monkeypa
     assert names == ["BOX-NAME Anonymous Peer"], out
     assert len(heard) == 1 and re.fullmatch("BOX-ANNOUNCE heard " + stamp, heard[0]), out
     assert len(again) == 1 and re.fullmatch("BOX-ANNOUNCE again " + stamp, out[again[0]]), out    # the other node's: none
-    assert out.index("PC-ANNOUNCE again") < again[0], out
+    pc = [i for i, ln in enumerate(out) if re.fullmatch(r"PC-ANNOUNCE again \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z", ln)]
+    assert len(pc) == 1 and pc[0] > again[0], out                              # after the box's last announce, with ms
+
+
+def test_the_pcs_second_announce_waits_until_the_box_is_quiet_restarted_by_its_later_frame(monkeypatch, tmp_path, capsys):
+    # red-before (4078ef72, a21's kit run 00:01Z: row 12 box -> peer NO-PATH): the PC announced again at once after the box's
+    # announce and the go file, inside the box's second frame (its audio call, same identity): half duplex, lost. Now
+    # QUIET_S after the box's last frame of any destination of its identity: here the call's frame 2 s in restarts it
+    rc, out, at, sent = quiet_run(monkeypatch, capsys, tmp_path, "1", [(2.0, BOXCALL)])
+    assert rc == 0 and len(at) == 2 and sent, out
+    assert 2.0 + peer.QUIET_S <= at[1] < 2.0 + peer.QUIET_S + 1, at                       # within one poll of the quiet's end
+
+
+def test_the_pcs_second_announce_waits_for_the_expected_box_announces(monkeypatch, tmp_path, capsys):
+    # v3 B2: the go file can come before the PC hears the box's call (rt_announce returns on the request): with 2 expected,
+    # the quiet starts only at the second, though the first one's quiet ended long before it
+    rc, out, at, sent = quiet_run(monkeypatch, capsys, tmp_path, "2", [(5.0, BOXH)])
+    assert rc == 0 and len(at) == 2 and sent, out
+    assert 5.0 + peer.QUIET_S <= at[1] < 5.0 + peer.QUIET_S + 1, at
+
+
+def test_the_message_waits_until_the_pcs_second_announce_has_aired(monkeypatch, tmp_path, capsys):
+    # red-before (fa6a68bc, a21's kit run 00:58Z: row 12 NOT-DELIVERED): the message went right after the announce call; the
+    # shared rnsd forwards it at once but re-sends the announce only at its next check, so the announce aired after the
+    # message, into the box's delivery proof. Now the message waits ANNOUNCE_AIR_S after the announce
+    sent, box = [], {"answers": True, "confirms": True, "ident": BOXID}
+    _fake_rns(monkeypatch, sent, box)
+    c = box["clock"] = EventClock(box, [])
+    monkeypatch.setattr(peer.time, "monotonic", c.monotonic)
+    monkeypatch.setattr(peer.time, "sleep", c.sleep)
+    (tmp_path / "go").write_text("")
+    assert peer.main(["rns-exchange", IN1, BOXHEX, "30", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"]) == 0
+    assert len(box["at"]) == 2 and box["sent_at"][0] >= box["at"][1] + peer.ANNOUNCE_AIR_S, (box["at"], box["sent_at"])
+    # the wait itself, not only its constant: >= the rnsd's 1.0 s announce check + its 0.25 s job + toa(255 B) 0.723 s
+    assert peer.ANNOUNCE_AIR_S >= 2.0 and box["sent_at"][0] - box["at"][1] >= 2.0, (box["at"], box["sent_at"])
+
+
+def test_the_quiet_also_counts_from_the_go_file(monkeypatch, tmp_path, capsys):
+    # the go file follows the box's last announce of the phase, even a frame of it the PC did not hear: QUIET_S after it too
+    rc, out, at, sent = quiet_run(monkeypatch, capsys, tmp_path, "1", [], go_at=10.0)
+    assert rc == 0 and len(at) == 2 and sent, out
+    assert 10.0 + peer.QUIET_S <= at[1] < 10.0 + peer.QUIET_S + 1, at
+
+
+def test_a_box_announce_not_heard_holds_the_pcs_announce_and_its_message(monkeypatch, tmp_path, capsys):
+    # G1 279 B2: the release file alone (the runner's call returned) never lets the PC announce: the call's announce, not
+    # heard, keeps it back until the deadline, then nothing more is sent
+    rc, out, at, sent = quiet_run(monkeypatch, capsys, tmp_path, "2", [], secs="20")
+    assert rc == peer.NOT_SEEN and len(at) == 1 and sent == [], out
+    assert "PC-ANNOUNCE NOT SENT: 1 of 2 box announces heard" in out, out
 
 
 def test_rns_exchange_ignores_an_announce_of_another_address(monkeypatch, tmp_path, capsys):
@@ -832,10 +919,10 @@ def test_rns_exchange_ignores_an_announce_of_another_address(monkeypatch, tmp_pa
     monkeypatch.setattr(peer.time, "monotonic", c.monotonic)
     monkeypatch.setattr(peer.time, "sleep", c.sleep)
     (tmp_path / "go").write_text("")
-    assert peer.main(["rns-exchange", IN1, "ff" * 16, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == peer.NOT_SEEN
+    assert peer.main(["rns-exchange", IN1, "ff" * 16, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"]) == peer.NOT_SEEN
     assert "BOX-ANNOUNCE not heard" in capsys.readouterr().out and sent == []
 
 
 @pytest.mark.parametrize("dest", ["LHPC", "6326B7E6A36B7912BA02BFC8260BFC77", "6326b7e6", "6326b7e6a36b7912ba02bfc8260bfc77ff"])
 def test_rns_exchange_refuses_a_box_address_that_is_not_32_hex(dest, tmp_path):
-    assert peer.main(["rns-exchange", IN1, dest, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go")]) == 2
+    assert peer.main(["rns-exchange", IN1, dest, "5", str(tmp_path / "dest"), OUT1, str(tmp_path / "go"), "1"]) == 2

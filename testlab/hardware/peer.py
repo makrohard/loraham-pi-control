@@ -28,14 +28,16 @@ The runner holds an exclusive flock around every call, so two peers never act at
   peer.py mc-power      [<p>]          T-Deck Pro (BLE): tx power (with <p>: set, then the device query reads it back)
   peer.py mc-send       <nonce>        T-Deck Pro: one public-channel message
   peer.py mc-read       <nonce> <s>    T-Deck Pro: a channel or contact message with the nonce
-  peer.py rns-exchange  <nonce-in> <box-dest> <s> <dest-file> <nonce-out> <go-file> [known]   a client of the PC's shared rnsd:
+  peer.py rns-exchange  <nonce-in> <box-dest> <s> <dest-file> <nonce-out> <go-file> <n> [known]  a client of the PC's shared rnsd:
                                        announce, write the PC's LXMF destination hash to <dest-file>, wait for the box's announce
                                        (its display name; `BOX-ANNOUNCE heard <time>`, each later one `BOX-ANNOUNCE again
                                        <time>`), send <nonce-out> to it and wait for its delivery proof (the box's
                                        receipt: `DELIVERED <nonce-out> <time>`), and wait for an LXMF message carrying <nonce-in>;
                                        prints SEEN on it. The message, and right before it one more announce (`PC-ANNOUNCE
-                                       again`: the box's node now runs), go only once the runner has written <go-file> (after
-                                       its TX checks passed again), and exactly once (no retry); without it: `TX2-NOT-GATED`,
+                                       again <UTC ms>`: the box's node now runs; only once the box's <n> LXMF announces of
+                                       this phase were heard and the box was quiet QUIET_S), go only once the runner
+                                       has written <go-file> (after its TX checks passed again), and exactly once (no retry);
+                                       without it: `TX2-NOT-GATED`,
                                        NOT-SEEN. The client config carries the shared rnsd's RPC key (RFPROOF_RNS_CONFIG). `known`: no box announce is awaited; the box's path comes from
                                        the shared rnsd's path table (a request it answers locally, no RF); not cached there:
                                        `BOX-PATH not cached`, NOT-SEEN, and no request is sent (it would go out on the RNode)
@@ -59,7 +61,7 @@ ACTIONS = {"meshcom-power": ("tdeck", "power"), "meshcom-send": ("tdeck", "send"
            "mc-power": ("tdpro", "power"), "mc-send": ("tdpro", "send"), "mc-read": ("tdpro", "read"),
            "rns-exchange": ("rnode", "exchange")}
 ARGS = {"power": ("[<p>]",), "send": ("<nonce>",), "read": ("<nonce>", "<s>"),
-        "exchange": ("<nonce-in>", "<box-dest>", "<s>", "<dest-file>", "<nonce-out>", "<go-file>")}
+        "exchange": ("<nonce-in>", "<box-dest>", "<s>", "<dest-file>", "<nonce-out>", "<go-file>", "<n>")}
 
 
 def power_ok(act, v):
@@ -74,8 +76,8 @@ def usage_error(a):
     if not a or a[0] not in ACTIONS:
         return f"unknown action {a[0] if a else '(none)'}"
     kind, args = ACTIONS[a[0]][1], a[1:]
-    if kind == "exchange" and len(args) == 7 and args[6] == "known":     # the box's path from the shared rnsd
-        args = args[:6]
+    if kind == "exchange" and len(args) == 8 and args[7] == "known":     # the box's path from the shared rnsd
+        args = args[:7]
     want, ctx = ARGS[kind], os.environ.get(CTX, "")
     if kind == "power":
         if len(args) > 1 or (args and not power_ok(a[0], args[0])):
@@ -85,7 +87,8 @@ def usage_error(a):
         return None
     ok = len(args) == len(want) and all(
         re.fullmatch(r"\d+(\.\d+)?", v, re.ASCII) if w == "<s>" else NONCE.fullmatch(v) if w.startswith("<nonce")
-        else re.fullmatch(r"[0-9a-f]{32}", v, re.ASCII) if w == "<box-dest>" else True
+        else re.fullmatch(r"[0-9a-f]{32}", v, re.ASCII) if w == "<box-dest>"
+        else re.fullmatch(r"[0-9]", v, re.ASCII) if w == "<n>" else True
         for w, v in zip(want, args, strict=True))
     if not ok:
         return f"{a[0]}: {' '.join(want)} (a nonce: <a-z prefix> <8 hex>)"
@@ -434,7 +437,7 @@ def mc_read(nonce, secs):
     return hit[0] if hit else None
 
 
-def rns_exchange(inn, box_dest, secs, dest_file, out, go_file, known=False):
+def rns_exchange(inn, box_dest, secs, dest_file, out, go_file, announces, known=False):
     """One exchange through the PC's shared rnsd, in a scratch config removed afterwards; the local file must name the
     RNode peer (PEER_rnode) before anything is opened."""
     import shutil
@@ -444,7 +447,7 @@ def rns_exchange(inn, box_dest, secs, dest_file, out, go_file, known=False):
     key = rns_rpc_key(rns_config_dir())
     d = tempfile.mkdtemp(prefix="rfproof-rns-")
     try:
-        return rns_run(d, instance, key, inn, box_dest, secs, dest_file, out, go_file, known)
+        return rns_run(d, instance, key, inn, box_dest, secs, dest_file, out, go_file, announces, known)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -477,7 +480,24 @@ def rns_rpc_key(cfgdir):
     return RNS.Identity.full_hash(ident.get_private_key()).hex()
 
 
-def rns_run(d, instance, key, inn, box_dest, secs, dest_file, out, go_file, known=False):
+# The PC's second announce waits until the box has been quiet this long. The box's announce is 2 frames (LXMF delivery +
+# audio call) and the PC hears the first at its end: the second follows at once, <= toa(255 B) 0.723 s at 868.5 SF8 + CAD
+# + TX result (0.69 s measured end to end), and the box cannot hear while it transmits (half duplex): an announce of the
+# PC inside it is lost. 3 s >= 4x that; it runs inside the exchange's own deadline.
+QUIET_S = 3.0
+# The message waits this long after the PC's second announce: the shared rnsd re-sends a client's announce from its announce
+# table at its next check (RNS 1.5.4 Transport.py:254 announces_check_interval 1.0 s, :766) but forwards the message at once,
+# so the message went first and the announce after it, into the box's delivery proof (half duplex: a21's kit run 00:58Z).
+# >= 1.0 s + the 0.25 s job + toa(255 B) 0.723 s + CAD.
+ANNOUNCE_AIR_S = 3.0
+
+
+def tsms():
+    t = time.time()
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + f".{int(t % 1 * 1000):03d}Z"
+
+
+def rns_run(d, instance, key, inn, box_dest, secs, dest_file, out, go_file, announces, known=False):
     import LXMF
     import RNS
     with open(os.path.join(d, "config"), "w") as f:
@@ -489,7 +509,7 @@ def rns_run(d, instance, key, inn, box_dest, secs, dest_file, out, go_file, know
         raise RuntimeError("not attached to the shared rnsd (refusing to open the RNode port)")
     router = LXMF.LXMRouter(storagepath=os.path.join(d, "lxmf"))
     me = router.register_delivery_identity(RNS.Identity(), display_name="RFPROOF-PC")
-    hit, box = [], []
+    hit, box, last, anns = [], [], [], []   # last: each frame of the box's identity heard; anns: its LXMF announces
 
     def on_delivery(m):
         c = m.content.decode("utf-8", "replace") if isinstance(m.content, bytes) else str(m.content)
@@ -498,15 +518,20 @@ def rns_run(d, instance, key, inn, box_dest, secs, dest_file, out, go_file, know
     router.register_delivery_callback(on_delivery)
 
     class Ann:
-        aspect_filter = "lxmf.delivery"
+        aspect_filter = None                                 # every aspect: the box's audio-call frame is part of its announce
         receive_path_responses = known                       # `known`: the shared rnsd's cached announce of the box
 
         def received_announce(self, destination_hash, announced_identity, app_data):
+            ih = getattr(announced_identity, "hash", None)
             if destination_hash.hex() != box_dest:              # the box's LXMF address; its name only for the log
+                if box and ih is not None and ih == box[0][2]:  # another destination of the box's identity: its time only
+                    last.append(time.monotonic())
                 return
+            last.append(time.monotonic())
+            anns.append(last[-1])
             if not box:
                 print(f"BOX-NAME {LXMF.display_name_from_app_data(app_data) if app_data else '-'}")
-                box.append((ts(), destination_hash))
+                box.append((ts(), destination_hash, ih))
             else:                                                # each later one, by the PC's second (row 12: the call's)
                 print(f"BOX-ANNOUNCE again {ts()}")
     RNS.Transport.register_announce_handler(Ann())
@@ -531,9 +556,22 @@ def rns_run(d, instance, key, inn, box_dest, secs, dest_file, out, go_file, know
         print("TX2-NOT-GATED: no go file from the sheet, the message is not sent")
         return None
     # once more, now that the box's node runs (its announce came): the launch announce went out before MeshChat's start
-    # brought that node up, so it had no path to the PC for its own send
+    # brought that node up, so it had no path to the PC for its own send. Only once the box is quiet: all `announces` LXMF
+    # announces of this phase heard (row 12: the start's and the call's), then QUIET_S after its last frame heard and
+    # after the go file (it follows the box's last announce of the phase, even a frame not heard here)
+    seen = time.monotonic()
+
+    def quiet():
+        return len(anns) >= announces and time.monotonic() >= max(last[-1], seen) + QUIET_S
+    while time.monotonic() < end and not quiet():
+        time.sleep(0.5)
+    if not quiet():
+        print(f"PC-ANNOUNCE NOT SENT: {len(anns)} of {announces} box announces heard" if len(anns) < announces
+              else "PC-ANNOUNCE NOT SENT: the box did not go quiet")
+        return None
     router.announce(me.hash)
-    print("PC-ANNOUNCE again")
+    print(f"PC-ANNOUNCE again {tsms()}")
+    time.sleep(ANNOUNCE_AIR_S)                          # the announce on air alone, before the message (ANNOUNCE_AIR_S)
     dest = RNS.Destination(RNS.Identity.recall(box[0][1]), RNS.Destination.OUT, RNS.Destination.SINGLE, "lxmf", "delivery")
     msg = LXMF.LXMessage(dest, me, out, title="rfproof", desired_method=LXMF.LXMessage.OPPORTUNISTIC)
     done = []
@@ -578,7 +616,7 @@ def main(a):
     elif act == "mc-read":
         h = mc_read(nonce, float(a[2]))
     else:
-        h = rns_exchange(nonce, a[2], float(a[3]), a[4], a[5], a[6], a[7:] == ["known"])
+        h = rns_exchange(nonce, a[2], float(a[3]), a[4], a[5], a[6], int(a[7]), a[8:] == ["known"])
     if h:
         print(f"SEEN {nonce} {h}")
         return 0

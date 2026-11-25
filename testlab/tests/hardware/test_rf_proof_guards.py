@@ -1629,13 +1629,14 @@ def test_coverage_names_the_models_no_chosen_row_carries(tmp_path):
 def test_coverage_takes_each_rows_own_result_not_a_row_whose_id_ends_alike(tmp_path):
     # red-before (a21's kit run on 8e52a31e): covres matched "2|<direction>|" anywhere in the line, so row 2's COVERAGE
     # showed row 12's result (and row 1's row 11's); here row 12's box -> peer is NO-PATH, row 2's is rehearsed
-    r = dry(tmp_path, LANE="full", DRY_NOPATH="12-box-send")
+    r = dry(tmp_path, LANE="full", DRY_NOPATH="12-box-send", DRY_PCANNMISS="12")
     assert r.returncode == 0, r.stderr[-1500:]
     cov = [ln.split(" | ") for ln in r.stdout.splitlines() if ln.startswith("COVERAGE | ")]
     row = {i: [c for c in cov if c[3] == i] for i in ("2", "12")}
     assert row["2"] and row["12"], cov
     assert all(c[5] == "rehearsed" for c in row["2"]), row["2"]
-    assert [c[5:] for c in row["12"] if c[4] == "box -> peer"] == [["NOT RUN", "the node had no path to the PC, nothing sent"]]
+    assert [c[5:] for c in row["12"] if c[4] == "box -> peer"] == [
+        ["NOT RUN", "PC-ANNOUNCE NOT heard by the box (9999-12-31T23:59:59.500Z), so the node had no path to the PC, nothing sent"]]
 
 
 def test_coverage_takes_a_directions_own_result_not_one_whose_text_extends_it(tmp_path):

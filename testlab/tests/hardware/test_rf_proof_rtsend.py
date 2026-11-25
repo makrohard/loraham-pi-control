@@ -320,13 +320,84 @@ def test_row_13s_member_leg_passes_only_with_both_directions_delivered(tmp_path,
 
 
 def test_a_no_path_box_send_is_not_run_for_that_reason(tmp_path):
-    # red-before (d7f86ac8): row 12's NO-PATH box -> peer was NOT RUN as "form not confirmed: rt_send"
+    # red-before (d7f86ac8): row 12's NO-PATH box -> peer was NOT RUN as "form not confirmed: rt_send"; the reason now names
+    # the box's own RX of the PC's announce (here not heard: DRY_PCANNMISS)
+    from test_rf_proof_guards import dry
+    r = dry(tmp_path, LANE="full", DRY_NOPATH="12-box-send", DRY_PCANNMISS="12")
+    assert r.returncode == 0, r.stderr[-1500:]
+    (leg,) = _leg(r, 12, "box -> peer")
+    assert leg.endswith(" | NOT RUN: PC-ANNOUNCE NOT heard by the box (9999-12-31T23:59:59.500Z), so the node had no path to "
+                        "the PC, nothing sent"), leg
+    assert _leg(r, 5, "box -> peer")[0].endswith(" | DRY-PASS")
+
+
+# ---- the PC's second announce on air: the box's own RX of it (PCANN_PY, plan ROW12-PC-ANNOUNCE-QUIET v3 F2) --------------
+
+PCHASH = "ab" * 16                                          # the PC's LXMF hash (a test value; the real one is new per run)
+TID, BOXD = "11" * 16, "22" * 16                            # stand-ins: the rnsd's transport id, the box's LXMF address
+RX = 'rssi=-15.00 snr=12.00 len={n} band=868 hex={h} ascii="..."'
+
+
+def _frame(head, n):
+    """A frame as the box's daemon logs it: `head` (the RNode header byte, flags, hops, addresses) and zeros up to n bytes
+    (a21's kit run 00:01Z, box H r5 rf-daemon.log: the real layout and lengths; the payload is not needed)."""
+    return head + "00" * (n - len(head) // 2)
+
+
+def _pcann(tmp_path, lines, t="2026-11-25T00:02:10.500Z"):
+    """PCANN_PY as the box runs it (this repo's lhpc, the product's rflog parser) over logs/r5/rf-daemon.log = `lines`."""
+    from test_rf_proof_guards import source_only
+    r, _ = source_only(tmp_path, 'printf %s "$PCANN_PY"')
+    rt = tmp_path / "rt"
+    (rt / "logs" / "r5").mkdir(parents=True)
+    (rt / "logs" / "r5" / "rf-daemon.log").write_text("".join(ln + "\n" for ln in lines))
+    out = subprocess.run([sys.executable, "-c", r.stdout, "r5", t, PCHASH], cwd=rt, env={**os.environ, "PYTHONPATH": str(REPO)},
+                         capture_output=True, text=True, timeout=60, check=True).stdout
+    assert PCHASH not in out and TID not in out, out                       # the evidence carries no address
+    return out.splitlines()
+
+
+def test_the_aired_check_finds_the_pcs_announce_by_the_header_types_destination(tmp_path):
+    # the PC's rnsd re-sends a client's announce as HEADER_2 (flags 0x71: transport id at [3:19], dest at [19:35]), as the
+    # box's own announce reads tonight; HEADER_1 (0x01) carries the dest at [3:19]
+    h2 = _frame("9071" + "00" + TID + PCHASH, 236)
+    h1 = _frame("2001" + "00" + PCHASH, 236)
+    out = _pcann(tmp_path, [f"2026-11-25T00:02:10.230Z RX {RX.format(n=236, h=h2)}",
+                            f"2026-11-25T00:02:11.000Z RX {RX.format(n=236, h=h1)}"])
+    assert out == ["PCANN 2026-11-25T00:02:10.230Z rf-daemon.log len=236 flags=0x71 hops=0 header=2",
+                   "PCANN 2026-11-25T00:02:11.000Z rf-daemon.log len=236 flags=0x01 hops=0 header=1",
+                   "WINDOW 00:02:08 00:02:22 RX 2"], out
+
+
+def test_the_aired_check_counts_no_other_frame(tmp_path):
+    # tonight's lines in their layout: the PC's message (flags 0x00, LXMF DATA to the box: heard, not an announce), DATA to
+    # the PC's hash (not an announce either), the PC's
+    # hash at the HEADER_1 place of a HEADER_2 frame (there it is the transport id), another node's announce, the box's own
+    # TX of an announce to the PC's hash, and a PC announce outside [t - 2 s, t + 12 s]
+    lines = [f"2026-11-25T00:02:11.859Z RX {RX.format(n=228, h=_frame('2000' + '00' + BOXD, 228))}",
+             f"2026-11-25T00:02:11.900Z RX {RX.format(n=228, h=_frame('2000' + '00' + PCHASH, 228))}",
+             f"2026-11-25T00:02:12.000Z RX {RX.format(n=236, h=_frame('9071' + '00' + PCHASH + BOXD, 236))}",
+             f"2026-11-25T00:02:13.000Z RX {RX.format(n=236, h=_frame('9071' + '00' + TID + BOXD, 236))}",
+             "2026-11-25T00:02:10.230Z TX rssi=- snr=- len=236 outcome=ok band=868 hex=" + _frame("9071" + "00" + TID + PCHASH, 236)
+             + ' ascii="..."',
+             f"2026-11-25T00:02:08.400Z RX {RX.format(n=236, h=_frame('9071' + '00' + TID + PCHASH, 236))}",
+             f"2026-11-25T00:02:22.600Z RX {RX.format(n=236, h=_frame('9071' + '00' + TID + PCHASH, 236))}"]
+    assert _pcann(tmp_path, lines) == ["WINDOW 00:02:08 00:02:22 RX 4"]
+
+
+def test_a_no_path_box_send_after_the_box_heard_the_pcs_announce_is_a_fail(tmp_path):
+    # plan F2: heard by the box and still no path = a path defect (FAIL); not heard = the send could not be tried (NOT RUN,
+    # by that reason); a sent message is judged by its delivery as before, the check recorded
     from test_rf_proof_guards import dry
     r = dry(tmp_path, LANE="full", DRY_NOPATH="12-box-send")
     assert r.returncode == 0, r.stderr[-1500:]
     (leg,) = _leg(r, 12, "box -> peer")
-    assert leg.endswith(" | NOT RUN: the node had no path to the PC, nothing sent"), leg
-    assert _leg(r, 5, "box -> peer")[0].endswith(" | DRY-PASS")
+    assert leg.endswith(" | FAIL: row 12 box -> peer: PC-ANNOUNCE heard by the box (9999-12-31T23:59:59.500Z), yet the box's "
+                        "node had no path to the PC (a path defect)"), leg
+    ok = dry(tmp_path, LANE="full")
+    assert _leg(ok, 12, "box -> peer")[0].endswith(" | DRY-PASS")
+    assert "data: row 12: PC-ANNOUNCE heard by the box (9999-12-31T23:59:59.500Z)" in ok.stdout.splitlines()
+    assert "data: row 5: PC-ANNOUNCE heard by the box (9999-12-31T23:59:59.500Z)" in ok.stdout.splitlines()
 
 
 # ---- R0's prerequisite of the Reticulum rows: MeshChat's identity on each of their boxes ----------------------------------

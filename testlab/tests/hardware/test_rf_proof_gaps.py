@@ -78,10 +78,12 @@ def test_row_5_listens_before_the_meshchat_start_and_counts_its_announce(tmp_pat
     assert sum(1 for x in lines if x.startswith("  [dry] Z > 5-start.txt:")) == 1
 
 
-def test_row_12_calls_one_announce_after_the_release_once_meshchat_answers(tmp_path):
+def test_row_12_calls_one_announce_once_meshchat_answers_and_releases_the_pc_only_after_it(tmp_path):
     # red-before (8e52a31e, a21's kit run): row 12 had only MeshChat's start announce, which can lose its emission second to
-    # RNS's own path-response announce (nothing on air: BOX-ANNOUNCE not heard). Now one announce call after the release's
-    # go file, once MeshChat answers on its port (bounded); row 5 keeps the start announce alone
+    # RNS's own path-response announce (nothing on air: BOX-ANNOUNCE not heard). Now one announce call once MeshChat answers
+    # on its port (bounded); row 5 keeps the start announce alone. red-before (4078ef72, a21's kit run 00:01Z): the go file
+    # came before the call, so the PC's second announce could meet the call's frames; now the RNode's power check and the
+    # reserves stay before the call, the go file follows it
     d = dry(tmp_path)
     assert d.rc == 0, d.err[-2000:]
     lines = block(d.out, 12).splitlines()
@@ -90,7 +92,10 @@ def test_row_12_calls_one_announce_after_the_release_once_meshchat_answers(tmp_p
     go = next(i for i, x in enumerate(lines) if "12-tx2-go.txt" in x)
     up = [i for i, x in enumerate(lines) if x.startswith("  [dry] H > 12-meshchat.txt:")]
     an = [i for i, x in enumerate(lines) if x.startswith("  [dry] H > 12-announce.txt:")]
-    assert len(up) == 1 and len(an) == 1 and st < pw < go < up[0] < an[0], (st, pw, go, up, an)
+    assert len(up) == 1 and len(an) == 1 and st < pw < up[0] < an[0] < go, (st, pw, go, up, an)
+    ex = next(x for x in lines if "rns-exchange" in x and "[dry] PC > 12-peer.txt" in x)
+    assert ex.rstrip().endswith("12-tx2.go 2"), ex           # the peer awaits 2 box announces (the start's + the call's)
+    assert next(x for x in block(d.out, 5).splitlines() if "[dry] PC > 5-peer.txt" in x).rstrip().endswith("5-tx2.go 1")
     assert "seq 1 60" in lines[up[0]] and "/dev/tcp/127.0.0.1/8790" in lines[up[0]]
     assert re.match(r"TX \| H:r[0-9]+ \| 2 \| control \| must 12-announce\.txt", lines[an[0] - 1]), lines[an[0] - 1]
     assert "/api/v1/announce" in lines[an[0]]
