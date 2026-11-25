@@ -514,6 +514,15 @@ def validate_and_extract(tar_path, stage_dir, publish_roots) -> list:
                     shutil.copyfileobj(src, out, length=1 << 20)
                 os.chmod(target, 0o755 if (m.mode & 0o111) else 0o644)
                 files.append(name)
+            # The end marker ends the member loop, not the stream: tar pads its last record with
+            # zero bytes. Read on to EOF (closing the pipe early cut zstd off mid-write: EPIPE, a
+            # nonzero exit on an intact artifact) and require every byte after the marker to be zero.
+            while chunk := tf.fileobj.read(1 << 16):
+                if chunk.count(0) != len(chunk):
+                    raise BinaryInstallError("artifact has data after the tar end marker")
+                total += len(chunk)
+                if total > _MAX_TOTAL_BYTES:
+                    raise BinaryInstallError("artifact expands beyond the accepted size limit")
     finally:
         if proc.stdout:
             proc.stdout.close()
