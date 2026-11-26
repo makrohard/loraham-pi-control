@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Fixed
+
+- Stack stop: processes a component started that outlive their leader (same process group) get SIGTERM, then after a
+  grace (manifest `stop_group_grace`, default 5 s) SIGKILL, so a stop no longer leaves them running.
+
 ## 0.14.2
 
 - MeshCom-Firmware: bcc3b3ef8 -> 2dcac7d85 (v4.40a.11.22-26-g2dcac7d8), used by meshcom-firmware
