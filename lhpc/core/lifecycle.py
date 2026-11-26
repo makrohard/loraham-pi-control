@@ -30,6 +30,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import CLOCK_BOOTTIME, clock_gettime
 
 from . import (
     commands,
@@ -759,6 +760,95 @@ class Lifecycle:
             sleep(0.1)
         return self._group_members(pgid, sid) == []
 
+    # C1: a stopped component's process-group members that outlive its main process. Default grace (whole seconds,
+    # the floor of the rule max(5, 2 x the measured self-ended gap)), then SIGKILL rounds over fresh, anchored scans.
+    GROUP_GRACE_S = 5.0
+    GROUP_KILL_ROUNDS = 3
+    GROUP_KILL_WAIT_S = 1.0
+
+    @staticmethod
+    def _boot_ticks() -> int:
+        """Now on the clock of /proc/<pid>/stat starttime: CLOCK_BOOTTIME in clock ticks, rounded down."""
+        return int(clock_gettime(CLOCK_BOOTTIME) * os.sysconf("SC_CLK_TCK"))
+
+    @staticmethod
+    def _stat_ident(pid: int):
+        """(pgid, sid, starttime) of `pid` read from /proc now, or None when it cannot be read."""
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+            rest = stat[stat.rindex(")") + 2:].split()
+            return int(rest[2]), int(rest[3]), int(rest[19])
+        except (OSError, ValueError, IndexError):
+            return None
+
+    def _pidfd_kill(self, member: dict, pgid: int, sid: int):
+        """SIGKILL one scanned member through a pidfd: the fd names one process, and its identity is read again AFTER
+        the open, so a member that ended, or a pid now held by another process, is never signalled. True = sent,
+        False = ended or not the scanned process any more, None = no pidfd here (the caller fails closed)."""
+        try:
+            fd = os.pidfd_open(member["pid"])
+        except ProcessLookupError:
+            return False
+        except (OSError, AttributeError):
+            return None
+        try:
+            if self._stat_ident(member["pid"]) != (pgid, sid, member["starttime"]):
+                return False
+            try:
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
+            except ProcessLookupError:
+                return False
+            except (OSError, AttributeError):
+                return None
+            return True
+        finally:
+            os.close(fd)
+
+    def _end_group_survivors(self, rec: dict, comp: Component, t_bound: int):
+        """After a verified stop's main process ended: the members of its OWN process group still running get the
+        grace, then SIGKILL. Returns (status, killed, left, why): "none" (no survivor, or all ended within the grace),
+        "killed", "left" (not ended or not signalled: `why`), "unverified" (the group could not be listed).
+
+        Only pgid == sid == the record's pid (LHPC's own session, verified just before the SIGTERM at `t_bound`). A
+        scan is killed only with an ANCHOR in it: a member born before `t_bound` and still the same process when read
+        again after the scan. It kept the group's number allocated from its birth through the scan (Linux frees a pid
+        number only when no process holds it as pid, pgid or sid), so every member of that scan is ours. Each later
+        round needs its own anchor against the moved bound."""
+        n, sid = int(rec["pgid"]), int(rec["sid"])
+        scan = self._group_members(n, sid)
+        if scan is None:
+            return "unverified", [], [], "its process group could not be listed"
+        if not scan:
+            return "none", [], [], ""
+        grace = comp.stop_group_grace or self.GROUP_GRACE_S
+        if self._await_group_ceased(n, sid, grace, time.sleep):
+            return "none", [], [], ""
+        killed: list[int] = []
+        for _ in range(self.GROUP_KILL_ROUNDS):
+            scan = self._group_members(n, sid)          # fresh: a child forked during the grace is in it
+            if scan is None:
+                return "unverified", killed, [], "its process group could not be listed"
+            if not scan:
+                return "killed", killed, [], ""
+            t_r = self._boot_ticks()
+            if not any(m["starttime"] < t_bound and self._stat_ident(m["pid"]) == (n, sid, m["starttime"])
+                       for m in scan):
+                return "left", killed, [m["pid"] for m in scan], "no member provably predates the stop"
+            for m in scan:
+                sent = self._pidfd_kill(m, n, sid)
+                if sent is None:
+                    return "left", killed, [m["pid"] for m in scan], "no pidfd to signal them safely"
+                if sent:
+                    killed.append(m["pid"])
+            t_bound = t_r
+            if self._await_group_ceased(n, sid, self.GROUP_KILL_WAIT_S, time.sleep):
+                return "killed", killed, [], ""
+        scan = self._group_members(n, sid)
+        if scan is None:
+            return "unverified", killed, [], "its process group could not be listed"
+        return ("killed", killed, [], "") if not scan else \
+            ("left", killed, [m["pid"] for m in scan], "still running after SIGKILL")
+
     def _await_proc_ceased(self, pid: int, seconds: float, sleep=time.sleep) -> bool:
         """Bounded wait, in 0.1 s steps of `sleep`, for PROVEN cessation of `pid`."""
         for _ in range(round(seconds / 0.1)):
@@ -1477,7 +1567,7 @@ class Lifecycle:
                               "no owned process, but readiness endpoint(s) still present: "
                               f"{', '.join(lingering)}")
             return result(Outcome.ALREADY_STOPPED, "no owned process")
-        killed, notes, persisted, unverified = [], [], False, False
+        killed, notes, persisted, unverified, group_left = [], [], False, False, False
         ceased: list[dict] = []          # records whose process ceased (removed only
         stale: list[dict] = []           # after endpoint cessation is also confirmed)
         for rec in recs:
@@ -1496,6 +1586,7 @@ class Lifecycle:
                     notes.append(f"pid {rec['pid']}: unverified ({why}) — not signalled")
                     unverified = True
                 continue
+            t_bound = self._boot_ticks()        # C1: the leader is verified ours at this point
             try:
                 os.killpg(rec["pgid"], signal.SIGTERM)
             except OSError as exc:
@@ -1504,8 +1595,21 @@ class Lifecycle:
                 continue
             if self._wait_ceased(rec, comp.stop_timeout):
                 killed.append(rec["pid"])
-                notes.append(f"pid {rec['pid']}: stopped")
-                ceased.append(rec)
+                status, gkilled, gleft, why = self._end_group_survivors(rec, comp, t_bound)
+                grace = comp.stop_group_grace or self.GROUP_GRACE_S
+                if status == "unverified":
+                    notes.append(f"pid {rec['pid']}: stopped, but {why} — not verified")
+                    unverified = True
+                elif status == "left":
+                    notes.append(f"pid {rec['pid']}: stopped, but process-group member(s) did not end: "
+                                 f"{' '.join(map(str, gleft))} ({why})"
+                                 + (f"; SIGKILLed {' '.join(map(str, gkilled))}" if gkilled else ""))
+                    group_left = True
+                else:
+                    notes.append(f"pid {rec['pid']}: stopped" + (
+                        f"; {len(gkilled)} process-group member(s) outlived the SIGTERM by {grace:g} s: SIGKILLed "
+                        f"{' '.join(map(str, gkilled))}" if gkilled else ""))
+                    ceased.append(rec)
             else:
                 notes.append(f"pid {rec['pid']}: SIGTERM sent but cessation NOT verified")
                 persisted = True
@@ -1515,6 +1619,9 @@ class Lifecycle:
             return result(Outcome.STILL_RUNNING,
                           "process did not cease after SIGTERM (no SIGKILL) — "
                           "ownership retained", killed, notes)
+        if group_left:
+            return result(Outcome.STILL_RUNNING, "; ".join(n for n in notes if "did not end" in n)
+                          + " — ownership retained", killed, notes)
         if unverified:
             return result(Outcome.UNVERIFIED,
                           "an owned record could not be verified — ownership retained",
