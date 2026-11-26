@@ -174,6 +174,43 @@ def test_a_stale_record_gets_no_group_step(tmp_path, monkeypatch):
     assert res.outcome.value == "stopped" and seen == [], res.summary
 
 
+
+def _stop_world(life, monkeypatch, recs, ceased, survivors, endpoints_gone=True):
+    """stop() over stubbed records: `ceased[pid]` = the leader's SIGTERM wait answer, `survivors[pid]` = its
+    _end_group_survivors answer."""
+    monkeypatch.setattr(life, "owned_records", lambda *a, **k: [] if k.get("role") == "post" else [dict(r) for r in recs])
+    monkeypatch.setattr(life, "verify_owned", lambda rec: (True, ""))
+    monkeypatch.setattr(os, "killpg", lambda pg, sig: None)
+    monkeypatch.setattr(life, "_wait_ceased", lambda rec, t: ceased[rec["pid"]])
+    monkeypatch.setattr(life, "_end_group_survivors", lambda rec, comp, t: survivors[rec["pid"]])
+    monkeypatch.setattr(life, "_await_ready_endpoints_gone", lambda c, x: (endpoints_gone, [] if endpoints_gone else ["tcp:8011"]))
+    monkeypatch.setattr(life, "_remove_record", lambda rec: True)
+
+
+def test_a_partial_kill_then_an_unlistable_group_names_the_killed_pids(tmp_path, monkeypatch):
+    life = _life(tmp_path)
+    _stop_world(life, monkeypatch, [REC], {N: True}, {N: ("unverified", [4001], [], "its process group could not be listed")})
+    res = life.stop(COMP)
+    assert res.outcome.value == "unverified" and "SIGKILLed 4001" in res.summary, res.summary
+    assert any("SIGKILLed 4001" in d for d in res.details), res.details
+
+
+def test_a_kill_with_a_lingering_endpoint_names_the_killed_pids(tmp_path, monkeypatch):
+    life = _life(tmp_path)
+    _stop_world(life, monkeypatch, [REC], {N: True}, {N: ("killed", [4001], [], "")}, endpoints_gone=False)
+    res = life.stop(COMP)
+    assert res.outcome.value == "endpoint_still_present" and "SIGKILLed 4001" in res.summary, res.summary
+
+
+def test_an_earlier_records_kill_is_named_when_a_later_leader_persists(tmp_path, monkeypatch):
+    life = _life(tmp_path)
+    rec2 = {"pid": 5000, "pgid": 5000, "sid": 5000}
+    _stop_world(life, monkeypatch, [REC, rec2], {N: True, 5000: False}, {N: ("killed", [4001], [], "")})
+    res = life.stop(COMP)
+    assert res.outcome.value == "still_running", res.summary
+    assert "SIGKILLed 4001" in res.summary and "no SIGKILL)" not in res.summary, res.summary
+
+
 # ---- real processes -------------------------------------------------------------------------------------------------
 
 def _session(argv):
@@ -257,6 +294,24 @@ def test_no_pidfd_on_the_system_signals_nothing(tmp_path, monkeypatch):
         raise OSError(38, "Function not implemented")
     monkeypatch.setattr(os, "pidfd_open", nosys)
     assert life._pidfd_kill(_m(1, 0), 1, 1) is None
+
+
+@pytest.mark.wallclock("a real sleeping process; the pidfd send fails")
+@pytest.mark.parametrize("exc,want", [(OSError(1, "Operation not permitted"), None),
+                                      (ProcessLookupError(3, "No such process"), False)])
+def test_a_failed_pidfd_send_is_never_called_sent(tmp_path, monkeypatch, exc, want):
+    life = _life(tmp_path)
+    p = _session(["sleep", "30"])
+    try:
+        pgid, sid, start = Lifecycle._stat_ident(p.pid)
+
+        def fail(fd, sig):
+            raise exc
+        monkeypatch.setattr(signal, "pidfd_send_signal", fail)
+        assert life._pidfd_kill(_m(p.pid, start), pgid, sid) is want and p.poll() is None
+    finally:
+        p.kill()
+        p.wait(timeout=5)
 
 
 def test_an_ended_member_is_no_kill(tmp_path):

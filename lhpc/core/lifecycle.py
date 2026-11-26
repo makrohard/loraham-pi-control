@@ -1515,7 +1515,9 @@ class Lifecycle:
         returning a TYPED outcome.
 
         Record-driven: only a process whose full identity still matches an ownership
-        record is signalled (SIGTERM only). A matching but UNOWNED process is never
+        record is signalled: SIGTERM to its process group; members of that group still running
+        after the main process ended get a grace, then SIGKILL (the main process itself is never
+        SIGKILLed). A matching but UNOWNED process is never
         signalled (MANUAL_REQUIRED). A verified stop requires both process cessation
         AND disappearance of every `ready=true` endpoint — a lingering readiness
         endpoint yields ENDPOINT_STILL_PRESENT (record retained, not a green stop)."""
@@ -1568,6 +1570,12 @@ class Lifecycle:
                               f"{', '.join(lingering)}")
             return result(Outcome.ALREADY_STOPPED, "no owned process")
         killed, notes, persisted, unverified, group_left = [], [], False, False, False
+        gkilled_all: list[int] = []      # C1: every process-group member SIGKILLed by this stop, over all its records
+        left_killed: list[int] = []      # ... of them, the ones a "did not end" note already names
+
+        def sk(skip=()):
+            pids = [p for p in gkilled_all if p not in skip]
+            return f"; SIGKILLed {' '.join(map(str, pids))}" if pids else ""
         ceased: list[dict] = []          # records whose process ceased (removed only
         stale: list[dict] = []           # after endpoint cessation is also confirmed)
         for rec in recs:
@@ -1598,13 +1606,16 @@ class Lifecycle:
                 killed.append(rec["pid"])
                 status, gkilled, gleft, why = self._end_group_survivors(rec, comp, t_bound)
                 grace = comp.stop_group_grace or self.GROUP_GRACE_S
+                gkilled_all.extend(p for p in gkilled if p not in gkilled_all)
                 if status == "unverified":
-                    notes.append(f"pid {rec['pid']}: stopped, but {why} — not verified")
+                    notes.append(f"pid {rec['pid']}: stopped, but {why} — not verified"
+                                 + (f"; SIGKILLed {' '.join(map(str, gkilled))}" if gkilled else ""))
                     unverified = True
                 elif status == "left":
                     notes.append(f"pid {rec['pid']}: stopped, but process-group member(s) did not end: "
                                  f"{' '.join(map(str, gleft))} ({why})"
                                  + (f"; SIGKILLed {' '.join(map(str, gkilled))}" if gkilled else ""))
+                    left_killed.extend(gkilled)
                     group_left = True
                 else:
                     notes.append(f"pid {rec['pid']}: stopped" + (
@@ -1618,14 +1629,14 @@ class Lifecycle:
         # operator can still diagnose) — do not partially discard records.
         if persisted:
             return result(Outcome.STILL_RUNNING,
-                          "process did not cease after SIGTERM (no SIGKILL) — "
-                          "ownership retained", killed, notes)
+                          "main process did not cease after SIGTERM (the main process is never SIGKILLed)"
+                          + sk() + " — ownership retained", killed, notes)
         if group_left:
             return result(Outcome.STILL_RUNNING, "; ".join(n for n in notes if "did not end" in n)
-                          + " — ownership retained", killed, notes)
+                          + sk(left_killed) + " — ownership retained", killed, notes)
         if unverified:
             return result(Outcome.UNVERIFIED,
-                          "an owned record could not be verified — ownership retained",
+                          "an owned record could not be verified" + sk() + " — ownership retained",
                           killed, notes)
         # All owned processes ceased. A verified stop ALSO requires every ready=true
         # endpoint to be gone — only THEN are records/markers cleared. Poll with a bounded
@@ -1636,7 +1647,7 @@ class Lifecycle:
         if not gone:
             return result(Outcome.ENDPOINT_STILL_PRESENT,
                           f"process ceased but readiness endpoint(s) still present: "
-                          f"{', '.join(lingering)} — ownership retained", killed, notes)
+                          f"{', '.join(lingering)}" + sk() + " — ownership retained", killed, notes)
         gone_pids = {r["pid"] for r in ceased + stale}
         remove_failed = [rec for rec in ceased + stale + [m for m in members if m["pid"] in gone_pids]
                          if not self._remove_record(rec)]
@@ -1645,8 +1656,8 @@ class Lifecycle:
             # UNVERIFIED rather than a clean STOPPED, so the discrepancy is visible.
             notes.append(f"{len(remove_failed)} ownership record(s) could not be removed")
             return result(Outcome.UNVERIFIED,
-                          "processes ceased but ownership record removal failed — "
-                          "records retained", killed, notes)
+                          "processes ceased but ownership record removal failed" + sk()
+                          + " — records retained", killed, notes)
         return result(Outcome.STOPPED, "; ".join(notes) if notes else "no owned process", killed)
 
     def _cap_start_log(self, log: Path) -> None:

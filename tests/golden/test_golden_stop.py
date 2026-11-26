@@ -117,8 +117,8 @@ def test_process_that_does_not_cease(kiss_box, run_op, monkeypatch):
         "heads": ["[already_stopped] loraham-kiss-serial", "[still_running] loraham-kiss-tnc", "[kept] daemon"],
         "outcomes": [("loraham-kiss-serial", "already_stopped"),
                      ("loraham-kiss-tnc", "still_running")]}
-    assert run.res.details[-2] == ("  [still_running] loraham-kiss-tnc: process did not cease "
-                                   "after SIGTERM (no SIGKILL) — ownership retained")
+    assert run.res.details[-2] == ("  [still_running] loraham-kiss-tnc: main process did not cease "
+                                   "after SIGTERM (the main process is never SIGKILLed) — ownership retained")
     assert run.phases == STOP_LOCKS + SIGNAL
     assert run.files == {"added": [], "removed": [], "changed": []}
     assert box.owned() == ["loraham-kiss-tnc"] and box.tnc_alive()

@@ -89,7 +89,9 @@ def test_a_stop_sigkills_the_workers_that_outlive_its_sigterm_and_names_them(box
         stk = svc.stack("kiss")
         assert svc._lifecycle().record_launch(stk, stk.component("loraham-kiss-tnc"), p.pid, band="433",
                                               extra={"rid": "r3"})
-        _rc, out, _ = run("stop", "kiss@r3")
+        rc, out, _ = run("stop", "kiss@r3")
+        assert rc == 0, out
+        assert svc._lifecycle().owned_records("loraham-kiss-tnc", role=None) == [], out   # the record went with the stop
         assert all(_gone(w) for w in workers), out              # 0.14.2: alive -> "no instance claims it"
         assert "no instance claims it" not in out, out
         assert "SIGKILLed " + " ".join(map(str, sorted(workers))) in out, out   # the stop names what it killed
