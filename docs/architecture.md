@@ -256,7 +256,10 @@ leaves on disk and which test proves it: the [invariant table](#invariant-table)
   (`state/owned/<comp>__<band>__<pid>__<nonce>.json`: pid, start time, pgid, sid, executable, argv
   fingerprint). `Lifecycle.stop` re-reads `/proc` and signals only an LHPC-owned session leader
   whose identity still matches; any mismatch means no signal and a `manual_required` verdict with
-  the exact PID. It waits for verified cessation before clearing the record (no auto-SIGKILL).
+  the exact PID. It waits for verified cessation before clearing the record; the main process is never
+  SIGKILLed. Members of the stopped launch's own process group (pgid = sid = its pid) that outlive the main
+  process get a grace (`stop_group_grace`, default 5 s) and are then SIGKILLed through a pidfd, each only after
+  its identity is read again, and only from a scan that holds a member born before the SIGTERM.
 - **Path containment.** Every runtime write opens the runtime root and walks each parent with
   `O_DIRECTORY|O_NOFOLLOW`, so a symlink swapped in mid-operation cannot redirect a write; atomic
   writes fsync and `os.replace`; config, owned-record, journal and log leaves are opened
