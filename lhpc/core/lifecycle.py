@@ -838,7 +838,7 @@ class Lifecycle:
                 sent = self._pidfd_kill(m, n, sid)
                 if sent is None:
                     return "left", killed, [m["pid"] for m in scan], "no pidfd to signal them safely"
-                if sent:
+                if sent and m["pid"] not in killed:
                     killed.append(m["pid"])
             t_bound = t_r
             if self._await_group_ceased(n, sid, self.GROUP_KILL_WAIT_S, time.sleep):
@@ -1571,6 +1571,8 @@ class Lifecycle:
         ceased: list[dict] = []          # records whose process ceased (removed only
         stale: list[dict] = []           # after endpoint cessation is also confirmed)
         for rec in recs:
+            # C1: the bound is read BEFORE the verify: a verified leader proves its number N ours at t_bound
+            t_bound = self._boot_ticks()
             ok, why = self.verify_owned(rec)
             if not ok:
                 if self._original_ceased(rec):
@@ -1586,7 +1588,6 @@ class Lifecycle:
                     notes.append(f"pid {rec['pid']}: unverified ({why}) — not signalled")
                     unverified = True
                 continue
-            t_bound = self._boot_ticks()        # C1: the leader is verified ours at this point
             try:
                 os.killpg(rec["pgid"], signal.SIGTERM)
             except OSError as exc:

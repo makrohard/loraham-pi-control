@@ -8,6 +8,7 @@ import select
 import signal
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -145,6 +146,32 @@ def test_a_survivor_that_outlives_the_sigkill_rounds_is_left(tmp_path, monkeypat
     w = _world(life, monkeypatch, [[_m(4001, 900)]] * (rounds + 2), [False] * (rounds + 1))
     status, _killed, left, why = life._end_group_survivors(REC, COMP, T_BOUND)
     assert (status, left) == ("left", [4001]) and "after SIGKILL" in why and len(w.killed) == rounds
+    assert _killed == [4001]                                       # named once, however many rounds sent it
+
+
+def test_the_bound_is_read_before_the_leader_is_verified(tmp_path, monkeypatch):
+    # the verify after the bound proves the leader's number ours at the bound (no verify -> bound gap)
+    life = _life(tmp_path)
+    calls = []
+    monkeypatch.setattr(life, "owned_records", lambda *a, **k: [] if k.get("role") == "post" else [dict(REC)])
+    monkeypatch.setattr(life, "_boot_ticks", lambda: calls.append("bound") or 1)
+    monkeypatch.setattr(life, "verify_owned", lambda rec: calls.append("verify") or (False, "process gone"))
+    monkeypatch.setattr(life, "_original_ceased", lambda rec: False)
+    life.stop(COMP)
+    i = calls.index("bound")                                       # (the post-runner check verifies earlier)
+    assert calls[i + 1] == "verify", calls
+
+
+def test_a_stale_record_gets_no_group_step(tmp_path, monkeypatch):
+    life = _life(tmp_path)
+    seen = []
+    monkeypatch.setattr(life, "owned_records", lambda *a, **k: [] if k.get("role") == "post" else [dict(REC)])
+    monkeypatch.setattr(life, "verify_owned", lambda rec: (False, "process gone"))
+    monkeypatch.setattr(life, "_original_ceased", lambda rec: True)
+    monkeypatch.setattr(life, "_remove_record", lambda rec: True)
+    monkeypatch.setattr(life, "_end_group_survivors", lambda *a: seen.append(a) or ("none", [], [], ""))
+    res = life.stop(COMP)
+    assert res.outcome.value == "stopped" and seen == [], res.summary
 
 
 # ---- real processes -------------------------------------------------------------------------------------------------
@@ -167,6 +194,31 @@ def _gone(pid, bound=5.0):
         return open(f"/proc/{pid}/stat").read().rsplit(") ", 1)[1][0] == "Z"
     except OSError:
         return True
+
+
+ZOMBIE = r"""
+import os, time
+pid = os.fork()
+if pid == 0:
+    os._exit(0)
+time.sleep(0.3)
+print(pid, flush=True)
+while True: time.sleep(0.05)
+"""
+
+
+@pytest.mark.wallclock("a real leader keeps an unreaped child (a zombie) in its group")
+def test_a_zombie_member_is_no_member(tmp_path):
+    script = tmp_path / "zombie.py"
+    script.write_text(ZOMBIE)
+    p = _session([sys.executable, str(script)])
+    try:
+        zombie = int(p.stdout.readline())
+        assert Path(f"/proc/{zombie}/stat").read_text().rsplit(") ", 1)[1][0] == "Z"
+        assert [m["pid"] for m in Lifecycle._group_members(p.pid, p.pid)] == [p.pid]   # the zombie is not listed
+    finally:
+        p.kill()
+        p.wait(timeout=5)
 
 
 @pytest.mark.wallclock("a real sleeping process is signalled through its pidfd")
