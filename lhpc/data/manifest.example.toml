@@ -2326,8 +2326,8 @@ main = "meshcom-qemu"
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
     # The setup step fetches from this remote (--src), and a repo test keeps the two identical.
     path = "src/MeshCom-Firmware"
-    pin_commit = "bcc3b3ef8ba19314dc37bdbd68d98734b48a3a11"
-    pin_tag = "v4.40a.11.22-18-gbcc3b3ef"
+    pin_commit = "2dcac7d858719592f6edb8e6bac18d5988651893"
+    pin_tag = "v4.40a.11.22-26-g2dcac7d8"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
@@ -2734,8 +2734,8 @@ main = "meshcore-node"
     # openhop_core — so what is known-working is the upstream revision itself.
     [stack.component.source]
     path = "src/openhop-core"
-    pin_commit = "141d94492bd313e908b44379ace213cd2cf8e3f2"
-    pin_tag = "v1.0.10-457-g141d944"
+    pin_commit = "63f9d305a7de79b3356123c07fe7d2f8d3f1e448"
+    pin_tag = "v1.0.10-490-g63f9d30"
     remote = "https://github.com/openhop-dev/openhop_core.git"
     branch = "dev"
 
@@ -3045,8 +3045,8 @@ main = "meshcore-node"
     # (-t -p -j -D) are all present; it byte-compiles under Python 3.11 (LHPC supports >=3.11),
     # and the byte-compile build step above fails the BUILD with file+line if a future pin
     # regresses on 3.11.
-    pin_commit = "6d9547f5b2939c20acaf67379eff39ab3da0ccf2"
-    pin_tag = "v1.6.9"
+    pin_commit = "34355c914d7910f45f7e918bce8bb8b9865d0faf"
+    pin_tag = "v1.6.10"
     remote = "https://github.com/meshcore-dev/meshcore-cli.git"
     branch = "main"
 
@@ -3068,8 +3068,8 @@ main = "meshcore-node"
     path = "src/openhop-repeater"
     remote = "https://github.com/openhop-dev/openhop_repeater.git"
     branch = "dev"
-    pin_commit = "72266e24f5f62caeae49cbe75d02183f8ec6176c"
-    pin_tag = "1.1.4-179-g72266e2"
+    pin_commit = "98444069ee49d21aff1e2a4d67a53ae7c53fecaa"
+    pin_tag = "1.1.4-231-g9844406"
 
 [[stack]]
 id = "reticulum"
@@ -3833,8 +3833,8 @@ KIVY_HOME = "{runtime}/state/sideband/kivy"
 path = "src/sideband"
 remote = "https://github.com/markqvist/Sideband.git"
 branch = "main"
-pin_commit = "ef572b58e88ff4e4326d51778336922a53b2a03f"
-pin_tag = "2.2.0"
+pin_commit = "1d7670cbd16c6beb9b8f7c157eed565bf5ac6302"
+pin_tag = "2.3.1"
 [stack.component.process]
 exec_name = "sideband"
 [[stack.component.pre_steps]]
