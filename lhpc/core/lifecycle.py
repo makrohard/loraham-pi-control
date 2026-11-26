@@ -760,9 +760,10 @@ class Lifecycle:
             sleep(0.1)
         return self._group_members(pgid, sid) == []
 
-    # C1: a stopped component's process-group members that outlive its main process. Default grace (whole seconds,
-    # the floor of the rule max(5, 2 x the measured self-ended gap)), then SIGKILL rounds over fresh, anchored scans.
-    GROUP_GRACE_S = 5.0
+    # C1: a stopped component's process-group members that outlive its main process. Default grace 30 s: kept long on
+    # purpose, about 3 x the slowest measured full stop on a Pi Zero (10.8 s), far above every measured self-ended gap
+    # (0 s); a member that ends earlier ends the wait at once. Then SIGKILL rounds over fresh, anchored scans.
+    GROUP_GRACE_S = 30.0
     GROUP_KILL_ROUNDS = 3
     GROUP_KILL_WAIT_S = 1.0
 

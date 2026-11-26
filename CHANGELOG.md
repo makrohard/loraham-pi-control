@@ -5,7 +5,7 @@
 Fixed
 
 - Stack stop: processes a component started that outlive their leader (same process group) get SIGTERM, then after a
-  grace (manifest `stop_group_grace`, default 5 s) SIGKILL, so a stop no longer leaves them running.
+  grace (manifest `stop_group_grace`, default 30 s) SIGKILL, so a stop no longer leaves them running.
 
 ## 0.14.2
 

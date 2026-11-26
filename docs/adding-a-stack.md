@@ -140,7 +140,7 @@ global position ([GPS](gps.md)).
 
 **Slow stoppers** set `stop_timeout` (seconds the stop waits for the main process after its SIGTERM, 0 = 5 s,
 at most 600); `meshcore-node` uses `40.0`. A stop then gives the members of the component's process group that outlive
-the main process a grace (`stop_group_grace`, 0 = the lifecycle default of 5 s, at most 600) and SIGKILLs only those still
+the main process a grace (`stop_group_grace`, 0 = the lifecycle default of 30 s, at most 600) and SIGKILLs only those still
 running; set it for a component whose children save state after the main process has ended.
 
 ### Endpoints

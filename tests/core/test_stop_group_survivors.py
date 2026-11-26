@@ -82,6 +82,11 @@ def test_a_member_that_ends_within_the_grace_is_never_killed(tmp_path, monkeypat
     assert w.killed == [] and w.grace == [Lifecycle.GROUP_GRACE_S]
 
 
+def test_the_default_group_grace_is_long():
+    # the default stays well above the slowest measured full stop (10.8 s on a Pi Zero): 30 s
+    assert Lifecycle.GROUP_GRACE_S == 30.0
+
+
 def test_the_components_stop_group_grace_is_the_wait_used(tmp_path, monkeypatch):
     life = _life(tmp_path)
     w = _world(life, monkeypatch, [[_m(4001, 900)]], [True])

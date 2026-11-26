@@ -179,7 +179,7 @@ def test_stop_group_grace_in_range_ok_and_absent_is_the_default():
 
 
 def test_no_component_declares_a_stop_group_grace_in_the_shipped_manifest():
-    """Every component's group survivors get the lifecycle's measured default (GROUP_GRACE_S); a component
+    """Every component's group survivors get the lifecycle's default (GROUP_GRACE_S, 30 s); a component
     whose children save state after its main process ended declares its own — a decision, not a copy."""
     from lhpc.core.manifest import load_manifest
     assert {c.id: c.stop_group_grace for st in load_manifest() for c in st.components if c.stop_group_grace} == {}

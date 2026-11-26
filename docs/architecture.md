@@ -258,7 +258,7 @@ leaves on disk and which test proves it: the [invariant table](#invariant-table)
   whose identity still matches; any mismatch means no signal and a `manual_required` verdict with
   the exact PID. It waits for verified cessation before clearing the record; the main process is never
   SIGKILLed. Members of the stopped launch's own process group (pgid = sid = its pid) that outlive the main
-  process get a grace (`stop_group_grace`, default 5 s) and are then SIGKILLed through a pidfd, each only after
+  process get a grace (`stop_group_grace`, default 30 s) and are then SIGKILLed through a pidfd, each only after
   its identity is read again, and only from a scan that holds an anchor: a member born before the SIGTERM
   (first round) or before the previous round's scan (each later round), still the same process when read again.
 - **Path containment.** Every runtime write opens the runtime root and walks each parent with
