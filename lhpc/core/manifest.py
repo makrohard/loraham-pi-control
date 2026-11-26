@@ -329,6 +329,9 @@ def _validate_component(comp) -> None:
     if not (0.0 <= comp.stop_timeout <= 600.0):
         raise ManifestError(f"{cid}: stop_timeout must be between 0 and 600 seconds "
                             f"(got {comp.stop_timeout})")
+    if not (0.0 <= comp.stop_group_grace <= 600.0):
+        raise ManifestError(f"{cid}: stop_group_grace must be between 0 and 600 seconds "
+                            f"(got {comp.stop_group_grace})")
     for e in comp.endpoints:
         _validate_endpoint(cid, e)
     names = {p.name for p in comp.run_params}
@@ -927,6 +930,7 @@ def _parse_component(raw: dict) -> Component:
         readiness=raw.get("readiness", ""),
         readiness_timeout=float(raw.get("readiness_timeout", 0.0) or 0.0),
         stop_timeout=float(raw.get("stop_timeout", 0.0) or 0.0),
+        stop_group_grace=float(raw.get("stop_group_grace", 0.0) or 0.0),
         bin=raw.get("bin", ""),
         build_timeout=float(raw.get("build_timeout", 0.0) or 0.0),
         test_timeout=float(raw.get("test_timeout", 0.0) or 0.0),

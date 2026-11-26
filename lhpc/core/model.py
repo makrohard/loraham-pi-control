@@ -507,6 +507,10 @@ class Component:
                                           # its SIGTERM (0 = the lifecycle default, 5 s); raise it
                                           # for a process whose own graceful shutdown is longer
                                           # (the MeshCore repeater stops its plugin manager first)
+    stop_group_grace: float = 0.0         # seconds the members of its process group may outlive its
+                                          # stopped main process before the stop SIGKILLs them (0 = the
+                                          # lifecycle default, GROUP_GRACE_S); raise it for a component
+                                          # whose children save state after the main process has ended
     bin: str = ""                # built binary path (relative to source) for the 'is built' check
     build_timeout: float = 0.0   # per-component build timeout in seconds (0 = the service default);
                                  # raise it for a slow build on modest hardware (e.g. a venv + pip
