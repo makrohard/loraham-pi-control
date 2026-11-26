@@ -2533,8 +2533,8 @@ def create_app(service_factory: ServiceFactory | None = None) -> Flask:
         # On a stop, MANUAL_REQUIRED means "a foreign process is still running, kill it yourself"
         # — a WARNING (`stop` already returns ok=False). Start notes travel in the start job's
         # marker detail (banner hint) since the start became detached.
-        flash(f"{result.summary} {' '.join(result.details[:6])}",
-              "ok" if result.ok else "warn")
+        flash(f"{result.summary.replace('`', '') if op == 'stop' else result.summary} {' '.join(result.details[:6])}",
+              "ok" if result.ok else "warn")       # a stop's command hint (`lhpc kill ...`) reads as plain text
         if op == "stop" and not result.ok and service.stack(target) is not None:
             # A failed, timed-out or refused stop offers the Kill of THAT instance (A §2.12, W44; gate 2 finding 1).
             return _render_kill(target, "", failed=result, rid=rid)

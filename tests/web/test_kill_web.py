@@ -36,6 +36,20 @@ def test_the_confirm_names_the_processes(web, tmp_path):
     assert c.get("/kill/nosuch").status_code == 404
 
 
+def test_a_still_running_stops_kill_hint_reads_without_backticks(web, csrf, tmp_path, monkeypatch):
+    # the stop's summary names the instance's `lhpc kill` (CLI text); the web shows that command as plain text
+    import os
+    from lhpc.core.service_base import ActionResult
+    hint = ("Stop for 'kiss' is NOT fully verified — see details. A process is still running: "
+            "`lhpc kill kiss@r1` hard-stops it.")
+    monkeypatch.setattr(ControllerService, "stop", lambda self, *a, **k: ActionResult(False, hint))
+    c = web(cmdlines={os.getpid(): _kiss_argv(tmp_path)})
+    r = c.post("/action", data={"_csrf": csrf(c), "op": "stop", "target": "kiss@r1", "confirmed": "yes"})
+    page = r.get_data(as_text=True)
+    assert 'id="stop-failed"' in page and 'id="kill-form"' in page
+    assert "lhpc kill kiss@r1 hard-stops it" in page and "`lhpc kill" not in page
+
+
 def test_a_failed_stop_offers_the_whole_stack_kill(web, csrf, tmp_path):
     # A matching process LHPC does not own: the stop refuses (MANUAL_REQUIRED). A live pid: it has an identity.
     import os
