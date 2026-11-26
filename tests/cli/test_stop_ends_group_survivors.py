@@ -1,8 +1,9 @@
 """C1: `lhpc stack stop <stack>@<rid>` ends the members of the stopped component's own process group that outlive its
 main process (PLAN-C1-STOP-v2). The real tree here behaves as RNS 1.6.1's stamp workers do: the main process exits on
-SIGTERM through a Python handler, its workers were forked from a NON-main thread, so that handler never runs in them and
-they stay alive after the group's SIGTERM while they compute (CPython raises the signal in them only on a blocking
-call's EINTR), with the main process's argv."""
+SIGTERM through a Python handler, its workers were forked from a NON-main thread and stay alive after the group's SIGTERM
+while they compute, with the main process's argv. Whether the inherited handler runs in such a worker depends on the
+CPython version (3.14: never while it computes; 3.11: it runs and the worker exits), so the forking thread blocks SIGTERM
+before the fork: the workers outlive the SIGTERM on every version, as RNS's do on the box."""
 import os
 import select
 import signal
@@ -25,6 +26,7 @@ signal.signal(signal.SIGTERM, lambda s, f: os._exit(0))
 def work():
     while True: sum(range(1000))        # busy, as the stamp search: a blocking call would run the handler on EINTR
 def spawn():
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})   # inherited by the fork: the workers outlive the SIGTERM
     for _ in range(2): multiprocessing.get_context("fork").Process(target=work, daemon=True).start()
     print("ready", flush=True)
 threading.Thread(target=spawn).start()

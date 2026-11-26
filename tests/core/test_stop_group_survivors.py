@@ -342,6 +342,7 @@ signal.signal(signal.SIGTERM, lambda s, f: os._exit(0))
 def work():
     while True: sum(range(1000))
 def spawn():
+    signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})   # inherited: they outlive the SIGTERM on every CPython
     ps = [multiprocessing.get_context("fork").Process(target=work, daemon=True) for _ in range(2)]
     for p in ps: p.start()
     print(" ".join(str(p.pid) for p in ps), flush=True)
@@ -388,7 +389,7 @@ def test_a_slow_saving_leaders_child_gets_the_grace_from_the_leaders_end(tmp_pat
 
 
 @pytest.mark.needs_session
-@pytest.mark.wallclock("real workers forked from a non-main thread outlive the SIGTERM; a foreign session runs the same")
+@pytest.mark.wallclock("real workers forked from a non-main thread (SIGTERM blocked) outlive the SIGTERM; a foreign session runs the same")
 def test_the_stop_kills_its_own_workers_never_a_foreign_session_with_the_same_argv(tmp_path, monkeypatch):
     life = _life(tmp_path)
     monkeypatch.setattr(Lifecycle, "GROUP_GRACE_S", 0.5)
