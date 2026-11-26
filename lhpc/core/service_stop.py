@@ -485,8 +485,15 @@ class StopOpsMixin:
         if ok and apply and self.stack(target) is not None and _whole:
             for k in instances.marker_keys(self, target, inst):            # the copy's own, a radio daemon's own
                 _rr.clear_marker(self._paths, k)
+        nexts = [f"lhpc status {target}"]
+        if apply and not ok and self.stack(target) is not None and any(
+                getattr(r, "outcome", None) is Outcome.STILL_RUNNING for r in results):
+            # a process the stop could not end: name the operator's existing hard stop for this instance, never run it
+            kill = f"lhpc kill {instances.named(self, target, inst)}"
+            summary += f" A process is still running: `{kill}` hard-stops it."
+            nexts.append(kill)
         return ActionResult(ok, summary, details=details, results=tuple(results),
-                            next_commands=[f"lhpc status {target}"])
+                            next_commands=nexts)
 
     @invalidates_snapshot
     def restart(self, target: str, apply: bool = False, stop_owners: bool = False,

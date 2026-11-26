@@ -6,6 +6,7 @@ Fixed
 
 - Stack stop: members of a component's own process group that outlive its main process are SIGKILLed after a grace
   (manifest `stop_group_grace`, default 30 s), so a stop no longer leaves them running; the main process never is.
+- Stack stop: a stop that leaves a process running names that instance's hard stop, `lhpc kill <stack>@<rid>`.
 
 ## 0.14.2
 

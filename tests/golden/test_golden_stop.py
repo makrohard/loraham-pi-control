@@ -112,8 +112,9 @@ def test_process_that_does_not_cease(kiss_box, run_op, monkeypatch):
     monkeypatch.setattr(Lifecycle, "STOP_WAIT_S", 1)     # the bounded wait, shortened (prod: 5 s)
     run = run_op(box.root, lambda: box.svc.stop("kiss", apply=True))
     assert run.fields == {
-        "ok": False, "summary": "Stop for 'kiss' is NOT fully verified — see details.",
-        "data_keys": [], "next_commands": ["lhpc status kiss"],
+        "ok": False, "summary": "Stop for 'kiss' is NOT fully verified — see details. A process is still running: "
+                                "`lhpc kill kiss@r1` hard-stops it.",
+        "data_keys": [], "next_commands": ["lhpc status kiss", "lhpc kill kiss@r1"],     # the existing hard stop, named
         "heads": ["[already_stopped] loraham-kiss-serial", "[still_running] loraham-kiss-tnc", "[kept] daemon"],
         "outcomes": [("loraham-kiss-serial", "already_stopped"),
                      ("loraham-kiss-tnc", "still_running")]}
