@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.14.2
+
+- MeshCom-Firmware: bcc3b3ef8 -> 2dcac7d85 (v4.40a.11.22-26-g2dcac7d8), used by meshcom-firmware
+- openhop-core: 141d94492 -> 63f9d305a (v1.0.10-490-g63f9d30), used by meshcore-node
+- meshcore-cli: 6d9547f5b -> 34355c914 (v1.6.10), used by meshcore-cli
+- openhop-repeater: 72266e24f -> 98444069e (1.1.4-231-g9844406), used by openhop-repeater-src
+- sideband: ef572b58e -> 1d7670cbd (2.3.1), used by sideband
+
 ## 0.14.1
 
 Fixed
