@@ -82,10 +82,10 @@ def test_a_tabs_older_snapshot_never_overwrites_a_newer_choice_from_another_tab(
     assert b.locator(box).evaluate("d => d.open") == (not default)                       # B shows A's first choice
     a.locator(f"{box} > summary").click(position={"x": 6, "y": 8})                       # A: back, the newer choice
     a.wait_for_function(f"() => localStorage.getItem('{key}') === '{new}'")
-    b.evaluate("(old) => { sessionStorage.setItem('dashDetails', JSON.stringify({'starton-r3': old}));"
-               " location.reload(); }", int(old))                                       # dash.js's signature reload
-    b.wait_for_load_state("load")
-    b.wait_for_function(f"() => document.querySelector('{box}').open === {'false' if default else 'true'}")
+    with b.expect_navigation(wait_until="load"):                  # the RELOADED document's load, not the old one's
+        b.evaluate("(old) => { sessionStorage.setItem('dashDetails', JSON.stringify({'starton-r3': old}));"
+                   " location.reload(); }", int(old))                                   # dash.js's signature reload
+    b.wait_for_function(f"() => document.querySelector('{box}')?.open === {'false' if default else 'true'}")
     b.wait_for_timeout(300)                                                              # its toggle event has run
     assert b.evaluate(f"() => localStorage.getItem('{key}')") == new                     # the newer choice stays
     b.reload()
