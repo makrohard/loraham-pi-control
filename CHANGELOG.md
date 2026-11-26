@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.14.4
+
+- MeshCom-Firmware: 2dcac7d85 -> 5bca4703b (v4.40a.11.22-42-g5bca4703), used by meshcom-firmware
+- reticulum: e40191b3d -> f55c0c6ea (1.6.1-2-gf55c0c6e), used by rns
+- nomadnet: b2f852c9e -> c9dbc11d9 (1.5.1), used by nomadnet
+- lxmf: c3ff2d6dc -> 7dfc83535 (1.3.1), used by lxmd
+
 ## 0.14.3
 
 Fixed
