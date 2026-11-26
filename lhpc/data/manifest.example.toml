@@ -2326,8 +2326,8 @@ main = "meshcom-qemu"
     # EXTERNAL_RADIO_HOST/PORT/PASSWORD are the firmware's build surface.
     # The setup step fetches from this remote (--src), and a repo test keeps the two identical.
     path = "src/MeshCom-Firmware"
-    pin_commit = "2dcac7d858719592f6edb8e6bac18d5988651893"
-    pin_tag = "v4.40a.11.22-26-g2dcac7d8"
+    pin_commit = "5bca4703b237581d80c73bf8206fd42006624766"
+    pin_tag = "v4.40a.11.22-42-g5bca4703"
     remote = "https://github.com/icssw-org/MeshCom-Firmware.git"
     branch = "dev"
 
@@ -3117,8 +3117,8 @@ note = "Pins, chip, TCXO and PA settings come from the hardware setup chosen wit
 path = "src/reticulum"
 remote = "https://github.com/markqvist/Reticulum.git"
 branch = "master"
-pin_commit = "e40191b3d193b46b7f2d8a44424a594cd758839b"
-pin_tag = "1.5.5-1-ge40191b3"
+pin_commit = "f55c0c6ea618ebae33e7d3ab2e37b200ce0b0d81"
+pin_tag = "1.6.1-2-gf55c0c6e"
 [stack.component.process]
 exec_name = "loraham-rns-node"
 [stack.component.run_env]
@@ -3711,8 +3711,8 @@ note = "Interactive ncurses browser (needs a real TTY; no headless mode) — sta
 path = "src/nomadnet"
 remote = "https://github.com/markqvist/NomadNet.git"
 branch = "master"
-pin_commit = "b2f852c9e0efc68d89d9185939f42ec0c2fee125"
-pin_tag = "1.4.4"
+pin_commit = "c9dbc11d9d7cd314a2ab3207ddf9a1d0d4becf8b"
+pin_tag = "1.5.1"
 [stack.component.process]
 exec_name = "nomadnet"
 [[stack.component.pre_steps]]
@@ -3764,8 +3764,8 @@ note = "Propagation is OFF by default: enabling it on a duty-limited link is a d
 path = "src/lxmf"
 remote = "https://github.com/markqvist/LXMF.git"
 branch = "master"
-pin_commit = "c3ff2d6dc2f256daab896dadc044dd5a913ecbb7"
-pin_tag = "1.2.0"
+pin_commit = "7dfc8353541f46e1c5aceab4849136dc28bb7855"
+pin_tag = "1.3.1"
 [stack.component.process]
 exec_name = "lxmd"
 [[stack.component.pre_steps]]
