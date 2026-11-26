@@ -45,8 +45,8 @@ def test_re_bind_on_the_action_row_still_sends_its_form(flask_page, monkeypatch)
     from urllib.parse import parse_qs
     page, posts = flask_page()
     page.check("#hw-rebind input[name=port][value='1-2']")
-    page.click(".acts button:has-text('Re-bind')")
-    page.wait_for_load_state("load")
+    with page.expect_navigation(wait_until="load"):           # the posted form's page, not the one already loaded
+        page.click(".acts button:has-text('Re-bind')")
     assert [p for p, _ in posts] == ["/hardware/bind"]
     form = parse_qs(posts[0][1])
     assert form["rid"] == ["r3"] and form["port"] == ["1-2"] and form["_csrf"][0]

@@ -37,12 +37,12 @@ def test_a_lifecycle_action_travels_form_to_route_to_state(page, lab):
     page.goto(page.lab_base + "/testlab", wait_until="networkidle")
     scenario = lab.root / "state" / "testlab" / "scenario.json"
     page.check('input[name="name"][value="degraded"]')
-    page.click('button:has-text("Switch scenario")')
-    page.wait_for_load_state("networkidle")
+    with page.expect_navigation(wait_until="networkidle"):    # the posted form's page, not the one already loaded
+        page.click('button:has-text("Switch scenario")')
     assert '"degraded"' in scenario.read_text(), "the browser action did not reach the service"
     page.check('input[name="name"][value="healthy"]')
-    page.click('button:has-text("Switch scenario")')
-    page.wait_for_load_state("networkidle")
+    with page.expect_navigation(wait_until="networkidle"):    # the posted form's page, not the one already loaded
+        page.click('button:has-text("Switch scenario")')
     assert '"healthy"' in scenario.read_text()
 
 
@@ -662,8 +662,8 @@ def test_an_identity_refusal_lands_on_visibly_marked_name_rows(page):
     sec = page.locator("#stack-settings-meshcore")
     sec.locator("select[name=f_mode]").first.select_option("repeater")
     sec.locator("input[name=f_repeater_name]").first.fill("")
-    sec.locator("button:has-text('Save')").first.click()
-    page.wait_for_load_state("networkidle")
+    with page.expect_navigation(wait_until="networkidle"):    # the posted form's page, not the one already loaded
+        sec.locator("button:has-text('Save')").first.click()
     assert "bad=" in page.url, page.url
     page.wait_for_selector("#stack-settings-meshcore[open] tr.field-bad input[name='f_repeater_name']", timeout=15000)
     marked = page.evaluate(
@@ -681,8 +681,8 @@ def test_the_install_confirm_offers_no_pin_override(page):
     """The normal install confirmation of a stack carries no `accept_pin_mismatch` control (the
     override is removed; a page an older console served must not bring it back)."""
     page.goto(page.lab_base + "/stacks?open=kiss&inst=kiss", wait_until="networkidle")
-    page.locator('#stack-install-kiss form:has(input[name="op"][value="install"]) button').first.click()
-    page.wait_for_load_state("networkidle")
+    with page.expect_navigation(wait_until="networkidle"):    # the confirm page, not the one already loaded
+        page.locator('#stack-install-kiss form:has(input[name="op"][value="install"]) button').first.click()
     assert page.url.endswith("/action"), "the Install button did not reach the confirm page"
     assert page.locator('input[name="confirmed"][value="yes"]').count() >= 1, "no confirm form"
     assert page.locator('input[name="accept_pin_mismatch"]').count() == 0
