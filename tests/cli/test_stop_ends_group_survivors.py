@@ -3,7 +3,7 @@ main process (PLAN-C1-STOP-v2). The real tree here behaves as RNS 1.6.1's stamp 
 SIGTERM through a Python handler, its workers were forked from a NON-main thread and stay alive after the group's SIGTERM
 while they compute, with the main process's argv. Whether the inherited handler runs in such a worker depends on the
 CPython version (3.14: never while it computes; 3.11: it runs and the worker exits), so the forking thread blocks SIGTERM
-before the fork: the workers outlive the SIGTERM on every version, as RNS's do on the box."""
+before the fork: the workers outlive the SIGTERM on every version (RNS 1.6.1's did on CPython 3.14.10, PROOF-RNS161)."""
 import os
 import select
 import signal
