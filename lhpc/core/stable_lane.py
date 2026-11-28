@@ -344,7 +344,7 @@ def keeps(run, paths, src, comp, remote: str, selector: str, frozen: str) -> str
     if not target or comp.source.artifact:
         return ""
     installed = assess(run, src)
-    mirror = fetch_history(run, remote, comp.source.branch, paths)[0]
+    mirror = fetch_history(run, remote, comp.source.lane_branch(selector), paths)[0]
     if installed and contains(run, mirror, src, installed, target):
         return f"already holds the {selector} target {target[:9]}"
     how = classify(run, mirror, installed, target) if installed else None
@@ -371,7 +371,7 @@ def update_gate(run, paths, items, source: str, remote_of):
         if path in done or c.source.artifact or not source_fs.source_present(paths, src := paths.resolve_source(path)):
             continue
         done.add(path)
-        remote, branch = remote_of(c), c.source.branch
+        remote, branch = remote_of(c), c.source.lane_branch(lane)
         if lane == "stable":
             ref = refs[path] = target(remote, branch)
             if why := update_refusal(ref):

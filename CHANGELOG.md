@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+Changed
+
+- Meshtastic's dev lane builds upstream `develop` (tip of tree) instead of `master`.
+
 ## 0.14.4
 
 - MeshCom-Firmware: 2dcac7d85 -> 5bca4703b (v4.40a.11.22-42-g5bca4703), used by meshcom-firmware

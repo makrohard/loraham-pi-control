@@ -464,7 +464,7 @@ def _validate_graph(stacks: tuple[Stack, ...]) -> None:
         if not c.source or not c.source.path:
             continue
         ident = (c.source.artifact, c.source.pin_commit, c.source.pin_tag,
-                 c.source.branch, c.source.remote)
+                 c.source.branch, c.source.dev_branch, c.source.remote)
         prev = by_path.get(c.source.path)
         if prev is None:
             by_path[c.source.path] = (cid, ident)
@@ -472,7 +472,7 @@ def _validate_graph(stacks: tuple[Stack, ...]) -> None:
             raise ManifestError(
                 f"components {prev[0]!r} and {cid!r} share source path "
                 f"{c.source.path!r} but declare different source specs "
-                "(pin/tag/branch/remote/artifact must be identical)")
+                "(pin/tag/branch/dev_branch/remote/artifact must be identical)")
 
     # PROXY PAGE IDS: one proxied web page per component with a client http/https endpoint; a
     # stack's first page keeps the stack id, further ones are `<stack_id>-<component_id>`
@@ -1165,12 +1165,15 @@ def _parse_source(raw: dict | None) -> SourceSpec | None:
         # root. Refuse rather than accept a key that would silently mean nothing.
         raise ManifestError("source.strategy is not a manifest field — every managed source is "
                             "a clone under the runtime root; remove it")
+    if not isinstance(raw.get("dev_branch", ""), str):
+        raise ManifestError("source.dev_branch must be a string (the branch the dev selector follows)")
     return SourceSpec(
         path=raw.get("path", ""),
         pin_commit=raw.get("pin_commit", ""),
         pin_tag=raw.get("pin_tag", ""),
         remote=raw.get("remote", ""),
         branch=raw.get("branch", ""),
+        dev_branch=raw.get("dev_branch", ""),
         local_dir=raw.get("local_dir", ""),
         artifact=bool(raw.get("artifact", False)),
     )

@@ -2019,6 +2019,19 @@ def test_fallback_dev_branch_mismatch_blocks(tmp_path, make_repo, installer):
     assert action.status == "failed" and "does not satisfy" in action.detail
 
 
+@pytest.mark.parametrize("on, ok", [("develop", True), ("main", False)])
+def test_fallback_dev_checkout_must_be_on_the_dev_branch(tmp_path, git, make_repo, installer, on, ok):
+    # `dev_branch` (not `branch`) is the branch a dev fallback checkout must be on
+    inst = installer(search_root=tmp_path / "rt")
+    make_repo(tmp_path / "rt" / "app-src", {"f": "x"})
+    git(tmp_path / "rt" / "app-src", "checkout", "-q", "-B", on)
+    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
+                     source=SourceSpec(path="src/app", local_dir="app-src", branch="main", dev_branch="develop"))
+    action = inst.adopt_source(comp, source="dev")
+    assert (action.status == "done") is ok, action.detail          # RED before: a develop checkout refused
+    assert ok or "does not satisfy" in action.detail
+
+
 def test_host_test_blocked_by_held_source_lock(tmp_path):
     from lhpc.core import reslock
     paths = Paths(runtime_root=tmp_path)

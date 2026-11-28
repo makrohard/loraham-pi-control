@@ -1364,7 +1364,8 @@ main = "meshtastic"
     # A NORMAL managed Git source, so Meshtastic gets the ordinary pinned / stable / dev selectors
     # and the existing Check / Update / Build flows — no bespoke update path. `pinned` (the
     # known-working line) follows the latest STABLE release tag of master (v2.8.x are
-    # prereleases); `dev` clones and builds the master tip. Both are proven on the Zero 2W by
+    # prereleases), as `stable` does (`branch`); `dev` clones and builds the develop tip
+    # (`dev_branch`, upstream's tip of tree). The pinned line is proven on the Zero 2W by
     # the release test matrix (native build, uputronics dual HAT, 868 up + region applied).
     # The config template still ships WITH lhpc (config_file.base = {asset}/…), so nothing is
     # cloned merely to read a yaml.
@@ -1374,6 +1375,7 @@ main = "meshtastic"
     pin_tag = "v2.7.26.54e0d8d"
     remote = "https://github.com/meshtastic/firmware.git"
     branch = "master"
+    dev_branch = "develop"
     local_dir = "meshtastic-firmware"
 
     [stack.component.process]

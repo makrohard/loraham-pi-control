@@ -804,8 +804,8 @@ class Installer:
         def _unavailable(why: str) -> str:
             # `dev` NEVER silently uses a different ref: when the configured branch cannot be
             # obtained (clone failed, local fallback not on it), the SELECTOR is unavailable.
-            if source == "dev" and spec.branch and not spec.artifact:
-                return (f"selector unavailable: branch {spec.branch!r} could not be obtained "
+            if source == "dev" and spec.dev_branch and not spec.artifact:
+                return (f"selector unavailable: branch {spec.dev_branch!r} could not be obtained "
                         f"({why}) — active source untouched")
             return f"{why} — active source untouched"
 
@@ -905,9 +905,9 @@ class Installer:
                 return False
             r = run(["git", "-C", str(local), "describe", "--tags", "--exact-match"], 5.0)
             return r.returncode == 0 and r.stdout.strip() == spec.pin_tag
-        if source == "dev" and spec.branch:
+        if source == "dev" and spec.dev_branch:
             r = run(["git", "-C", str(local), "rev-parse", "--abbrev-ref", "HEAD"], 5.0)
-            return r.returncode == 0 and r.stdout.strip() == spec.branch
+            return r.returncode == 0 and r.stdout.strip() == spec.dev_branch
         return True                               # dev with no branch: documented permissive
 
     def _path_bins(self, source_path: str) -> set:
@@ -2625,8 +2625,8 @@ class Installer:
             # STRICT branch semantics: with a configured branch, `--branch` makes git fail
             # when it does not exist — dev NEVER silently falls back to another ref.
             argv = ["git", "clone", "--depth", "1"]
-            if spec.branch:
-                argv += ["--branch", spec.branch]
+            if spec.dev_branch:
+                argv += ["--branch", spec.dev_branch]
             argv += [remote, str(dest)]
             ok = clone(argv, timeout=self._CLONE_TIMEOUT_S).returncode == 0 and dest.exists()
         elif source == "stable":
@@ -2653,7 +2653,7 @@ class Installer:
                                         "rev-parse")
                             ok = head.returncode == 0 and head.stdout.strip() == pin
                 else:                       # dev
-                    ref = spec.branch or ""
+                    ref = spec.dev_branch or ""
                     ok = (not ref or
                           step(["git", "-C", str(dest), "checkout", ref],
                                self._CHECKOUT_TIMEOUT_S, f"checkout {ref}").returncode == 0)

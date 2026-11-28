@@ -7,7 +7,7 @@ start is refused.
 | | |
 |---|---|
 | Components | `meshtastic` (main) · `meshtastic-gps` (feed, admitted by the global GPS plan) · `meshtastic-web` (the browser UI, [its own selectors](../provenance.md#the-web-client)) · `meshtastic-cli` (on-demand, `lhpc meshtastic …`) |
-| Source / pin | `src/meshtastic-firmware` ← `meshtastic/firmware`, a managed git source |
+| Source / pin | `src/meshtastic-firmware` ← `meshtastic/firmware`, a managed git source: pinned and stable follow `master`'s release tags, `dev` builds the `develop` tip |
 | Run | `build/tools/meshtasticd/meshtasticd -c <runtime>/config/files/<rid>/meshtasticd.yaml -d <runtime>/state/<rid>/meshtasticd` |
 | Endpoints | TCP API `:4403` · web UI `:9443` on r1, each + 133 per further radio (r2: 4536 / 9576), written into the instance's config (`General.APIPort`, `Webserver.Port`) (HTTPS; rootless cannot bind 443) — both bind all interfaces with no auth; containment: [firewall](../firewall.md#what-actually-listens) |
 | Config | `<runtime>/config/files/<rid>/meshtasticd.yaml`, one per instance, regenerated from `lhpc/data/bases/meshtasticd.yaml` at every start (LoRa pins from the radio's board preset, else its band; web root, TLS paths, log level) |

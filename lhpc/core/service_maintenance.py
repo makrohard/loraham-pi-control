@@ -139,11 +139,11 @@ class MaintenanceOpsMixin:
             want, mirror = sref.sha, sref.history
         elif pinned:                                   # this manifest's pin: local, the checkout answers (U6 N1)
             want, mirror = pinned, None
-        else:                                          # the branch tip; its history only for the ancestry (P-2)
-            want = stable_lane.remote_tip(run, remote, branch or "HEAD", 12.0)
+        else:                                          # the dev branch tip; its history only for the ancestry (P-2)
+            want = stable_lane.remote_tip(run, remote, comp.source.dev_branch or "HEAD", 12.0)
             if not want:
                 return {**entry, "status": stackupdates.ERROR}        # unreachable / no such branch
-            mirror = target.history(remote, branch)[0]
+            mirror = target.history(remote, comp.source.dev_branch)[0]
         entry["upstream_head"] = want
         has = stable_lane.contains(run, mirror and Path(mirror), src, local_sha, want)   # X5: lacks the target?
         entry["status"] = stackupdates.ERROR if has is None else stackupdates.UP_TO_DATE if has else stackupdates.BEHIND
@@ -375,7 +375,7 @@ class MaintenanceOpsMixin:
         if spec.artifact or source == "dev":
             # artifact: the declared artifact IS the maintainer's default branch;
             # dev: the configured development branch (strict — never another ref).
-            ref = "HEAD" if spec.artifact else (spec.branch or "HEAD")
+            ref = "HEAD" if spec.artifact else (spec.dev_branch or "HEAD")
             sha = stable_lane.remote_tip(run, remote, ref, 15.0)
             if not sha:
                 return (None, None), f"could not resolve {ref!r} on {remote}"

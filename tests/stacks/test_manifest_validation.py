@@ -449,6 +449,7 @@ def test_a_name_that_is_not_an_identifier_is_refused():
     ("pin_commit", "b" * 40),
     ("pin_tag", "v2.0.0"),
     ("branch", "other"),
+    ("dev_branch", "develop"),
 ])
 def test_components_sharing_a_source_path_must_declare_the_same_source(field, other):
     """Two components may build from ONE checkout (kiss-tnc + kiss-serial), but only when their
@@ -456,7 +457,7 @@ def test_components_sharing_a_source_path_must_declare_the_same_source(field, ot
     repositories fighting over one directory, and a second pin, tag or branch two versions of it.
     U7 relies on this: the pinned lane is the manifest pin, so one path has one pin."""
     spec = {"path": "src/x", "remote": "https://github.com/x/y.git", "pin_commit": "a" * 40,
-            "pin_tag": "v1.0.0", "branch": "main"}
+            "pin_tag": "v1.0.0", "branch": "main", "dev_branch": "main"}      # dev_branch = branch: its default
 
     def comp(cid, **over):
         return {"id": cid, "name": cid, "kind": "service", "run": "true", "readiness": "process",
@@ -467,6 +468,34 @@ def test_components_sharing_a_source_path_must_declare_the_same_source(field, ot
         parse_manifest(base)
     base["stack"][0]["component"][1]["source"][field] = spec[field]
     assert parse_manifest(base)                        # identical specs -> valid
+
+
+def _source_stack(*sources, path=True):
+    """A stack whose components c0, c1 ... carry these source keys; `path=False`: each its own source path."""
+    comps = [{"id": f"c{n}", "name": f"c{n}", "kind": "service", "run": "true", "readiness": "process",
+              "source": {"path": "src/x" if path else f"src/x{n}", "remote": "https://github.com/x/y.git",
+                         "branch": "main", **src}}
+             for n, src in enumerate(sources)]
+    return {"stack": [{"id": "s", "name": "s", "main": "c0", "component": comps}]}
+
+
+def test_a_dev_branch_defaults_to_the_branch():
+    """`dev_branch` is the branch the dev selector follows; without it, `branch` (every source as before)."""
+    src = {c.id: c.source for c in parse_manifest(_source_stack({}, {"dev_branch": "develop"}, path=False))[0].components}
+    a, b = src["c0"], src["c1"]
+    assert (a.branch, a.dev_branch) == ("main", "main")
+    assert (b.branch, b.dev_branch) == ("main", "develop")
+    assert (b.lane_branch("dev"), b.lane_branch("pinned"), b.lane_branch("stable")) == ("develop", "main", "main")
+
+
+def test_a_dev_branch_named_as_the_branch_is_the_same_source():
+    assert parse_manifest(_source_stack({}, {"dev_branch": "main"}))        # resolved value equal: one source spec
+
+
+@pytest.mark.parametrize("bad", [7, ["develop"], True])
+def test_a_dev_branch_that_is_not_a_string_is_refused(bad):
+    with pytest.raises(ManifestError, match="dev_branch must be a string"):
+        parse_manifest(_source_stack({"dev_branch": bad}))
 
 
 def test_a_run_string_takes_the_daemon_power_as_its_own_token():

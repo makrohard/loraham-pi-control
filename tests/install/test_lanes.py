@@ -106,11 +106,11 @@ def box(tmp_path, git, make_repo, monkeypatch):
     (rt / "config").mkdir(parents=True)
     manifest = tmp_path / "m.toml"
 
-    def use(remote, lib=False, lib_path=LIB, lib_artifact=False, lib_first=False):
+    def use(remote, lib=False, lib_path=LIB, lib_artifact=False, lib_first=False, dev_branch=""):
         app = ('[[stack.component]]\nid = "app"\nname = "app"\nkind = "service"\n'
                'run_argv = ["true"]\nreadiness = "process"\n'
                f'[stack.component.source]\npath = "{REL}"\nremote = "{remote}"\nbranch = "main"\n'
-               f'pin_commit = "{c1}"\n')
+               f'pin_commit = "{c1}"\n' + (f'dev_branch = "{dev_branch}"\n' if dev_branch else ""))
         other = ('[[stack.component]]\nid = "lib"\nname = "lib"\nkind = "library"\ntx_capable = false\n'
                  f'[stack.component.source]\npath = "{lib_path}"\nremote = "{remote}"\nbranch = "main"\n'
                  f'pin_commit = "{c1}"\n' + ("artifact = true\n" if lib_artifact else "") if lib else "")
@@ -1664,6 +1664,99 @@ def test_a_dev_check_reads_its_branch_by_its_exact_name(box, capsys):
     assert box.cli("install", "s", "--source", "dev", "--yes") == 0
     box.side(box.c[0], "feature/main")
     assert _check_detail(box, capsys)[0] == "current"                  # RED before: "update available"
+
+
+# ---- `dev_branch`: the dev lane follows its own branch; `branch` stays the release line (pin, stable, history) ----
+
+def _develop(box, git):
+    """Upstream `develop` beside main: one commit from c3 carrying a plain tag v2.9.0 that main's line never reaches
+    (so a stable read of develop would pick it, main's stable target is v2.7.0 = c1); `b.dev()` adds a commit."""
+    d1 = box.side(box.c[2], "develop")
+    box.push_tag("v2.9.0", d1)
+
+    def dev():
+        git(box.work, "checkout", "-q", "develop")
+        (box.work / "g").write_text("next\n")
+        git(box.work, "commit", "-qam", "next on develop")
+        git(box.work, "push", "-q", "origin", "develop")
+        sha = git(box.work, "rev-parse", "HEAD")
+        git(box.work, "checkout", "-q", "main")
+        return sha
+    box.dev = dev
+    box.use(GH, dev_branch="develop")
+    return d1
+
+
+def test_the_dev_lane_clones_checks_and_updates_its_dev_branch(box, git, capsys):
+    d1 = _develop(box, git)
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert box.head() == d1                                            # RED before: c3, main's tip
+    assert git(box.dest, "rev-parse", "--abbrev-ref", "HEAD") == "develop"
+    assert _check_detail(box, capsys)[0] == "current"                  # the check reads develop's tip
+    d2 = box.dev()
+    assert _check_detail(box, capsys)[0] == "update available"
+    assert box.cli("update", "s", "--yes") == 0                        # a bare update stays on dev: develop's tip
+    assert box.head() == d2 and box.selector() == "dev"
+
+
+def test_the_pinned_and_stable_lanes_keep_the_release_line_beside_a_dev_branch(box, git, capsys):
+    _develop(box, git)
+    assert box.cli("install", "s", "--source", "stable", "--yes") == 0
+    assert box.head() == box.c[0]                                      # v2.7.0 on main, never develop's v2.9.0
+    assert _check_detail(box, capsys)[0] == "current"
+    assert box.cli("update", "s", "--yes") == 0                        # a bare update stays on main's stable target
+    assert box.head() == box.c[0] and box.selector() == "stable"
+    assert box.cli("update", "s", "--source", "pinned", "--yes") == 0
+    assert box.head() == box.c[0]
+
+
+def test_a_dev_auto_install_moves_forward_on_the_dev_branch(box, git):
+    """Auto-install's "never back or sideways" check (`keeps`) places a dev target on the dev branch's history."""
+    d1 = _develop(box, git)
+    assert box.cli("auto-install", "--source", "dev", "--yes") == 0 and box.head() == d1
+    d2 = box.dev()
+    assert box.cli("auto-install", "--source", "dev", "--yes") == 0
+    assert box.head() == d2                                            # RED before: kept at d1 ("could not check")
+
+
+def test_an_unavailable_dev_branch_is_named_and_the_install_falls_back_to_the_pin(box, capsys):
+    box.use(GH, dev_branch="gone")
+    capsys.readouterr()
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    out = capsys.readouterr().out
+    assert "selector unavailable: branch 'gone' could not be obtained" in out, out   # RED before: main's tip c3
+    assert "FELL BACK to fallback: manifest pin (dev unreachable)" in out and box.head() == box.c[0], out
+
+
+def test_a_dev_auto_install_freezes_the_dev_branch(box, git):
+    """`_frozen_ref` (the auto-install dev plan, the binary -> dev switch) asks for `refs/heads/<dev_branch>`."""
+    d1 = _develop(box, git)
+    box.git_calls.clear()
+    assert box.cli("auto-install", "--source", "dev", "--yes") == 0
+    assert box.head() == d1                                            # RED before: c3
+    asked = [a[-1] for a in box.git_calls if a[:2] == ["git", "ls-remote"]]
+    assert "refs/heads/develop" in asked and "refs/heads/main" not in asked, asked
+
+
+def test_a_dev_verdict_reads_unchecked_once_the_dev_branch_changes(box, git, capsys, web):
+    """The verdict's lane key names the dev lane's branch (`lane_key`)."""
+    _develop(box, git)
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert _check_detail(box, capsys)[0] == "current"
+    box.side(box.c[2], "next")
+    box.use(GH, dev_branch="next")
+    assert _readers(box, capsys, web) == ("unchecked",) * 3            # RED before: "current" (another branch)
+
+
+def test_a_dev_checkout_on_the_old_branch_moves_to_the_dev_branch_on_a_dev_update(box, git, capsys):
+    """A box whose dev checkout was cloned from `branch` before the source named a `dev_branch` (the lane move needs
+    no special handling): the check reads develop's tip, and a dev update re-clones onto develop."""
+    assert box.cli("install", "s", "--source", "dev", "--yes") == 0
+    assert git(box.dest, "rev-parse", "--abbrev-ref", "HEAD") == "main"
+    d1 = _develop(box, git)
+    assert _check_detail(box, capsys)[0] == "update available"         # c3 lacks develop's d1
+    assert box.cli("update", "s", "--source", "dev", "--yes") == 0
+    assert box.head() == d1 and git(box.dest, "rev-parse", "--abbrev-ref", "HEAD") == "develop"
 
 
 def test_an_unknown_verdict_reads_unchecked_once_the_source_is_installed(box, capsys, web):

@@ -64,6 +64,9 @@ remotes fail destructive operations closed.
     branch = "main"
 ```
 
+`branch` is the release line: the pin must be on it, and the stable lane follows its releases and tags. An optional
+`dev_branch` names the branch the `dev` selector clones and follows instead (default: `branch`).
+
 ### Commands: two forms
 
 Every component executes [**shell-free**](architecture.md#safety-model):

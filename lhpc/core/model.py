@@ -398,7 +398,8 @@ class SourceSpec:
     pin_commit: str = ""         # full 40-char commit hash where known
     pin_tag: str = ""            # human tag (NOT used as immutable verification)
     remote: str = ""
-    branch: str = ""
+    branch: str = ""             # the release line: the pin's ancestry, the stable lane, the history mirror
+    dev_branch: str = ""         # the branch the dev selector clones and follows; empty: `branch`
     local_dir: str = ""          # dir name under the adopt search root (defaults to basename(path))
     artifact: bool = False       # single-file/artifact-style source: EVERY selector resolves to
                                  # the same declared artifact (default-branch HEAD); no fake
@@ -407,9 +408,17 @@ class SourceSpec:
                                    # (derived from the component's build_steps at manifest load):
                                    # a tree whose only modifications are these is NOT dirty
 
+    def __post_init__(self):
+        if not self.dev_branch:                       # resolved once: every reader sees the dev lane's branch
+            object.__setattr__(self, "dev_branch", self.branch)
+
     @property
     def adopt_dir(self) -> str:
         return self.local_dir or self.path.rsplit("/", 1)[-1]
+
+    def lane_branch(self, lane: str) -> str:
+        """The branch a selector follows: `dev` its dev branch, every other lane the release line."""
+        return self.dev_branch if lane == "dev" else self.branch
 
 
 @dataclass(frozen=True)

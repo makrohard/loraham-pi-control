@@ -194,7 +194,7 @@ def lane_key(svc, comp, binary: bool, lhpc: tuple[str, str]) -> str:
         svc._effective_remote(comp)
     if rec is not None and rec.selector == "stable" and not comp.source.artifact:
         return f"stable {remote} {comp.source.branch}"           # the target is the branch's (STABLE-LANE O1)
-    return f"pinned {remote} {pin} {lhpc[0]} {lhpc[1]}" if pin else f"dev {remote} {comp.source.branch or 'HEAD'}"
+    return f"pinned {remote} {pin} {lhpc[0]} {lhpc[1]}" if pin else f"dev {remote} {comp.source.dev_branch or 'HEAD'}"
 
 
 def source_words(lane: str, status, why: str = "", ahead: bool = False) -> tuple[str, str]:
