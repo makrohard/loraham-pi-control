@@ -2025,10 +2025,12 @@ def test_fallback_dev_checkout_must_be_on_the_dev_branch(tmp_path, git, make_rep
     inst = installer(search_root=tmp_path / "rt")
     make_repo(tmp_path / "rt" / "app-src", {"f": "x"})
     git(tmp_path / "rt" / "app-src", "checkout", "-q", "-B", on)
-    comp = Component(id="app", name="app", kind=ComponentKind.SERVICE,
-                     source=SourceSpec(path="src/app", local_dir="app-src", branch="main", dev_branch="develop"))
+    from lhpc.core.manifest import parse_manifest                  # the manifest key, as an operator's manifest has it
+    comp = parse_manifest({"stack": [{"id": "s", "name": "s", "main": "app", "component": [
+        {"id": "app", "name": "app", "kind": "service", "run": "true", "readiness": "process",
+         "source": {"path": "src/app", "local_dir": "app-src", "branch": "main", "dev_branch": "develop"}}]}]})[0].components[0]
     action = inst.adopt_source(comp, source="dev")
-    assert (action.status == "done") is ok, action.detail          # RED before: a develop checkout refused
+    assert (action.status == "done") is ok, action.detail          # RED before: a develop checkout refused, a main one taken
     assert ok or "does not satisfy" in action.detail
 
 

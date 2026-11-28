@@ -1923,9 +1923,8 @@ def test_marker_carries_per_stack_selection(tmp_path, monkeypatch):
 # ---- adoption clone log (announce + streamed git progress) -------------------------
 
 def _clone_spec():
-    import types
-    return types.SimpleNamespace(remote="https://github.com/makrohard/x.git", branch="",
-                                 artifact=False, pin_commit="")
+    # the real spec: every field the clone reads (dev_branch too), never a stand-in that lacks one
+    return SourceSpec(path="src/x", remote="https://github.com/makrohard/x.git", branch="")
 
 
 def test_clone_streams_progress_into_adopt_log(tmp_path):
